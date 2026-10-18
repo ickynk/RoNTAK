@@ -1,0 +1,176 @@
+-- Reads game state through UE4SS. All game-specific names come from config.lua.
+
+local config = require("config")
+local log = require("log")
+
+local game = {}
+
+local DOOR_REFRESH_SECONDS = 5
+
+local door_cache = { level = nil, at = 0, list = {}, by_id = {} }
+
+local function valid(obj)
+    if obj == nil then return false end
+    local ok, result = pcall(function() return obj:IsValid() end)
+    return ok and result
+end
+
+local function object_name(obj)
+    local ok, name = pcall(function() return obj:GetFName():ToString() end)
+    return ok and name or "?"
+end
+
+-- Turns a UE4SS property value (number, bool, FString, FName, FText...) into a plain Lua value.
+local function plain(value)
+    if type(value) == "userdata" then
+        local ok, s = pcall(function() return value:ToString() end)
+        if ok then return s end
+        return nil
+    end
+    return value
+end
+
+local function read_property(obj, name)
+    if not name then return nil end
+    local ok, value = pcall(function() return obj[name] end)
+    if not ok then return nil end
+    return plain(value)
+end
+
+local function find_all(classes)
+    for _, class_name in ipairs(classes) do
+        local found = FindAllOf(class_name)
+        if found and #found > 0 then return found end
+    end
+    return {}
+end
+
+local function location(actor)
+    local ok, loc = pcall(function() return actor:K2_GetActorLocation() end)
+    if not ok or not loc then return nil end
+    return { x = loc.X, y = loc.Y, z = loc.Z }
+end
+
+local function yaw(actor)
+    local ok, rot = pcall(function() return actor:K2_GetActorRotation() end)
+    if not ok or not rot then return 0 end
+    return rot.Yaw
+end
+
+function game.player_controller()
+    local controllers = FindAllOf("PlayerController")
+    if not controllers then return nil end
+    for _, pc in ipairs(controllers) do
+        if valid(pc) and valid(pc.Pawn) and valid(pc.Player) then return pc end
+    end
+    return nil
+end
+
+function game.player_pawn()
+    local pc = game.player_controller()
+    return pc and pc.Pawn or nil
+end
+
+function game.level_name()
+    local pc = game.player_controller()
+    if not pc then return nil end
+    local ok, name = pcall(function() return pc:GetWorld():GetFName():ToString() end)
+    return ok and name or nil
+end
+
+function game.player()
+    local pawn = game.player_pawn()
+    if not valid(pawn) then return nil end
+    return { pos = location(pawn), yaw = yaw(pawn) }
+end
+
+local function excluded(name)
+    for _, pattern in ipairs(config.officers.exclude_name_patterns or {}) do
+        if name:find(pattern, 1, true) then return true end
+    end
+    return false
+end
+
+function game.officers()
+    local result = {}
+    local player_pawn = game.player_pawn()
+    -- Compare by name: two UE4SS handles to the same object are not always equal.
+    local player_name = valid(player_pawn) and object_name(player_pawn) or nil
+    for _, actor in ipairs(find_all(config.officers.classes)) do
+        if valid(actor) then
+            local name = object_name(actor)
+            local pos = location(actor)
+            if pos and name ~= player_name and not excluded(name) then
+                local raw_team = read_property(actor, config.officers.team_property)
+                result[#result + 1] = {
+                    id = name,
+                    name = read_property(actor, config.officers.name_property) or name,
+                    team = config.officers.team_values[raw_team] or "unknown",
+                    pos = pos,
+                    yaw = yaw(actor),
+                    health = read_property(actor, config.officers.health_property),
+                }
+            end
+        end
+    end
+    return result
+end
+
+local function refresh_doors(level)
+    local list, by_id = {}, {}
+    for _, actor in ipairs(find_all(config.doors.classes)) do
+        if valid(actor) then
+            local pos = location(actor)
+            if pos then
+                local id = object_name(actor)
+                by_id[id] = actor
+                list[#list + 1] = {
+                    id = id,
+                    pos = pos,
+                    yaw = yaw(actor),
+                    locked = read_property(actor, config.doors.locked_property),
+                }
+            end
+        end
+    end
+    door_cache = { level = level, at = os.time(), list = list, by_id = by_id }
+    log.debug(string.format("found %d doors", #list))
+end
+
+function game.doors(level)
+    if door_cache.level ~= level or os.time() - door_cache.at > DOOR_REFRESH_SECONDS then
+        refresh_doors(level)
+    end
+    return door_cache.list
+end
+
+function game.door_by_id(id)
+    local door = door_cache.by_id[id]
+    if valid(door) then return door end
+    return nil
+end
+
+function game.nearest_door_id(pos)
+    local best, best_d = nil, math.huge
+    for _, door in ipairs(door_cache.list) do
+        local dx, dy, dz = door.pos.x - pos.x, door.pos.y - pos.y, door.pos.z - pos.z
+        local d = dx * dx + dy * dy + dz * dz
+        if d < best_d then best, best_d = door.id, d end
+    end
+    return best
+end
+
+-- Builds the object a configured order is called on.
+function game.resolve_target(target, door)
+    if target == "player_controller" then return game.player_controller() end
+    if target == "player_pawn" then return game.player_pawn() end
+    if target == "door" then return door end
+    local obj = FindFirstOf(target)
+    if valid(obj) then return obj end
+    return nil
+end
+
+game.valid = valid
+game.object_name = object_name
+
+return game
