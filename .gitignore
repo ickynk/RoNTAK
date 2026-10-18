@@ -1,0 +1,3 @@
+__pycache__/
+mod/RoNTAK/bridge/*
+!mod/RoNTAK/bridge/.keep

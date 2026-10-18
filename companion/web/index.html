@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <meta name="theme-color" content="#14181c">
+  <title>RoNTAK</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="toolbar">
+    <div class="brand">RoN<span>TAK</span></div>
+    <div class="status" id="status"><span class="dot"></span><span id="status-text">Connecting…</span></div>
+    <div class="level" id="level">—</div>
+    <div class="spacer"></div>
+    <select id="floor" title="Floor"></select>
+    <button id="btn-center" title="Center on me">◎</button>
+    <button id="btn-calibrate" class="mode-btn" title="Calibrate floor plan">Calibrate</button>
+    <button id="btn-rooms" class="mode-btn" title="Draw rooms">Rooms</button>
+  </header>
+
+  <main class="layout">
+    <div class="map-wrap">
+      <canvas id="map"></canvas>
+      <div class="hint" id="hint"></div>
+    </div>
+
+    <aside class="panel" id="panel">
+      <!-- Orders -->
+      <section id="orders-panel">
+        <div class="teams" id="teams">
+          <button data-team="red" class="team red active">RED</button>
+          <button data-team="blue" class="team blue">BLUE</button>
+          <button data-team="gold" class="team gold">GOLD</button>
+        </div>
+
+        <div class="card target" id="target">
+          <div class="label">Target</div>
+          <div id="target-text">Tap a door, room or spot on the map</div>
+          <div class="chips" id="door-choice"></div>
+        </div>
+
+        <div class="actions" id="actions"></div>
+        <div class="options" id="options"></div>
+        <button class="execute" id="execute" disabled>SELECT AN ORDER</button>
+
+        <div class="section-title">Roster</div>
+        <ul class="roster" id="roster"></ul>
+
+        <div class="section-title">Orders</div>
+        <ul class="tasks" id="tasks"></ul>
+      </section>
+
+      <!-- Calibration -->
+      <section id="calibrate-panel" hidden>
+        <div class="section-title">Floor plan calibration</div>
+        <ol class="steps">
+          <li>Pick or add a floor, then load its floor plan image.</li>
+          <li>In game, stand on a spot you can find on the image (a doorway or corner).</li>
+          <li>Tap that exact spot on the image. Repeat at a second spot far from the first.</li>
+          <li>Press <b>Save map</b>. Add a 3rd anchor if markers look mirrored or stretched.</li>
+        </ol>
+        <div class="card"><div class="label">Your in-game position</div><div id="cal-pos">—</div></div>
+        <label>Floor name <input id="cal-name"></label>
+        <div class="row">
+          <label>Min height (Z) <input id="cal-zmin" type="number"></label>
+          <label>Max height (Z) <input id="cal-zmax" type="number"></label>
+        </div>
+        <label class="file">Floor plan image <input id="cal-image" type="file" accept=".png,.jpg,.jpeg,.webp,.svg"></label>
+        <div class="section-title">Anchors</div>
+        <ul class="anchors" id="cal-anchors"></ul>
+        <div class="row">
+          <button id="cal-add-floor">Add floor</button>
+          <button id="cal-delete-floor" class="danger">Delete floor</button>
+        </div>
+        <button class="execute" id="cal-save">Save map</button>
+      </section>
+
+      <!-- Rooms -->
+      <section id="rooms-panel" hidden>
+        <div class="section-title">Rooms</div>
+        <ol class="steps">
+          <li>Tap the corners of a room on the map, in order.</li>
+          <li>Press <b>Finish room</b> and name it. Doors on its walls are linked automatically.</li>
+          <li>Press <b>Save map</b> when done.</li>
+        </ol>
+        <div class="row">
+          <button id="room-undo">Undo point</button>
+          <button id="room-finish">Finish room</button>
+        </div>
+        <ul class="rooms" id="room-list"></ul>
+        <button class="execute" id="room-save">Save map</button>
+      </section>
+    </aside>
+  </main>
+
+  <script src="geo.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

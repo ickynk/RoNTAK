@@ -1,0 +1,280 @@
+"""RoNTAK companion server.
+
+Serves the ATAK web interface and relays data between it and the game mod
+through the mod's bridge folder (state.json / commands.json).
+
+    python server.py --bridge "C:/.../Mods/RoNTAK/bridge"   # real game
+    python server.py --mock                                  # simulated game
+    python server.py --mock --lan                            # open from a phone/tablet on your Wi-Fi
+
+Only the Python standard library is used.
+"""
+
+import argparse
+import json
+import os
+import re
+import secrets
+import socket
+import sys
+import tempfile
+import threading
+import time
+from http import HTTPStatus
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from urllib.parse import unquote, urlparse
+
+HERE = Path(__file__).resolve().parent
+WEB_DIR = HERE / "web"
+MAPS_DIR = HERE / "maps"
+
+STALE_SECONDS = 3
+MAX_KEPT_COMMANDS = 50
+MAX_UPLOAD_BYTES = 30 * 1024 * 1024
+
+TEAMS = {"red", "blue", "gold"}
+ACTIONS = {
+    "stack_up", "open_clear", "breach_clear", "scan_door", "wedge_door",
+    "move_to", "fall_in", "hold", "search_secure",
+}
+IMAGE_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp", ".svg": "image/svg+xml"}
+SAFE_NAME = re.compile(r"^[A-Za-z0-9_.\- ]{1,80}$")
+
+
+def write_atomic(path: Path, text: str) -> None:
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=path.name, suffix=".tmp")
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        f.write(text)
+    os.replace(tmp, path)
+
+
+def read_json(path: Path, retries: int = 3):
+    """Reads a JSON file that another process may be rewriting."""
+    for attempt in range(retries):
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return None
+        except (json.JSONDecodeError, PermissionError, OSError):
+            if attempt == retries - 1:
+                return None
+            time.sleep(0.02)
+    return None
+
+
+def safe_name(name: str) -> str:
+    if not SAFE_NAME.match(name) or name.startswith(".") or ".." in name:
+        raise ValueError(f"invalid name: {name!r}")
+    return name
+
+
+class CommandQueue:
+    """Writes orders to commands.json for the mod to pick up."""
+
+    def __init__(self, bridge: Path):
+        self.path = bridge / "commands.json"
+        self.session = secrets.token_hex(4)
+        self.next_id = 1
+        self.commands = []
+        self.lock = threading.Lock()
+        self._flush()
+
+    def _flush(self) -> None:
+        write_atomic(self.path, json.dumps({"session": self.session, "commands": self.commands}))
+
+    def add(self, order: dict) -> dict:
+        with self.lock:
+            cmd = dict(order, id=self.next_id, created=time.time())
+            self.next_id += 1
+            self.commands = (self.commands + [cmd])[-MAX_KEPT_COMMANDS:]
+            self._flush()
+            return cmd
+
+
+def validate_order(body: dict) -> dict:
+    team = body.get("team")
+    action = body.get("action")
+    if team not in TEAMS:
+        raise ValueError("team must be red, blue or gold")
+    if action not in ACTIONS:
+        raise ValueError(f"unknown action {action!r}")
+    order = {"team": team, "action": action}
+
+    target = body.get("target") or {}
+    clean_target = {}
+    if "door" in target:
+        clean_target["door"] = str(target["door"])
+    if "location" in target:
+        loc = target["location"]
+        clean_target["location"] = {k: float(loc.get(k, 0)) for k in ("x", "y", "z")}
+    if "room" in target:
+        clean_target["room"] = str(target["room"])
+    order["target"] = clean_target
+
+    options = body.get("options") or {}
+    order["options"] = {k: str(v) for k, v in options.items() if k in ("breach", "grenade", "side")}
+    return order
+
+
+class Handler(SimpleHTTPRequestHandler):
+    bridge: Path
+    queue: CommandQueue
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, directory=str(WEB_DIR), **kwargs)
+
+    def log_message(self, fmt, *args):  # keep the console readable
+        if "/api/state" not in (self.path or ""):
+            sys.stderr.write("%s %s\n" % (self.log_date_time_string(), fmt % args))
+
+    # Helpers -------------------------------------------------------------
+
+    def send_json(self, data, status=HTTPStatus.OK):
+        body = json.dumps(data).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def read_body(self, limit=1024 * 1024) -> bytes:
+        length = int(self.headers.get("Content-Length") or 0)
+        if length > limit:
+            raise ValueError("request too large")
+        return self.rfile.read(length)
+
+    def route(self):
+        parts = [unquote(p) for p in urlparse(self.path).path.split("/") if p]
+        return parts
+
+    # Routes --------------------------------------------------------------
+
+    def do_GET(self):
+        parts = self.route()
+        try:
+            if parts == ["api", "state"]:
+                return self.get_state()
+            if len(parts) == 3 and parts[:2] == ["api", "maps"]:
+                return self.get_map(safe_name(parts[2]))
+            if len(parts) == 3 and parts[0] == "maps":
+                return self.get_map_file(safe_name(parts[1]), safe_name(parts[2]))
+        except ValueError as e:
+            return self.send_json({"error": str(e)}, HTTPStatus.BAD_REQUEST)
+        return super().do_GET()
+
+    def do_POST(self):
+        parts = self.route()
+        try:
+            if parts == ["api", "command"]:
+                order = validate_order(json.loads(self.read_body()))
+                return self.send_json(self.queue.add(order))
+        except (ValueError, json.JSONDecodeError) as e:
+            return self.send_json({"error": str(e)}, HTTPStatus.BAD_REQUEST)
+        self.send_json({"error": "not found"}, HTTPStatus.NOT_FOUND)
+
+    def do_PUT(self):
+        parts = self.route()
+        try:
+            if len(parts) == 3 and parts[:2] == ["api", "maps"]:
+                return self.put_map(safe_name(parts[2]))
+            if len(parts) == 4 and parts[:2] == ["api", "maps"]:
+                return self.put_map_image(safe_name(parts[2]), safe_name(parts[3]))
+        except (ValueError, json.JSONDecodeError) as e:
+            return self.send_json({"error": str(e)}, HTTPStatus.BAD_REQUEST)
+        self.send_json({"error": "not found"}, HTTPStatus.NOT_FOUND)
+
+    def get_state(self):
+        path = self.bridge / "state.json"
+        state = read_json(path)
+        if state is None:
+            return self.send_json({"connected": False, "reason": f"no state.json in {self.bridge}"})
+        age = time.time() - path.stat().st_mtime
+        state["connected"] = age < STALE_SECONDS
+        state["age"] = round(age, 1)
+        self.send_json(state)
+
+    def get_map(self, level):
+        data = read_json(MAPS_DIR / level / "map.json")
+        if data is None:
+            return self.send_json({"level": level, "floors": [], "rooms": []})
+        self.send_json(data)
+
+    def get_map_file(self, level, name):
+        path = MAPS_DIR / level / name
+        ctype = IMAGE_TYPES.get(path.suffix.lower())
+        if not ctype or not path.is_file():
+            return self.send_json({"error": "not found"}, HTTPStatus.NOT_FOUND)
+        data = path.read_bytes()
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def put_map(self, level):
+        data = json.loads(self.read_body())
+        if not isinstance(data, dict) or not isinstance(data.get("floors", []), list):
+            raise ValueError("map must be an object with a floors list")
+        data["level"] = level
+        folder = MAPS_DIR / level
+        folder.mkdir(parents=True, exist_ok=True)
+        write_atomic(folder / "map.json", json.dumps(data, indent=2))
+        self.send_json({"saved": True})
+
+    def put_map_image(self, level, name):
+        if Path(name).suffix.lower() not in IMAGE_TYPES:
+            raise ValueError("image must be png, jpg, webp or svg")
+        folder = MAPS_DIR / level
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / name).write_bytes(self.read_body(MAX_UPLOAD_BYTES))
+        self.send_json({"saved": True, "image": name})
+
+
+def lan_address() -> str:
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("10.255.255.255", 1))
+            return s.getsockname()[0]
+    except OSError:
+        return "your-pc-ip"
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--bridge", help="path to the mod's bridge folder (Mods/RoNTAK/bridge)")
+    parser.add_argument("--mock", action="store_true", help="run a simulated game instead of connecting to Ready or Not")
+    parser.add_argument("--port", type=int, default=8080)
+    parser.add_argument("--lan", action="store_true", help="allow other devices on your network to connect")
+    args = parser.parse_args(argv)
+
+    if args.mock:
+        import mock
+        bridge = Path(tempfile.mkdtemp(prefix="rontak-mock-"))
+        threading.Thread(target=mock.run, args=(bridge,), daemon=True).start()
+    elif args.bridge:
+        bridge = Path(args.bridge).expanduser().resolve()
+        if not bridge.is_dir():
+            parser.error(f"bridge folder does not exist: {bridge}")
+    else:
+        parser.error("pass --bridge <folder> or --mock")
+
+    Handler.bridge = bridge
+    Handler.queue = CommandQueue(bridge)
+
+    host = "0.0.0.0" if args.lan else "127.0.0.1"
+    server = ThreadingHTTPServer((host, args.port), Handler)
+    print(f"RoNTAK companion running ({'mock game' if args.mock else 'bridge: ' + str(bridge)})")
+    print(f"  Open on this PC:   http://127.0.0.1:{args.port}")
+    if args.lan:
+        print(f"  Open on phone/tab: http://{lan_address()}:{args.port}")
+    print("  Press Ctrl+C to stop.")
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+
+
+if __name__ == "__main__":
+    main()

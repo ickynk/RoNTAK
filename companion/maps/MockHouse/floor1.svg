@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1100" height="750" viewBox="0 0 1100 750">
+<rect width="1100" height="750" fill="#5b6a4e"/>
+<rect x="0" y="0" width="1000" height="750" fill="#d9d4c7"/>
+<rect x="0" y="0" width="400" height="300" fill="none" stroke="#2b2b2b" stroke-width="8"/>
+<text x="200.0" y="150.0" font-family="sans-serif" font-size="22" fill="#6b665c" text-anchor="middle">KITCHEN</text>
+<rect x="400" y="0" width="600" height="300" fill="none" stroke="#2b2b2b" stroke-width="8"/>
+<text x="700.0" y="150.0" font-family="sans-serif" font-size="22" fill="#6b665c" text-anchor="middle">LIVING ROOM</text>
+<rect x="0" y="300" width="1000" height="150" fill="none" stroke="#2b2b2b" stroke-width="8"/>
+<text x="500.0" y="375.0" font-family="sans-serif" font-size="22" fill="#6b665c" text-anchor="middle">HALLWAY</text>
+<rect x="0" y="450" width="350" height="300" fill="none" stroke="#2b2b2b" stroke-width="8"/>
+<text x="175.0" y="600.0" font-family="sans-serif" font-size="22" fill="#6b665c" text-anchor="middle">BEDROOM</text>
+<rect x="350" y="450" width="250" height="300" fill="none" stroke="#2b2b2b" stroke-width="8"/>
+<text x="475.0" y="600.0" font-family="sans-serif" font-size="22" fill="#6b665c" text-anchor="middle">BATHROOM</text>
+<rect x="600" y="450" width="400" height="300" fill="none" stroke="#2b2b2b" stroke-width="8"/>
+<text x="800.0" y="600.0" font-family="sans-serif" font-size="22" fill="#6b665c" text-anchor="middle">OFFICE</text>
+<rect x="160" y="294" width="80" height="12" fill="#d9d4c7"/>
+<rect x="660" y="294" width="80" height="12" fill="#d9d4c7"/>
+<rect x="135" y="444" width="80" height="12" fill="#d9d4c7"/>
+<rect x="435" y="444" width="80" height="12" fill="#d9d4c7"/>
+<rect x="760" y="444" width="80" height="12" fill="#d9d4c7"/>
+<rect x="994" y="335" width="12" height="80" fill="#d9d4c7"/>
+</svg>
