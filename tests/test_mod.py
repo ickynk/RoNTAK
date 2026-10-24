@@ -292,65 +292,58 @@ class ModTest(unittest.TestCase):
             state = self.tick()
         self.assertEqual(state["results"][0]["message"], "the team did not start the breach within 20 s")
 
-    def test_map_info_dump(self):
+    def test_map_info_dump_buildings(self):
         self.lua.execute(r"""
             local function txt(s) return { ToString = function() return s end } end
-            local function soft(path) return { ToString = function() return path end } end
-            objects.ReadyOrNotGameState = { {
-                IsValid = function() return true end,
-                LevelData = {
-                    FriendlyLevelName = txt("23 Megabytes A Second"),
-                    DefaultFloorIndex = 1,
-                    MapLayout = { MapOrigin = { X = -5000, Y = 2500 }, MapSize = 12000,
-                                  MapOverviewTexture = soft("/Game/Maps/T_Overview.T_Overview") },
-                    MapFloors = tarray({
-                        { FloorFullName = txt("Ground Floor"), FloorShortName = txt("1F"),
-                          FloorLayout = soft("/Game/Maps/T_Floor1.T_Floor1"), FloorplanMaterial = soft("") },
-                    }),
-                    Floors = tarray({ { Name = txt("Ground"), Number = 0, FloorMap = soft("/Game/Maps/T_F1.T_F1") } }),
-                },
-            } }
-            local building = actor("BuildingTrigger_1", 0, 0, 0, 0, {
+            objects.BuildingTrigger = { actor("BuildingTrigger_1", 0, 0, 0, 0, {
                 BuildingName = txt("House"), NumberOfFloors = 2,
                 GeneratedFloors = tarray({
                     { Number = 0, Height = 300, Name = txt("Ground"), Location = { X = 0, Y = 0, Z = 0 }, Extent = { X = 1000, Y = 800, Z = 150 } },
+                    { Number = 1, Height = 300, Name = txt("Upstairs"), Location = { X = 0, Y = 0, Z = 300 }, Extent = { X = 1000, Y = 800, Z = 150 } },
                 }),
-            })
-            objects.BuildingTrigger = { building }
+            }) }
         """)
         self.lua.execute('keybinds["F6"]()')
         info = json.loads((self.bridge / "mapinfo.json").read_text())
         self.assertEqual(info["errors"], [])
-        self.assertEqual(info["level"], "RiverwoodHouse")
-        self.assertEqual(info["map_layout"], {"origin": {"x": -5000, "y": 2500}, "size": 12000,
-                                              "overview_texture": "/Game/Maps/T_Overview.T_Overview"})
-        self.assertEqual(info["soft_path_method"], "ToString")
-        self.assertEqual(info["map_floors"][0]["short_name"], "1F")
-        self.assertEqual(info["map_floors"][0]["layout_texture"], "/Game/Maps/T_Floor1.T_Floor1")
-        self.assertIsNone(info["map_floors"][0].get("floorplan_material"))
-        self.assertEqual(info["floors"][0]["floor_map"], "/Game/Maps/T_F1.T_F1")
-        self.assertEqual(info["buildings"][0]["floors"][0]["extent"], {"x": 1000, "y": 800, "z": 150})
+        building = info["buildings"][0]
+        self.assertEqual(building["name"], "House")
+        self.assertEqual([f["name"] for f in building["floors"]], ["Ground", "Upstairs"])
+        self.assertEqual(building["floors"][1]["location"], {"x": 0, "y": 0, "z": 300})
 
-    def test_map_info_unloaded_texture(self):
+    def test_rooms_from_threat_points_and_doors(self):
         self.lua.execute(r"""
-            local empty = { IsValid = function() return false end,
-                            ToString = function() error("Tried calling a member function but the UObject instance is nullptr") end }
-            objects.ReadyOrNotGameState = { {
-                IsValid = function() return true end,
-                LevelData = { MapLayout = { MapOrigin = { X = 1, Y = 2 }, MapSize = 3, MapOverviewTexture = empty },
-                              MapFloors = tarray({}), Floors = tarray({}) },
-            } }
+            local function fname(s) return { ToString = function() return s end } end
+            local function point(n, x, y, room, outside)
+                return actor(n, x, y, 10, 0, { OwningRoom = fname(room), bIsOutside = outside or false })
+            end
+            objects.ThreatAwarenessActor = {
+                point("T1", 0, 0, "Kitchen"), point("T2", 400, 0, "Kitchen"), point("T3", 400, 300, "Kitchen"),
+                point("T4", 0, 300, "Kitchen"), point("T5", 200, 150, "Kitchen"),   -- inside: not on the outline
+                point("T6", 900, 900, "Yard", true),                               -- outside: ignored
+                point("T7", 500, 500, "None"),                                     -- no room: ignored
+            }
+            objects.Door[1].GetFrontThreatOwningRoom = function() return fname("Kitchen") end
+            objects.Door[1].GetBackThreatOwningRoom = function() return fname("Hallway") end
         """)
-        self.lua.execute('keybinds["F6"]()')
-        info = json.loads((self.bridge / "mapinfo.json").read_text())
-        self.assertEqual(info["errors"], [])
-        self.assertEqual(info["overview_texture_status"], "not loaded")
-        self.assertEqual(info["map_layout"]["size"], 3)
+        state = self.tick()
+        self.assertTrue(state["rooms_version"].startswith("RiverwoodHouse#2#"))
+        door = next(d for d in state["doors"] if d["id"] == "Door_C_7")
+        self.assertEqual((door["front_room"], door["back_room"]), ("Kitchen", "Hallway"))
+        data = json.loads((self.bridge / "rooms.json").read_text())
+        rooms = {r["name"]: r for r in data["rooms"]}
+        self.assertEqual(set(rooms), {"Kitchen", "Hallway"})
+        self.assertEqual(sorted(map(tuple, rooms["Kitchen"]["hull"])), [(0, 0), (0, 300), (400, 0), (400, 300)])
+        self.assertEqual(rooms["Kitchen"]["points"], 5)
+        self.assertEqual(rooms["Kitchen"]["z"], 10)
+        self.assertEqual(rooms["Kitchen"]["doors"], ["Door_C_7"])
+        self.assertEqual(rooms["Hallway"]["hull"], [])
+        self.assertEqual(rooms["Hallway"]["doors"], ["Door_C_7"])
 
-    def test_map_info_dump_without_game_state(self):
-        self.lua.execute('keybinds["F6"]()')
-        info = json.loads((self.bridge / "mapinfo.json").read_text())
-        self.assertIn("no ReadyOrNotGameState", info["errors"])
+        version = state["rooms_version"]
+        for _ in range(10):
+            state = self.tick()
+        self.assertEqual(state["rooms_version"], version)  # built once per level
 
     def test_activity_dump(self):
         self.lua.execute('objects.CyberneticsSwat_V2_C[1].Controller = controller_with_throw(objects.Door[1], "BP_Flashbang_C")')
@@ -388,8 +381,8 @@ class ModTest(unittest.TestCase):
         """)
         for _ in range(40):  # 10 s of ticks, all within the same os.time() second here
             state = self.tick()
-        # One scan each for the player controller, officers and doors, not one per tick.
-        self.assertLessEqual(self.lua.globals().scans, 3)
+        # One scan each for the player controller, officers, doors and room points, not one per tick.
+        self.assertLessEqual(self.lua.globals().scans, 4)
         self.assertEqual(len(state["officers"]), 2)
         self.assertEqual(len(state["doors"]), 2)
 

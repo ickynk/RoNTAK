@@ -1,7 +1,10 @@
--- Reads the current level's map data from the game (F6): the planning map's
--- calibration and floor textures (AReadyOrNotGameState.LevelData) and the
--- floors' world-space height bands (ABuildingTrigger.GeneratedFloors).
+-- Reads the current level's floor data from the game (F6): each building's
+-- floors and their world-space height bands (ABuildingTrigger.GeneratedFloors).
 -- Writes bridge/mapinfo.json. Read only.
+--
+-- Note: a UE4SS error from calling a method on an empty (nullptr) object is
+-- not caught by pcall; it aborts the whole callback. Reading the planning map
+-- textures (LevelData.MapFloors) did that, so it is no longer read here.
 
 local bridge = require("bridge")
 local game = require("game")
@@ -17,43 +20,9 @@ local function text(value)
     return nil
 end
 
-local function vec2(v)
-    local ok, r = pcall(function() return { x = v.X, y = v.Y } end)
-    return ok and r or nil
-end
-
 local function vec3(v)
     local ok, r = pcall(function() return { x = v.X, y = v.Y, z = v.Z } end)
     return ok and r or nil
-end
-
--- Asset path of a TSoftObjectPtr. Returns the path (or nil) and how it was
--- found. UE4SS hands these back as an object wrapper that is empty while the
--- asset is not loaded, so check that first instead of calling methods on an
--- empty object (UE4SS logs an error for each such call).
-local function soft_path(value)
-    if value == nil then return nil, "nil" end
-    local valid_ok, is_valid = pcall(function() return value:IsValid() end)
-    if valid_ok and is_valid == false then return nil, "not loaded" end
-    if valid_ok and is_valid == true then
-        local ok, name = pcall(function() return value:GetFullName() end)
-        if ok and name then return tostring(name), "loaded object" end
-    end
-    local attempts = {
-        { "AssetPath", function()
-            local p = value.SoftObjectPtr.ObjectID.AssetPath
-            return p.PackageName:ToString() .. "." .. p.AssetName:ToString()
-        end },
-        { "AssetPathName", function() return value.SoftObjectPtr.ObjectID.AssetPathName:ToString() end },
-        { "ToString", function() return value:ToString() end },
-    }
-    for _, attempt in ipairs(attempts) do
-        local ok, s = pcall(attempt[2])
-        if ok and type(s) == "string" and s ~= "" and s ~= "None" and s ~= "None.None" then
-            return s, attempt[1]
-        end
-    end
-    return nil, "unreadable (" .. type(value) .. ")"
 end
 
 local function each(array, fn)
@@ -61,53 +30,6 @@ local function each(array, fn)
         array:ForEach(function(i, element) fn(i, element:get()) end)
     end)
     if not ok then log.error("mapinfo: " .. tostring(err)) end
-end
-
-local function read_level_data(info)
-    local state = FindFirstOf("ReadyOrNotGameState")
-    if not game.valid(state) then
-        info.errors[#info.errors + 1] = "no ReadyOrNotGameState"
-        return
-    end
-    log.info("mapinfo: reading LevelData")
-    local level = state.LevelData
-
-    log.info("mapinfo: reading MapLayout")
-    local layout = level.MapLayout
-    local overview, method = soft_path(layout.MapOverviewTexture)
-    info.overview_texture_status = method
-    info.map_layout = {
-        origin = vec2(layout.MapOrigin),
-        size = layout.MapSize,
-        overview_texture = overview,
-    }
-    info.soft_path_method = method
-
-    log.info("mapinfo: reading MapFloors")
-    info.map_floors = {}
-    each(level.MapFloors, function(i, floor)
-        info.map_floors[#info.map_floors + 1] = {
-            index = i,
-            full_name = text(floor.FloorFullName),
-            short_name = text(floor.FloorShortName),
-            layout_texture = (soft_path(floor.FloorLayout)),
-            layout_texture_status = select(2, soft_path(floor.FloorLayout)),
-            floorplan_material = (soft_path(floor.FloorplanMaterial)),
-        }
-    end)
-
-    log.info("mapinfo: reading Floors")
-    info.floors = {}
-    each(level.Floors, function(i, floor)
-        info.floors[#info.floors + 1] = {
-            index = i,
-            name = text(floor.Name),
-            number = floor.Number,
-            floor_map = (soft_path(floor.FloorMap)),
-        }
-    end)
-    pcall(function() info.default_floor_index = level.DefaultFloorIndex end)
-    pcall(function() info.friendly_name = text(level.FriendlyLevelName) end)
 end
 
 local function read_buildings(info)
@@ -139,7 +61,7 @@ end
 -- F6: dump everything to bridge/mapinfo.json.
 function mapinfo.dump()
     local info = { level = game.level_name(), errors = {} }
-    local steps = { read_level_data, read_buildings }
+    local steps = { read_buildings }
     for _, step in ipairs(steps) do
         local ok, err = pcall(step, info)
         if not ok then
@@ -147,9 +69,13 @@ function mapinfo.dump()
             log.error("mapinfo: " .. tostring(err))
         end
     end
-    bridge.write_file("mapinfo.json", json.encode(info))
-    log.info(string.format("mapinfo: %d map floors, %d buildings -> mapinfo.json (soft paths via %s)",
-        #(info.map_floors or {}), #(info.buildings or {}), tostring(info.soft_path_method)))
+    local ok, encoded = pcall(json.encode, info)
+    if not ok then
+        log.error("mapinfo: cannot encode: " .. tostring(encoded))
+        return info
+    end
+    bridge.write_file("mapinfo.json", encoded)
+    log.info(string.format("mapinfo: %d buildings -> mapinfo.json", #(info.buildings or {})))
     return info
 end
 

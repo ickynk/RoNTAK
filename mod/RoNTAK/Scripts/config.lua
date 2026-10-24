@@ -20,7 +20,7 @@ config.verbose = false
 
 -- Hotkeys (UE4SS Key names). Set any to nil to disable it.
 config.keys = {
-    map_info       = "F6",   -- write the level's map data to bridge/mapinfo.json
+    map_info       = "F6",   -- write the level's building floors to bridge/mapinfo.json
     activity_dump  = "F7",   -- write every officer's door jobs to bridge/activities.txt
     discovery_dump = "F8",   -- write candidate classes/functions to bridge/discovery.txt
     sniff_toggle   = "F9",   -- start/stop logging calls to config.sniff functions
@@ -64,6 +64,17 @@ config.doors = {
     -- Optional functions returning whether the door is open / broken.
     open_function = "IsOpen",
     broken_function = "IsDoorBroken",
+    -- Functions returning the name of the game's room on each side of the door.
+    front_room_function = "GetFrontThreatOwningRoom",
+    back_room_function = "GetBackThreatOwningRoom",
+}
+
+-- Rooms: the AI's threat-awareness points carry the name of their room
+-- (OwningRoom). The outline of each room on the map is drawn around them.
+config.rooms = {
+    point_classes = { "ThreatAwarenessActor" },
+    room_property = "OwningRoom",
+    outside_property = "bIsOutside",
 }
 
 ---------------------------------------------------------------------------

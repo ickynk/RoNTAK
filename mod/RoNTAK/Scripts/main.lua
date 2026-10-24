@@ -8,6 +8,7 @@ local game = require("game")
 local log = require("log")
 local mapinfo = require("mapinfo")
 local orders = require("orders")
+local rooms = require("rooms")
 
 local MAX_RESULTS = 30
 
@@ -37,6 +38,9 @@ local function tick()
     end
     orders.run_checks()
 
+    local doors = level and game.doors(level) or {}
+    local rooms_version = rooms.update(level)
+
     seq = seq + 1
     bridge.write_state({
         version = 1,
@@ -45,7 +49,8 @@ local function tick()
         level = level,
         player = game.player(),
         officers = level and game.officers() or {},
-        doors = level and game.doors(level) or {},
+        doors = doors,
+        rooms_version = rooms_version,
         results = results,
         configured_actions = configured_actions(),
     })

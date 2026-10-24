@@ -67,6 +67,22 @@ local function door_locked(door)
     return locked
 end
 
+-- Text of an FName / FString / FText value; nil for empty or "None".
+-- (FName is not a UObject, so ToString on it is safe.)
+local function name_text(value)
+    if value == nil then return nil end
+    local ok, s = pcall(function() return value:ToString() end)
+    if ok and type(s) == "string" and s ~= "" and s ~= "None" then return s end
+    return nil
+end
+
+-- Calls a no-argument function returning an FName on a valid object.
+local function call_name(obj, fn_name)
+    local ok, value = pcall(function() return obj[fn_name](obj) end)
+    if ok then return name_text(value) end
+    return nil
+end
+
 local function find_all(classes)
     for _, class_name in ipairs(classes) do
         local found = FindAllOf(class_name)
@@ -363,7 +379,12 @@ local function rescan_doors(level)
             if pos then
                 local id = object_name(actor)
                 by_id[id] = actor
-                list[#list + 1] = { id = id, pos = pos, yaw = yaw(actor), _actor = actor }
+                list[#list + 1] = {
+                    id = id, pos = pos, yaw = yaw(actor), _actor = actor,
+                    -- The game's rooms on each side of the door.
+                    front_room = call_name(actor, config.doors.front_room_function),
+                    back_room = call_name(actor, config.doors.back_room_function),
+                }
             end
         end
     end
@@ -394,7 +415,10 @@ function game.doors(level)
     end
     local list = {}
     for i, door in ipairs(door_cache.list) do
-        list[i] = { id = door.id, pos = door.pos, yaw = door.yaw, locked = door.locked, open = door.open, broken = door.broken }
+        list[i] = {
+            id = door.id, pos = door.pos, yaw = door.yaw, locked = door.locked, open = door.open,
+            broken = door.broken, front_room = door.front_room, back_room = door.back_room,
+        }
     end
     return list
 end
@@ -432,7 +456,15 @@ function game.resolve_target(target, door)
     return nil
 end
 
+-- The cached door entries (with front_room / back_room), for rooms.lua.
+function game.door_entries()
+    return door_cache.list
+end
+
 game.valid = valid
 game.object_name = object_name
+game.name_text = name_text
+game.location = location
+game.find_all = find_all
 
 return game
