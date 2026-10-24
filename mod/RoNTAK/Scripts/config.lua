@@ -140,8 +140,13 @@ config.class_arg_hooks = {
 --   GiveFallInCommand(TeamType, FallInPattern)
 --   GiveHoldCommand(TeamType)
 --   GiveSearchAndSecureCommand(TeamType, CommandLocation, bOnlyCurrentRoom)
+--
+-- Note: arguments 5 and 6 are used the other way round from their names in the
+-- header dump. Tested in game: the class in argument 5 is what an officer
+-- throws through the door (C2 put there was "thrown", and a flashbang in
+-- argument 6 was ignored), so the grenade goes in 5 and the breaching item in 6.
 local BREACH_ARGS = {
-    "$door", "$breach", "$team", "$location", "$breach_item", "$grenade_item",
+    "$door", "$breach", "$team", "$location", "$grenade_item", "$breach_item",
     "$with_leader", false, false, false, "$side", true,
 }
 config.actions = {

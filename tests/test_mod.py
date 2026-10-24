@@ -232,8 +232,8 @@ class ModTest(unittest.TestCase):
         self.assertEqual(fn, "GiveBreachAndClearCommand")
         self.assertEqual(len(args), 12)
         self.assertEqual(args[1:3], [6, 5])  # EDoorBreachType C2, TT_SQUAD
-        self.assertEqual(args[4]["name"], "C2")
-        self.assertEqual(args[5]["name"], "Flashbang")
+        self.assertEqual(args[4]["name"], "Flashbang")
+        self.assertEqual(args[5]["name"], "C2")
         self.assertEqual(args[6:], [False, False, False, False, 0, True])
 
     def test_open_clear_overrides_breach_and_sends_no_items(self):
@@ -252,8 +252,8 @@ class ModTest(unittest.TestCase):
         self.run_orders(self.order(1, "gold", "breach_clear", {"door": "Door_C_7"},
                                    {"breach": "kick", "grenade": "stinger"}))
         fn, args = self.call(1)
-        self.assertIsNone(args[4])
-        self.assertEqual(args[5]["name"], "Stinger")
+        self.assertEqual(args[4]["name"], "Stinger")
+        self.assertIsNone(args[5])
 
     def test_no_item_sends_invalid_object_when_available(self):
         self.lua.execute('function CreateInvalidObject() return { invalid = true } end')
@@ -267,17 +267,17 @@ class ModTest(unittest.TestCase):
         state = self.run_orders(self.order(1, "red", "breach_clear", {"door": "Door_C_7"},
                                            {"breach": "c2", "grenade": "flashbang"}))
         fn, args = self.call(1)
-        self.assertEqual(args[4]["name"], "C2")
-        self.assertEqual(args[5]["name"], "Flashbang")
-        self.assertIn("set in call: arg 5 stale -> C2, arg 6 stale -> Flashbang", state["results"][0]["sent"])
+        self.assertEqual(args[4]["name"], "Flashbang")
+        self.assertEqual(args[5]["name"], "C2")
+        self.assertIn("set in call: arg 5 stale -> Flashbang, arg 6 stale -> C2", state["results"][0]["sent"])
 
     def test_breach_order_reports_what_the_game_assigned(self):
         self.lua.execute('objects.CyberneticsSwat_V2_C[1].Controller = controller_with_throw(objects.Door[1], "BP_Flashbang_C")')
         state = self.run_orders(self.order(1, "red", "breach_clear", {"door": "Door_C_7"},
                                            {"breach": "kick", "grenade": "flashbang"}))
         self.assertEqual(state["results"][0]["message"],
-                         "sent breach item none, grenade BlueprintGeneratedClass /Game/Items/Flashbang"
-                         " | set in call: arg 6 Flashbang -> Flashbang | "
+                         "sent grenade Flashbang, breach item none"
+                         " | set in call: arg 5 Flashbang -> Flashbang | "
                          "game assigned: Swat_C_1 ThrowGrenadeThroughDoor: BP_Flashbang_C")
 
     def test_breach_check_when_nobody_assigned(self):
@@ -304,7 +304,7 @@ class ModTest(unittest.TestCase):
         fn, args = self.call(1)
         self.assertEqual(fn, "GiveBreachAndClearCommand")
         self.assertEqual(args[1:3], [2, 1])  # EDoorBreachType Move, TT_SERT_RED
-        self.assertEqual(args[5]["name"], "Flashbang")
+        self.assertEqual(args[4]["name"], "Flashbang")
 
     def test_move_and_search_use_map_point_or_player(self):
         self.run_orders(self.order(1, "red", "move_to", {"location": {"x": 7, "y": 8, "z": 9}}),

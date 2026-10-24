@@ -72,7 +72,9 @@ end
 
 local function name_of(obj)
     if obj == nil then return "none" end
-    local ok, name = pcall(function() return obj:GetFullName() end)
+    local v_ok, is_valid = pcall(function() return obj:IsValid() end)
+    if v_ok and is_valid == false then return "none" end
+    local ok, name = pcall(function() return obj:GetFName():ToString() end)
     return ok and name or tostring(obj)
 end
 
