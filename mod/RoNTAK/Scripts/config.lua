@@ -31,7 +31,9 @@ config.keys = {
 
 -- AI SWAT officers. The first class name that returns objects is used.
 config.officers = {
-    classes = { "SWATCharacter" },                                   -- UNVERIFIED
+    -- CyberneticsSwat_V2_C = your AI officers (4 live in the discovery dump).
+    -- SWATCharacter also matches 4 TrailerSWATCharacter actors, so it is only a fallback.
+    classes = { "CyberneticsSwat_V2_C", "SWATCharacter" },
     -- Property on the officer holding its team (Red/Blue). nil = unknown.
     team_property = nil,                                             -- UNVERIFIED
     -- Map raw property values (numbers for enums, or strings) to team ids.
@@ -47,9 +49,14 @@ config.officers = {
 
 -- Doors. Positions are sent to the map so you can tap a door to order a team.
 config.doors = {
-    classes = { "Door" },                                            -- UNVERIFIED
+    classes = { "Door" },                                            -- 32 live in the discovery dump
     -- Optional boolean property: is the door locked?
     locked_property = nil,
+    -- Optional function returning whether the door is locked.
+    locked_function = "IsLocked",
+    -- Optional function returning whether your team knows the lock state.
+    -- When it returns false the map shows the door as unknown, not locked.
+    lock_known_function = "GetSWATKnowsLockState",
 }
 
 ---------------------------------------------------------------------------
@@ -113,6 +120,44 @@ config.discovery_keywords = {
 
 -- Full function paths to hook with the F9 sniffer, copied from discovery.txt.
 -- Example: "/Script/ReadyOrNot.SomeClass:SomeFunction"
-config.sniff = {}
+-- SWATManager has a Give...Command function for every order; the sniffer shows
+-- which arguments the command wheel passes to them.
+config.sniff = {
+    "/Script/ReadyOrNot.SWATManager:GiveBreachAndClearCommand",
+    "/Script/ReadyOrNot.SWATManager:GiveCheckForContactsCommand",
+    "/Script/ReadyOrNot.SWATManager:GiveCheckForTrapsCommand",
+    "/Script/ReadyOrNot.SWATManager:GiveCloseDoorCommand",
+    "/Script/ReadyOrNot.SWATManager:GiveCollectEvidenceCommand",
+    "/Script/ReadyOrNot.SWATManager:GiveCoverAreaCommand",
+    "/Script/ReadyOrNot.SWATManager:GiveDeployGrenadeAtLocation",
+    "/Script/ReadyOrNot.SWATManager:GiveDeployNonLethalItemAtTargetCommand",
+    "/Script/ReadyOrNot.SWATManager:GiveDeployShield",
+    "/Script/ReadyOrNot.SWATManager:GiveDisarmStandaloneTrapCommand",
+    "/Script/ReadyOrNot.SWATManager:GiveDisarmTrapOnDoorCommand",
+    "/Script/ReadyOrNot.SWATManager:GiveDropChemlightAtLocation",
+    "/Script/ReadyOrNot.SWATManager:GiveFallInCommand",
+    "/Script/ReadyOrNot.SWATManager:GiveHoldCommand",
+    "/Script/ReadyOrNot.SWATManager:GiveMoveCommand",
+    "/Script/ReadyOrNot.SWATManager:GiveOpenDoorCommand",
+    "/Script/ReadyOrNot.SWATManager:GivePickLockCommand",
+    "/Script/ReadyOrNot.SWATManager:GiveRemoveWedgeCommand",
+    "/Script/ReadyOrNot.SWATManager:GiveReportTargetCommand",
+    "/Script/ReadyOrNot.SWATManager:GiveRestrainCommand",
+    "/Script/ReadyOrNot.SWATManager:GiveScanDoorCommand",
+    "/Script/ReadyOrNot.SWATManager:GiveSearchAndSecureCommand",
+    "/Script/ReadyOrNot.SWATManager:GiveSearchAndSecureCommand_Individual",
+    "/Script/ReadyOrNot.SWATManager:GiveStackUpCommand",
+    "/Script/ReadyOrNot.SWATManager:GiveWedgeDoorCommand",
+    "/Script/ReadyOrNot.SWATManager:RemoveHoldCommand",
+    "/Script/ReadyOrNot.SwatCommandWidget:DoCommand",
+    "/Script/ReadyOrNot.SwatCommandWidget:OnCommandIssued",
+    "/Script/ReadyOrNot.ReadyOrNotCommandFunctionLibrary:RespondToSWATCommand",
+}
+
+-- Values printed with every sniffed call, to see which team the wheel had selected.
+config.sniff_context = {
+    { class = "SwatCommandWidget", property = "ActiveTeamType" },
+    { class = "SWATManager", property = "ActiveCommandTeam" },
+}
 
 return config
