@@ -6,8 +6,9 @@ local log = require("log")
 
 local orders = {}
 
--- Orders whose item handout is checked a little after they are given.
-local CHECK_AFTER_TICKS = 8
+-- Breach orders are watched until the game gives an officer the door job
+-- (usually once the team is stacked), for at most this many ticks.
+local CHECK_MAX_TICKS = 80
 local CHECKED_ACTIONS = { breach_clear = true, open_clear = true, move_clear = true }
 local pending_checks = {}
 
@@ -118,7 +119,7 @@ function orders.execute(cmd)
         result.status = "ok"
         log.info(string.format("order %d: %s %s", cmd.id, cmd.team, cmd.action))
         if door and CHECKED_ACTIONS[cmd.action] then
-            pending_checks[#pending_checks + 1] = { result = result, team = cmd.team, door = door, ticks = CHECK_AFTER_TICKS }
+            pending_checks[#pending_checks + 1] = { result = result, team = cmd.team, door = door, ticks = CHECK_MAX_TICKS }
         end
     else
         result.status, result.message = "error", tostring(err)
@@ -127,15 +128,17 @@ function orders.execute(cmd)
     return result
 end
 
--- Called every tick: fills in the item check of recent breach orders.
+-- Called every tick: reports which officer got the door job of recent breach
+-- orders and which item the game gave them.
 function orders.run_checks()
     for i = #pending_checks, 1, -1 do
         local check = pending_checks[i]
         check.ticks = check.ticks - 1
-        if check.ticks <= 0 then
+        local ok, text = pcall(game.describe_door_activities, check.team, check.door)
+        if not ok then text = "check failed: " .. tostring(text) end
+        if text or check.ticks <= 0 then
             table.remove(pending_checks, i)
-            local ok, text = pcall(game.describe_door_activities, check.team, check.door)
-            check.result.message = "game assigned: " .. (ok and text or tostring(text))
+            check.result.message = "game assigned: " .. (text or "no officer got a door job within 20 s (press F7 during the breach)")
             log.info(string.format("order %d check: %s", check.result.id, check.result.message))
         end
     end

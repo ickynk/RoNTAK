@@ -85,6 +85,13 @@ local function bind(key_name, fn)
     RegisterKeyBind(key, function() ExecuteInGameThread(fn) end)
 end
 
+local function activity_dump()
+    local lines = game.activity_report()
+    bridge.write_file("activities.txt", table.concat(lines, "\n"))
+    for _, line in ipairs(lines) do log.info(line) end
+end
+
+bind(config.keys.activity_dump, activity_dump)
 bind(config.keys.discovery_dump, discovery.dump)
 bind(config.keys.sniff_toggle, discovery.toggle_sniff)
 bind(config.keys.test_order, test_order)
@@ -95,3 +102,4 @@ LoopAsync(config.tick_ms, function()
 end)
 
 log.info("loaded, bridge folder: " .. bridge.dir)
+log.info("CreateInvalidObject available: " .. tostring(CreateInvalidObject ~= nil))

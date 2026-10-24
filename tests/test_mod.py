@@ -68,7 +68,7 @@ end
 
 -- Controller whose ThrowGrenadeThroughDoorActivity targets a door with an item class.
 function controller_with_throw(door, class)
-    return { ThrowGrenadeThroughDoorActivity = {
+    return { IsValid = function() return true end, ThrowGrenadeThroughDoorActivity = {
         IsValid = function() return true end,
         Door = door,
         ThrowItemClass = { IsValid = function() return true end, GetFName = function() return name(class) end },
@@ -102,7 +102,7 @@ objects = {
 
 function FindAllOf(class) return objects[class] end
 function FindFirstOf(class) return objects[class] and objects[class][1] end
-Key = { F8 = "F8", F9 = "F9", F10 = "F10" }
+Key = { F7 = "F7", F8 = "F8", F9 = "F9", F10 = "F10" }
 keybinds = {}
 function RegisterKeyBind(key, fn) keybinds[key] = fn end
 function ExecuteInGameThread(fn) fn() end
@@ -232,17 +232,27 @@ class ModTest(unittest.TestCase):
         self.lua.execute('objects.CyberneticsSwat_V2_C[1].Controller = controller_with_throw(objects.Door[1], "BP_Flashbang_C")')
         state = self.run_orders(self.order(1, "red", "breach_clear", {"door": "Door_C_7"},
                                            {"breach": "kick", "grenade": "flashbang"}))
-        self.assertNotIn("message", state["results"][0])
-        for _ in range(8):
-            state = self.tick()
         self.assertEqual(state["results"][0]["message"],
                          "game assigned: Swat_C_1 ThrowGrenadeThroughDoor: BP_Flashbang_C")
 
     def test_breach_check_when_nobody_assigned(self):
         state = self.run_orders(self.order(1, "blue", "breach_clear", {"door": "Door_C_7"}, {"breach": "kick"}))
-        for _ in range(8):
+        for _ in range(78):
             state = self.tick()
-        self.assertIn("no officer was given", state["results"][0]["message"])
+        self.assertNotIn("message", state["results"][0])  # still watching
+        for _ in range(2):
+            state = self.tick()
+        self.assertIn("no officer got a door job within 20 s", state["results"][0]["message"])
+
+    def test_activity_dump(self):
+        self.lua.execute('objects.CyberneticsSwat_V2_C[1].Controller = controller_with_throw(objects.Door[1], "BP_Flashbang_C")')
+        self.lua.execute('keybinds["F7"]()')
+        text = (self.bridge / "activities.txt").read_text()
+        self.assertIn("Swat_C_1 (red)", text)
+        self.assertIn("ThrowGrenadeThroughDoor", text)
+        self.assertIn("door=Door_C_7", text)
+        self.assertIn("item=BP_Flashbang_C", text)
+        self.assertIn("Swat_C_2 (blue)  ERROR: no controller", text)
 
     def test_move_and_clear_on_open_door(self):
         self.run_orders(self.order(1, "red", "move_clear", {"door": "Door_C_8"}, {"grenade": "flashbang"}))

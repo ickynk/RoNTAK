@@ -202,29 +202,63 @@ local function class_name(obj)
     return object_name(obj)
 end
 
--- What the game actually handed out for a door order: for each officer on
--- the team whose door activity targets this door, the item it was given.
--- Used to check that grenade and breaching item classes arrived.
+local DOOR_ACTIVITIES = {
+    "ThrowGrenadeThroughDoorActivity", "LaunchGrenadeThroughDoorActivity",
+    "C2DoorActivity", "ShotgunDoorActivity", "RamDoorActivity", "KickDoorActivity",
+}
+
+-- Reads one officer's door activities from its controller. Returns a list of
+-- { name, door, item } (door and item are names or nil) and an error string.
+local function door_activities(officer)
+    local list = {}
+    local ok, err = pcall(function()
+        local controller = officer.actor.Controller
+        if not valid(controller) then error("no controller", 0) end
+        for _, activity_name in ipairs(DOOR_ACTIVITIES) do
+            local activity = controller[activity_name]
+            if valid(activity) then
+                local door, item
+                pcall(function() door = valid(activity.Door) and object_name(activity.Door) or nil end)
+                pcall(function() item = class_name(activity.ThrowItemClass) end)
+                if not item then pcall(function() item = class_name(activity.BreachItem) end) end
+                list[#list + 1] = { name = activity_name:gsub("Activity$", ""), door = door, item = item }
+            end
+        end
+    end)
+    return list, (not ok) and tostring(err) or nil
+end
+
+-- What the game handed out for a door order: officers on the team whose door
+-- activity targets this door, with the item each was given. Returns nil while
+-- nobody has been assigned yet.
 function game.describe_door_activities(team, door)
     local door_name = object_name(door)
     local parts = {}
     for _, o in ipairs(game.officer_actors()) do
         if on_team(o, team) then
-            pcall(function()
-                local controller = o.actor.Controller
-                for _, activity_name in ipairs({ "ThrowGrenadeThroughDoorActivity", "LaunchGrenadeThroughDoorActivity",
-                                                 "C2DoorActivity", "ShotgunDoorActivity", "RamDoorActivity" }) do
-                    local activity = controller[activity_name]
-                    if valid(activity) and valid(activity.Door) and object_name(activity.Door) == door_name then
-                        local item = class_name(activity.ThrowItemClass) or class_name(activity.BreachItem) or "no item"
-                        parts[#parts + 1] = string.format("%s %s: %s", o.name, activity_name:gsub("Activity$", ""), item)
-                    end
+            for _, a in ipairs((door_activities(o))) do
+                if a.door == door_name then
+                    parts[#parts + 1] = string.format("%s %s: %s", o.name, a.name, a.item or "no item")
                 end
-            end)
+            end
         end
     end
-    if #parts == 0 then return "no officer was given a grenade or breaching job for this door" end
+    if #parts == 0 then return nil end
     return table.concat(parts, "; ")
+end
+
+-- Every officer's door activities, for the F7 dump.
+function game.activity_report()
+    local lines = { "RoNTAK door activity dump (time " .. os.time() .. ")",
+                    "CreateInvalidObject available: " .. tostring(CreateInvalidObject ~= nil), "" }
+    for _, o in ipairs(game.officer_actors()) do
+        local list, err = door_activities(o)
+        lines[#lines + 1] = string.format("%s (%s)%s", o.name, o.team, err and ("  ERROR: " .. err) or "")
+        for _, a in ipairs(list) do
+            lines[#lines + 1] = string.format("    %-28s door=%-22s item=%s", a.name, a.door or "-", a.item or "-")
+        end
+    end
+    return lines
 end
 
 function game.officers()
