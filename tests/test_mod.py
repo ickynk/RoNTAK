@@ -43,19 +43,36 @@ local manager = setmetatable({ IsValid = function() return true end }, {
 })
 
 classes = {}
--- items: category -> { class name, count }
+-- TArray stand-in: ForEach(fn) calls fn(index, element) with element:get().
+local function tarray(values)
+    return { ForEach = function(self, fn)
+        for i, v in ipairs(values) do fn(i, { get = function() return v end }) end
+    end }
+end
+
+-- items: list of { class name, EItemCategory, depleted }
 local function inventory(items)
-    return {
-        GetInventoryItemOfType = function(self, category)
-            local entry = items[category]
-            if not entry then return nil end
-            classes[entry[1]] = classes[entry[1]] or { name = entry[1] }
-            return { IsValid = function() return true end, GetClass = function() return classes[entry[1]] end }
-        end,
-        CountInventoryItemType = function(self, category)
-            return items[category] and items[category][2] or 0
-        end,
-    }
+    local objs = {}
+    for _, entry in ipairs(items) do
+        classes[entry[1]] = classes[entry[1]] or { name = entry[1] }
+        local class = classes[entry[1]]
+        objs[#objs + 1] = {
+            IsValid = function() return true end,
+            IsDepleted = function() return entry[3] == true end,
+            GetClass = function() return class end,
+            ItemCategories = tarray({ entry[2] }),
+        }
+    end
+    return { InventoryItems = tarray(objs) }
+end
+
+-- Controller whose ThrowGrenadeThroughDoorActivity targets a door with an item class.
+function controller_with_throw(door, class)
+    return { ThrowGrenadeThroughDoorActivity = {
+        IsValid = function() return true end,
+        Door = door,
+        ThrowItemClass = { IsValid = function() return true end, GetFName = function() return name(class) end },
+    } }
 end
 
 objects = {
@@ -63,9 +80,9 @@ objects = {
     SWATManager = { manager },
     CyberneticsSwat_V2_C = {
         actor("Swat_C_1", 100, 200, 0, 0, { SquadPosition = 2,
-            InventoryComp = inventory({ [38] = { "C2", 1 }, [30] = { "Flashbang", 2 }, [33] = { "StingerEmpty", 0 } }) }),
+            InventoryComp = inventory({ { "C2", 38 }, { "Flashbang", 30 }, { "Flashbang", 30, true }, { "StingerUsed", 33, true } }) }),
         actor("Swat_C_2", 150, 250, 0, 45, { SquadPosition = 0,
-            InventoryComp = inventory({ [33] = { "Stinger", 1 } }) }),
+            InventoryComp = inventory({ { "Stinger", 33 } }) }),
     },
     Door = {
         actor("Door_C_7", 500, 0, 0, 90, {
@@ -138,7 +155,7 @@ class ModTest(unittest.TestCase):
         self.assertEqual(len(state["configured_actions"]), 10)
         items = {o["id"]: o["items"] for o in state["officers"]}
         self.assertEqual(items["Swat_C_1"]["c2"], 1)
-        self.assertEqual(items["Swat_C_1"]["flashbang"], 2)
+        self.assertEqual(items["Swat_C_1"]["flashbang"], 1)  # one of two is used up
         self.assertEqual(items["Swat_C_1"]["stinger"], 0)
         self.assertEqual(items["Swat_C_2"]["stinger"], 1)
         self.assertEqual(items["Swat_C_2"]["ninebang"], 0)
@@ -203,6 +220,29 @@ class ModTest(unittest.TestCase):
         fn, args = self.call(1)
         self.assertIsNone(args[4])
         self.assertEqual(args[5]["name"], "Stinger")
+
+    def test_no_item_sends_invalid_object_when_available(self):
+        self.lua.execute('function CreateInvalidObject() return { invalid = true } end')
+        self.run_orders(self.order(1, "red", "breach_clear", {"door": "Door_C_7"}, {"breach": "kick", "grenade": "none"}))
+        fn, args = self.call(1)
+        self.assertTrue(args[4]["invalid"])
+        self.assertTrue(args[5]["invalid"])
+
+    def test_breach_order_reports_what_the_game_assigned(self):
+        self.lua.execute('objects.CyberneticsSwat_V2_C[1].Controller = controller_with_throw(objects.Door[1], "BP_Flashbang_C")')
+        state = self.run_orders(self.order(1, "red", "breach_clear", {"door": "Door_C_7"},
+                                           {"breach": "kick", "grenade": "flashbang"}))
+        self.assertNotIn("message", state["results"][0])
+        for _ in range(8):
+            state = self.tick()
+        self.assertEqual(state["results"][0]["message"],
+                         "game assigned: Swat_C_1 ThrowGrenadeThroughDoor: BP_Flashbang_C")
+
+    def test_breach_check_when_nobody_assigned(self):
+        state = self.run_orders(self.order(1, "blue", "breach_clear", {"door": "Door_C_7"}, {"breach": "kick"}))
+        for _ in range(8):
+            state = self.tick()
+        self.assertIn("no officer was given", state["results"][0]["message"])
 
     def test_move_and_clear_on_open_door(self):
         self.run_orders(self.order(1, "red", "move_clear", {"door": "Door_C_8"}, {"grenade": "flashbang"}))

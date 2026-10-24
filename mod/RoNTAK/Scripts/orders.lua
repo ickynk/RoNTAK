@@ -6,10 +6,22 @@ local log = require("log")
 
 local orders = {}
 
+-- Orders whose item handout is checked a little after they are given.
+local CHECK_AFTER_TICKS = 8
+local CHECKED_ACTIONS = { breach_clear = true, open_clear = true, move_clear = true }
+local pending_checks = {}
+
 local function lookup(table_name, id)
     local value = config[table_name][id]
     if value == nil then error(string.format("unknown %s option '%s'", table_name, tostring(id))) end
     return value
+end
+
+-- A definite "no object" for item class arguments. A Lua nil may leave the
+-- game's argument unset; CreateInvalidObject() is written as a null pointer.
+local function no_object()
+    if CreateInvalidObject then return CreateInvalidObject() end
+    return nil
 end
 
 local function vector(v)
@@ -48,14 +60,14 @@ local function build_args(spec, cmd, door)
             value = lookup("breach_args", breach)
         elseif arg == "$breach_item" then
             local category = config.breach_items[breach]
-            value = nil
+            value = no_object()
             if category then
                 value = game.team_item_class(cmd.team, category)
                 if not value then error("no officer on " .. cmd.team .. " carries the " .. breach .. " item") end
             end
         elseif arg == "$grenade_item" then
             local grenade = options.grenade or "none"
-            value = nil
+            value = no_object()
             if grenade ~= "none" then
                 local category = lookup("grenade_items", grenade)
                 value = game.team_item_class(cmd.team, category)
@@ -87,8 +99,8 @@ function orders.execute(cmd)
         return result
     end
 
+    local door = nil
     local ok, err = pcall(function()
-        local door = nil
         local door_id = cmd.target and cmd.target.door
         if door_id then
             door = game.door_by_id(door_id)
@@ -105,11 +117,28 @@ function orders.execute(cmd)
     if ok then
         result.status = "ok"
         log.info(string.format("order %d: %s %s", cmd.id, cmd.team, cmd.action))
+        if door and CHECKED_ACTIONS[cmd.action] then
+            pending_checks[#pending_checks + 1] = { result = result, team = cmd.team, door = door, ticks = CHECK_AFTER_TICKS }
+        end
     else
         result.status, result.message = "error", tostring(err)
         log.error(string.format("order %d failed: %s", cmd.id, tostring(err)))
     end
     return result
+end
+
+-- Called every tick: fills in the item check of recent breach orders.
+function orders.run_checks()
+    for i = #pending_checks, 1, -1 do
+        local check = pending_checks[i]
+        check.ticks = check.ticks - 1
+        if check.ticks <= 0 then
+            table.remove(pending_checks, i)
+            local ok, text = pcall(game.describe_door_activities, check.team, check.door)
+            check.result.message = "game assigned: " .. (ok and text or tostring(text))
+            log.info(string.format("order %d check: %s", check.result.id, check.result.message))
+        end
+    end
 end
 
 return orders

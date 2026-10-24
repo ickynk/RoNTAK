@@ -135,9 +135,25 @@ local function on_team(officer, team)
     return team == "gold" or officer.team == team
 end
 
-local function item_count(actor, category)
-    local ok, count = pcall(function() return actor.InventoryComp:CountInventoryItemType(category) end)
-    if ok and type(count) == "number" then return count end
+-- Items the officer can still use: InventoryComp.InventoryItems minus the
+-- ones marked IsDepleted (thrown grenades stay in the list, used up).
+-- Each entry is { item = object, categories = { [EItemCategory] = true } }.
+-- Returns nil if the inventory cannot be read.
+local function usable_items(actor)
+    local list = {}
+    local ok = pcall(function()
+        actor.InventoryComp.InventoryItems:ForEach(function(_, element)
+            local item = element:get()
+            if valid(item) and call_bool(item, "IsDepleted") ~= true then
+                local categories = {}
+                pcall(function()
+                    item.ItemCategories:ForEach(function(_, c) categories[c:get()] = true end)
+                end)
+                list[#list + 1] = { item = item, categories = categories }
+            end
+        end)
+    end)
+    if ok then return list end
     return nil
 end
 
@@ -148,33 +164,67 @@ local function inventories()
     if os.time() - inventory_cache.at >= INVENTORY_REFRESH_SECONDS then
         local by_name = {}
         for _, o in ipairs(game.officer_actors()) do
-            local items = {}
-            for item, category in pairs(config.inventory or {}) do
-                items[item] = item_count(o.actor, category)
+            local items = usable_items(o.actor)
+            if items then
+                local counts = {}
+                for name, category in pairs(config.inventory or {}) do
+                    counts[name] = 0
+                    for _, entry in ipairs(items) do
+                        if entry.categories[category] then counts[name] = counts[name] + 1 end
+                    end
+                end
+                by_name[o.name] = counts
             end
-            by_name[o.name] = items
         end
         inventory_cache = { at = os.time(), by_name = by_name }
     end
     return inventory_cache.by_name
 end
 
--- Class of an item (EItemCategory) carried by an officer on the team, or nil.
--- Only officers that still have at least one are considered, so the game is
--- never told to use an item the team has run out of.
+-- Class of a usable item (EItemCategory) carried by an officer on the team,
+-- or nil, so the game is never told to use an item the team has run out of.
 function game.team_item_class(team, category)
     for _, o in ipairs(game.officer_actors()) do
-        local count = item_count(o.actor, category)
-        if on_team(o, team) and (count == nil or count > 0) then
-            local ok, class = pcall(function()
-                local item = o.actor.InventoryComp:GetInventoryItemOfType(category)
-                if item and item:IsValid() then return item:GetClass() end
-                return nil
-            end)
-            if ok and class then return class end
+        if on_team(o, team) then
+            for _, entry in ipairs(usable_items(o.actor) or {}) do
+                if entry.categories[category] then
+                    local ok, class = pcall(function() return entry.item:GetClass() end)
+                    if ok and class then return class end
+                end
+            end
         end
     end
     return nil
+end
+
+local function class_name(obj)
+    if not valid(obj) then return nil end
+    return object_name(obj)
+end
+
+-- What the game actually handed out for a door order: for each officer on
+-- the team whose door activity targets this door, the item it was given.
+-- Used to check that grenade and breaching item classes arrived.
+function game.describe_door_activities(team, door)
+    local door_name = object_name(door)
+    local parts = {}
+    for _, o in ipairs(game.officer_actors()) do
+        if on_team(o, team) then
+            pcall(function()
+                local controller = o.actor.Controller
+                for _, activity_name in ipairs({ "ThrowGrenadeThroughDoorActivity", "LaunchGrenadeThroughDoorActivity",
+                                                 "C2DoorActivity", "ShotgunDoorActivity", "RamDoorActivity" }) do
+                    local activity = controller[activity_name]
+                    if valid(activity) and valid(activity.Door) and object_name(activity.Door) == door_name then
+                        local item = class_name(activity.ThrowItemClass) or class_name(activity.BreachItem) or "no item"
+                        parts[#parts + 1] = string.format("%s %s: %s", o.name, activity_name:gsub("Activity$", ""), item)
+                    end
+                end
+            end)
+        end
+    end
+    if #parts == 0 then return "no officer was given a grenade or breaching job for this door" end
+    return table.concat(parts, "; ")
 end
 
 function game.officers()

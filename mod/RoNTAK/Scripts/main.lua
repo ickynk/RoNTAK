@@ -33,6 +33,7 @@ local function tick()
     for _, cmd in ipairs(bridge.new_commands()) do
         remember(orders.execute(cmd))
     end
+    orders.run_checks()
 
     seq = seq + 1
     bridge.write_state({
