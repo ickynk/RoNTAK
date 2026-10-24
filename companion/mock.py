@@ -54,11 +54,6 @@ UNCONFIGURED = set()
 BREACH_ITEMS = {"c2", "shotgun", "ram"}
 
 
-def room_polygon_world(name):
-    u0, v0, u1, v1 = ROOMS_PX[name]
-    return [list(px_to_world(u, v)) for u, v in ((u0, v0), (u1, v0), (u1, v1), (u0, v1))]
-
-
 def room_center_world(name):
     u0, v0, u1, v1 = ROOMS_PX[name]
     return px_to_world((u0 + u1) / 2, (v0 + v1) / 2)
@@ -125,6 +120,11 @@ class MockGame:
                 "open": did in OPEN_DOORS, "broken": False,
                 "_room": room, "_stack": px_dir_to_world(*stack),
             }
+        # The game's rooms: on each side of a door, and outlined by threat points.
+        for d in self.doors.values():
+            d["front_room"] = d["_room"]
+            d["back_room"] = "Hallway" if d["_room"] != "Hallway" else None
+        self.rooms_written = False
         self.results = []
         self.session = None
         self.last_id = 0
@@ -224,6 +224,21 @@ class MockGame:
             self.last_id = fresh[-1]["id"]
         return fresh
 
+    def write_rooms(self, bridge):
+        """rooms.json as the mod writes it: threat points inset from the walls."""
+        rooms = []
+        for name, (u0, v0, u1, v1) in ROOMS_PX.items():
+            inset = 30
+            hull = [list(px_to_world(u, v)) for u, v in
+                    ((u0 + inset, v0 + inset), (u1 - inset, v0 + inset), (u1 - inset, v1 - inset), (u0 + inset, v1 - inset))]
+            doors = [did for did, d in self.doors.items() if name in (d["front_room"], d["back_room"])]
+            rooms.append({"name": name.replace(" ", "_"), "hull": hull, "points": 6, "z": 0, "doors": doors})
+        for d in self.doors.values():
+            d["front_room"] = d["front_room"] and d["front_room"].replace(" ", "_")
+            d["back_room"] = d["back_room"] and d["back_room"].replace(" ", "_")
+        (bridge / "rooms.json").write_text(json.dumps({"level": LEVEL, "rooms": rooms}), encoding="utf-8")
+        self.rooms_written = True
+
     def tick(self, bridge, dt):
         for cmd in self.read_commands(bridge):
             self.results.insert(0, self.execute(cmd))
@@ -231,12 +246,15 @@ class MockGame:
         self.update_player(dt)
         for o in self.officers:
             o.step(dt, self.player)
+        if not self.rooms_written:
+            self.write_rooms(bridge)
         self.seq += 1
         state = {
             "version": 1, "seq": self.seq, "time": int(time.time()), "level": LEVEL,
             "player": self.player,
             "officers": [o.state() for o in self.officers],
             "doors": [{k: v for k, v in d.items() if not k.startswith("_")} for d in self.doors.values()],
+            "rooms_version": f"{LEVEL}#{len(ROOMS_PX)}",
             "results": self.results,
             "configured_actions": sorted({"stack_up", "open_clear", "breach_clear", "move_clear", "scan_door", "wedge_door",
                                           "move_to", "fall_in", "hold", "search_secure"} - UNCONFIGURED),
@@ -276,9 +294,6 @@ def write_map():
     parts.append("</svg>")
     (folder / "floor1.svg").write_text("\n".join(parts), encoding="utf-8")
 
-    door_rooms = {}
-    for did, (_, _, _, room, _, _) in DOORS_PX.items():
-        door_rooms.setdefault(room, []).append(did)
     data = {
         "level": LEVEL,
         "floors": [{
@@ -290,8 +305,8 @@ def write_map():
                 {"world": list(px_to_world(1000, 750)), "px": [1000, 750]},
             ],
         }],
-        "rooms": [{"name": name, "floor": "Ground", "polygon": room_polygon_world(name),
-                   "doors": door_rooms.get(name, [])} for name in ROOMS_PX],
+        # Rooms come from the game (rooms.json), so the map file has none.
+        "rooms": [],
     }
     (folder / "map.json").write_text(json.dumps(data, indent=2), encoding="utf-8")
     print(f"wrote {folder}")

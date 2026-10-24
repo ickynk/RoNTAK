@@ -59,6 +59,9 @@
     action: null,
     options: { breach: "kick", grenade: "flashbang", side: "auto" },
     sent: [],
+    gameRooms: [], // rooms read from the game (rooms.json), see loadGameRooms()
+    roomsVersion: null,
+    pendingAnchor: null, // calibration: world position of the door tapped first
     draft: [],
     dirty: true,
   };
@@ -71,7 +74,31 @@
 
   function transform() {
     const f = floor();
-    return Geo.fit(f && f.anchors);
+    const anchors = (f && f.anchors) || [];
+    if (anchors.length >= 2) return Geo.fit(anchors);
+    return provisionalTransform(f, anchors[0]);
+  }
+
+  // Before a floor plan is calibrated, lay the level's doors and rooms over
+  // the image area (top-down, +X up) so their markers can be tapped as anchors.
+  // With one anchor, shift so that anchor already lines up.
+  function provisionalTransform(f, anchor) {
+    const img = f && app.images[f.image];
+    if (!img || !img.naturalWidth) return Geo.DEFAULT;
+    const pts = ((app.state && app.state.doors) || []).filter((d) => onFloor(d.pos.z, f)).map((d) => [d.pos.x, d.pos.y]);
+    app.gameRooms.forEach((r) => { if (onFloor(r.z, f)) (r.polygon || []).forEach((p) => pts.push(p)); });
+    if (pts.length < 2) return Geo.DEFAULT;
+    const xs = pts.map((p) => p[0]), ys = pts.map((p) => p[1]);
+    const minX = Math.min(...xs), maxX = Math.max(...xs), minY = Math.min(...ys), maxY = Math.max(...ys);
+    // Image u follows world Y, image v follows world -X.
+    const k = 0.9 * Math.min(img.naturalWidth / Math.max(1, maxY - minY), img.naturalHeight / Math.max(1, maxX - minX));
+    let e = img.naturalWidth / 2 - k * (minY + maxY) / 2;
+    let fOff = img.naturalHeight / 2 + k * (minX + maxX) / 2;
+    if (anchor) {
+      e = anchor.px[0] - k * anchor.world[1];
+      fOff = anchor.px[1] + k * anchor.world[0];
+    }
+    return { a: 0, b: k, c: -k, d: 0, e, f: fOff };
   }
 
   function worldToScreen(x, y) {
@@ -102,15 +129,40 @@
     return (app.state && app.state.doors || []).find((d) => d.id === id) || null;
   }
 
+  // "Living_Room_2" -> "Living Room 2"
+  function prettyRoom(name) {
+    return String(name).replace(/_/g, " ").replace(/\s+/g, " ").trim();
+  }
+
+  // Rooms drawn by hand (map.json) win over the game's room with the same name.
+  function allRooms() {
+    const manual = app.map.rooms;
+    const names = new Set(manual.map((r) => r.name));
+    return manual.concat(app.gameRooms.filter((r) => !names.has(r.name)));
+  }
+
+  function findRoom(name) {
+    return allRooms().find((r) => r.name === name) || null;
+  }
+
   function roomsOnFloor() {
     const f = floor();
-    return app.map.rooms.filter((r) => !f || !r.floor || r.floor === f.name);
+    return allRooms().filter((r) => (r.game ? onFloor(r.z, f) : !f || !r.floor || r.floor === f.name));
+  }
+
+  function hasOutline(room) {
+    return Boolean(room.polygon && room.polygon.length >= 3);
+  }
+
+  function roomCenter(room) {
+    return hasOutline(room) ? Geo.centroid(room.polygon) : room.center;
   }
 
   function doorLabel(id) {
-    const room = app.map.rooms.find((r) => (r.doors || []).includes(id));
     const door = doorById(id);
-    const base = room ? `${room.name} door` : `Door ${id.replace(/^.*_/, "#")}`;
+    const sides = door ? [door.front_room, door.back_room].filter(Boolean).map(prettyRoom) : [];
+    const room = sides.length ? null : allRooms().find((r) => (r.doors || []).includes(id));
+    const base = sides.length ? `${sides.join(" / ")} door` : room ? `${room.name} door` : `Door ${id.replace(/^.*_/, "#")}`;
     if (!door) return base;
     if (door.broken) return `${base} (broken)`;
     if (door.open) return `${base} (open)`;
@@ -172,6 +224,40 @@
     app.images[f.image] = img;
   }
 
+  // Game room outline: the hull of the AI's threat points, pushed out a little
+  // because those points sit inside the room, not on its walls.
+  const GAME_ROOM_PADDING = 60;
+
+  function padOutline(hull) {
+    if (hull.length < 3) return null;
+    const [cx, cy] = Geo.centroid(hull);
+    return hull.map(([x, y]) => {
+      const len = Math.hypot(x - cx, y - cy) || 1;
+      return [x + ((x - cx) / len) * GAME_ROOM_PADDING, y + ((y - cy) / len) * GAME_ROOM_PADDING];
+    });
+  }
+
+  async function loadGameRooms() {
+    try {
+      const data = await api("GET", "/api/rooms");
+      if (data.level !== app.level) return;
+      app.gameRooms = (data.rooms || []).map((r) => {
+        const polygon = padOutline(r.hull || []);
+        let center = polygon ? Geo.centroid(polygon) : r.hull && r.hull.length ? Geo.centroid(r.hull) : null;
+        if (!center) {
+          const doors = (r.doors || []).map(doorById).filter(Boolean);
+          if (doors.length) center = [doors[0].pos.x, doors[0].pos.y];
+        }
+        return { name: prettyRoom(r.name), game: true, polygon, center, z: r.z, doors: r.doors || [] };
+      });
+      if (!app.map.floors.length) app.view.fitted = false;
+      renderRooms();
+      redraw();
+    } catch (e) {
+      console.warn("rooms load failed", e);
+    }
+  }
+
   async function saveMap() {
     if (!app.level) return alert("No level loaded yet. Start a mission first.");
     await api("PUT", `/api/maps/${encodeURIComponent(app.level)}`, { level: app.level, ...app.map });
@@ -205,6 +291,7 @@
       if (s.player && s.player.pos) pts.push(s.player.pos);
       (s.officers || []).forEach((o) => pts.push(o.pos));
       (s.doors || []).forEach((d) => pts.push(d.pos));
+      app.gameRooms.forEach((r) => (r.polygon || []).forEach(([x, y]) => pts.push({ x, y })));
       if (!pts.length) return;
       const t = transform();
       const px = pts.map((p) => Geo.apply(t, p.x, p.y));
@@ -298,21 +385,31 @@
 
   function drawRooms() {
     const selected = app.target && app.target.type === "room" ? app.target.room : null;
+    const f = floor();
     for (const room of roomsOnFloor()) {
-      polygonPath(room.polygon);
       const isSel = room.name === selected;
-      ctx.fillStyle = isSel ? "rgba(0, 188, 212, 0.22)" : "rgba(0, 188, 212, 0.05)";
-      ctx.fill();
-      ctx.strokeStyle = isSel ? "#00bcd4" : "rgba(0, 188, 212, 0.35)";
-      ctx.lineWidth = isSel ? 2.5 : 1;
-      ctx.stroke();
-      const f = floor();
-      if (isSel || !(f && f.image)) {
-        const [cx, cy] = Geo.centroid(room.polygon);
+      if (hasOutline(room)) {
+        polygonPath(room.polygon);
+        ctx.fillStyle = isSel ? "rgba(0, 188, 212, 0.22)" : "rgba(0, 188, 212, 0.05)";
+        ctx.fill();
+        ctx.strokeStyle = isSel ? "#00bcd4" : "rgba(0, 188, 212, 0.35)";
+        ctx.lineWidth = isSel ? 2.5 : 1;
+        // Game rooms are outlined around the AI's points, not the walls: dashed.
+        ctx.setLineDash(room.game ? [6, 4] : []);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+      // Game room names are always shown (they are what the image lacks).
+      if ((isSel || room.game || !(f && f.image)) && roomCenter(room)) {
+        const [cx, cy] = roomCenter(room);
         const [sx, sy] = worldToScreen(cx, cy);
-        ctx.fillStyle = isSel ? "#00bcd4" : "rgba(230, 233, 236, 0.75)";
         ctx.font = "600 12px system-ui, sans-serif";
         ctx.textAlign = "center";
+        // Dark halo so names stay readable on light floor plan images.
+        ctx.lineWidth = 3;
+        ctx.strokeStyle = "rgba(16, 19, 22, 0.85)";
+        ctx.strokeText(room.name, sx, sy);
+        ctx.fillStyle = isSel ? "#00bcd4" : "#e6e9ec";
         ctx.fillText(room.name, sx, sy);
       }
     }
@@ -422,6 +519,14 @@
   }
 
   function drawAnchors() {
+    if (app.pendingAnchor) {
+      const [sx, sy] = worldToScreen(app.pendingAnchor.x, app.pendingAnchor.y);
+      ctx.strokeStyle = "#ff4081";
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.arc(sx, sy, 16, 0, Math.PI * 2);
+      ctx.stroke();
+    }
     const f = floor();
     if (!f) return;
     (f.anchors || []).forEach((a, i) => {
@@ -519,7 +624,8 @@
     selectAt(sx, sy);
   }
 
-  function selectAt(sx, sy) {
+  // The door marker under a screen point (on the current floor), or null.
+  function doorAt(sx, sy) {
     const f = floor();
     let best = null, bestD = DOOR_HIT_PX;
     for (const d of (app.state && app.state.doors) || []) {
@@ -528,12 +634,17 @@
       const dist = Math.hypot(dx - sx, dy - sy);
       if (dist < bestD) { best = d; bestD = dist; }
     }
+    return best;
+  }
+
+  function selectAt(sx, sy) {
+    const best = doorAt(sx, sy);
     const [wx, wy] = screenToWorld(sx, sy);
     if (best) {
-      const room = app.map.rooms.find((r) => (r.doors || []).includes(best.id));
+      const room = allRooms().find((r) => (r.doors || []).includes(best.id));
       app.target = { type: "door", door: best.id, room: room && room.name };
     } else {
-      const room = roomsOnFloor().find((r) => Geo.pointInPolygon(wx, wy, r.polygon));
+      const room = roomsOnFloor().find((r) => hasOutline(r) && Geo.pointInPolygon(wx, wy, r.polygon));
       if (room) {
         app.target = { type: "room", room: room.name, door: bestDoorForRoom(room) };
       } else {
@@ -617,11 +728,11 @@
     if (!t) return null;
     if (t.type === "location") return t.location;
     if (t.type === "room") {
-      const room = app.map.rooms.find((r) => r.name === t.room);
-      if (room) {
-        const [x, y] = Geo.centroid(room.polygon);
+      const room = findRoom(t.room);
+      if (room && roomCenter(room)) {
+        const [x, y] = roomCenter(room);
         const door = doorById(t.door);
-        return { x, y, z: door ? door.pos.z : 0 };
+        return { x, y, z: room.game ? room.z : door ? door.pos.z : 0 };
       }
     }
     const door = doorById(t.door);
@@ -675,7 +786,7 @@
     const choice = $("door-choice");
     choice.innerHTML = "";
     if (app.target && app.target.type === "room") {
-      const room = app.map.rooms.find((r) => r.name === app.target.room);
+      const room = findRoom(app.target.room);
       const ids = ((room && room.doors) || []).filter((id) => doorById(id));
       if (ids.length > 1) {
         ids.forEach((id, i) => {
@@ -807,14 +918,30 @@
     return floor();
   }
 
+  // An anchor pairs a world position with a point on the image. The world
+  // position is a door (tap its marker first) or, failing that, where you
+  // are standing in game.
   function addAnchor(sx, sy) {
-    const p = app.state && app.state.player && app.state.player.pos;
-    if (!p || !(app.state && app.state.connected)) {
-      return alert("Calibration uses your in-game position. Start a mission and stand on the spot first.");
+    let world = app.pendingAnchor;
+    if (!world) {
+      const door = doorAt(sx, sy);
+      if (door) {
+        app.pendingAnchor = { x: door.pos.x, y: door.pos.y };
+        setHint("Now tap where that door is on the image.");
+        return redraw();
+      }
+      const p = app.state && app.state.player && app.state.player.pos;
+      if (!p || !(app.state && app.state.connected)) {
+        return alert("Tap a door marker first, then the same door on the image.");
+      }
+      if (!confirm("No door marker there. Use the spot where you are standing in game for this anchor?")) return;
+      world = p;
     }
+    app.pendingAnchor = null;
     const f = ensureFloor();
     f.anchors = f.anchors || [];
-    f.anchors.push({ world: [p.x, p.y], px: screenToPx(sx, sy) });
+    f.anchors.push({ world: [world.x, world.y], px: screenToPx(sx, sy) });
+    setHint(f.anchors.length < 2 ? "Anchor added. Add one more, far from the first." : "Anchor added. Save map when it lines up.");
     renderCalibration();
     redraw();
   }
@@ -906,7 +1033,12 @@
       li.appendChild(del);
       list.appendChild(li);
     }
-    if (!app.map.rooms.length) list.innerHTML = "<li>No rooms yet</li>";
+    if (!app.map.rooms.length) list.innerHTML = "<li>No hand-drawn rooms</li>";
+    if (app.gameRooms.length) {
+      const li = document.createElement("li");
+      li.textContent = `${app.gameRooms.length} rooms from the game (dashed outlines)`;
+      list.prepend(li);
+    }
   }
 
   $("room-undo").onclick = () => { app.draft.pop(); redraw(); };
@@ -939,7 +1071,7 @@
     $("btn-rooms").classList.toggle("active", app.mode === "rooms");
     app.draft = [];
     setHint({
-      calibrate: "Calibrate: stand on a spot in game, then tap the same spot on the image.",
+      calibrate: "Calibrate: tap a door marker, then the same door on the image. Do this for two doors.",
       rooms: "Rooms: tap the corners of a room, then press Finish room.",
     }[app.mode] || "");
     if (app.mode === "calibrate") renderCalibration();
@@ -964,7 +1096,7 @@
     app.team = team;
     document.querySelectorAll(".team").forEach((b) => b.classList.toggle("active", b.dataset.team === team));
     if (app.target && app.target.type === "room") {
-      const room = app.map.rooms.find((r) => r.name === app.target.room);
+      const room = findRoom(app.target.room);
       if (room) app.target.door = bestDoorForRoom(room);
     }
     renderOrders();
@@ -980,6 +1112,10 @@
       if (s.level && s.level !== app.level) {
         app.level = s.level;
         await loadMap(s.level);
+      }
+      if (s.rooms_version && s.rooms_version !== app.roomsVersion) {
+        app.roomsVersion = s.rooms_version;
+        await loadGameRooms();
       }
       if (app.autoFloor && app.map.floors.length && s.player && s.player.pos) {
         const i = floorForZ(s.player.pos.z);

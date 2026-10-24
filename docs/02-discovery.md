@@ -10,7 +10,7 @@ reloads it.
 
 | Key | What it does | Output |
 | --- | --- | --- |
-| **F6** | The level's map data: planning-map calibration, floor textures, floor heights | `bridge\mapinfo.json` |
+| **F6** | Each building's floors and their heights | `bridge\mapinfo.json` |
 | **F7** | Every officer's current door job: which door, which item | `bridge\activities.txt` and the console |
 | **F8** | Lists game classes (with live counts and properties) and functions | `bridge\discovery.txt` |
 | **F9** | Start/stop logging calls to the functions in `config.sniff` | `bridge\sniff.txt` and the console |

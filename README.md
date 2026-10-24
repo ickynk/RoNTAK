@@ -37,7 +37,8 @@ It ships filled in and tested. If a game update breaks something, the mod has to
 | Live map: player, officers by team, doors with open / locked state | Working in game |
 | Orders: stack up, breach / open / move & clear with breaching tools and grenades, mirror, wedge, move, fall in, hold, search & secure | Working in game |
 | Gear-aware options (counts, greyed-out options) | Working in game |
-| Floor plans | Manual for now (docs/03); automatic floor plans from the game's planning map are in progress |
+| Rooms from the game: names, outlines, door labels | Automatic on every level (to be confirmed in game) |
+| Floor plan images (community maps, screenshots) | Add per level; line up by tapping two doors (docs/03) |
 
 ## Try it now (no game needed)
 
@@ -56,7 +57,7 @@ It ships filled in and tested. If a game update breaks something, the mod has to
 Follow the guides in order:
 
 1. [docs/01-setup.md](docs/01-setup.md): install UE4SS and the mod, start the companion
-2. [docs/03-maps.md](docs/03-maps.md): add floor plans and rooms for each level
+2. [docs/03-maps.md](docs/03-maps.md): game rooms, and adding floor plan images
 
 If a game update breaks something: [docs/02-discovery.md](docs/02-discovery.md).
 

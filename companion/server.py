@@ -156,6 +156,8 @@ class Handler(SimpleHTTPRequestHandler):
         try:
             if parts == ["api", "state"]:
                 return self.get_state()
+            if parts == ["api", "rooms"]:
+                return self.send_json(read_json(self.bridge / "rooms.json") or {"level": None, "rooms": []})
             if len(parts) == 3 and parts[:2] == ["api", "maps"]:
                 return self.get_map(safe_name(parts[2]))
             if len(parts) == 3 and parts[0] == "maps":

@@ -47,6 +47,12 @@ class ServerTest(unittest.TestCase):
         self.assertTrue(body["connected"])
         self.assertEqual(body["level"], "X")
 
+    def test_rooms(self):
+        (self.bridge / "rooms.json").unlink(missing_ok=True)
+        self.assertEqual(self.call("GET", "/api/rooms")[1], {"level": None, "rooms": []})
+        (self.bridge / "rooms.json").write_text(json.dumps({"level": "X", "rooms": [{"name": "Kitchen"}]}))
+        self.assertEqual(self.call("GET", "/api/rooms")[1]["rooms"][0]["name"], "Kitchen")
+
     def test_command_written_for_mod(self):
         status, cmd = self.call("POST", "/api/command", {
             "team": "blue", "action": "breach_clear",
