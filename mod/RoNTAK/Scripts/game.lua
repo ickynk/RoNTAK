@@ -5,10 +5,24 @@ local log = require("log")
 
 local game = {}
 
-local DOOR_REFRESH_SECONDS = 1
-local INVENTORY_REFRESH_SECONDS = 1
+-- FindAllOf walks every loaded object (hundreds of thousands in a level) on
+-- the game thread, so it is only used to rebuild cached actor lists:
+local RESCAN_SECONDS = 5          -- officers / player controller
+local DOOR_RESCAN_SECONDS = 15    -- door list
+local SEARCH_RETRY_SECONDS = 2    -- after a search found nothing (e.g. in menus)
+-- Cheaper per-object reads, still not needed every tick:
+local DOOR_STATE_SECONDS = 2
+local INVENTORY_REFRESH_SECONDS = 2
 
-local door_cache = { level = nil, at = 0, list = {}, by_id = {} }
+local door_cache = { level = nil, at = -math.huge, state_at = -math.huge, list = {}, by_id = {} }
+
+local tick_id = 0
+
+-- Called once at the start of every mod tick; per-tick reads are reused
+-- within a tick.
+function game.begin_tick()
+    tick_id = tick_id + 1
+end
 
 local function valid(obj)
     if obj == nil then return false end
@@ -73,11 +87,18 @@ local function yaw(actor)
     return rot.Yaw
 end
 
+local controller_cache = { pc = nil, searched_at = -math.huge }
+
 function game.player_controller()
-    local controllers = FindAllOf("PlayerController")
-    if not controllers then return nil end
-    for _, pc in ipairs(controllers) do
-        if valid(pc) and valid(pc.Pawn) and valid(pc.Player) then return pc end
+    local pc = controller_cache.pc
+    if valid(pc) and valid(pc.Pawn) then return pc end
+    if os.time() - controller_cache.searched_at < SEARCH_RETRY_SECONDS then return nil end
+    controller_cache = { pc = nil, searched_at = os.time() }
+    for _, candidate in ipairs(FindAllOf("PlayerController") or {}) do
+        if valid(candidate) and valid(candidate.Pawn) and valid(candidate.Player) then
+            controller_cache.pc = candidate
+            return candidate
+        end
     end
     return nil
 end
@@ -107,27 +128,54 @@ local function excluded(name)
     return false
 end
 
--- Officer actors with their team, for orders that need the actual objects.
-function game.officer_actors()
-    local result = {}
+local officer_cache = { at = -math.huge, list = {} }
+
+-- The officer actors, rebuilt with FindAllOf every RESCAN_SECONDS or when
+-- one of them is gone (at most once per SEARCH_RETRY_SECONDS).
+local function officer_list()
+    local age = os.time() - officer_cache.at
+    local stale = age >= RESCAN_SECONDS
+    if not stale and age >= SEARCH_RETRY_SECONDS then
+        if #officer_cache.list == 0 then stale = true end
+        for _, o in ipairs(officer_cache.list) do
+            if not valid(o.actor) then stale = true break end
+        end
+    end
+    if not stale then return officer_cache.list end
+
+    local list = {}
     local player_pawn = game.player_pawn()
     -- Compare by name: two UE4SS handles to the same object are not always equal.
     local player_name = valid(player_pawn) and object_name(player_pawn) or nil
     for _, actor in ipairs(find_all(config.officers.classes)) do
         if valid(actor) then
             local name = object_name(actor)
-            local pos = location(actor)
-            if pos and name ~= player_name and not excluded(name) then
+            if name ~= player_name and not excluded(name) then
                 local raw_team = read_property(actor, config.officers.team_property)
-                result[#result + 1] = {
-                    actor = actor,
-                    name = name,
-                    team = config.officers.team_values[raw_team] or "unknown",
-                    pos = pos,
-                }
+                list[#list + 1] = { actor = actor, name = name, team = config.officers.team_values[raw_team] or "unknown" }
             end
         end
     end
+    officer_cache = { at = os.time(), list = list }
+    return list
+end
+
+local officers_this_tick = { tick = nil, list = {} }
+
+-- Officer actors with their team and position, for orders that need the
+-- actual objects. Positions are read once per tick.
+function game.officer_actors()
+    if officers_this_tick.tick == tick_id then return officers_this_tick.list end
+    local result = {}
+    for _, o in ipairs(officer_list()) do
+        if valid(o.actor) then
+            local pos = location(o.actor)
+            if pos then
+                result[#result + 1] = { actor = o.actor, name = o.name, team = o.team, pos = pos }
+            end
+        end
+    end
+    officers_this_tick = { tick = tick_id, list = result }
     return result
 end
 
@@ -202,29 +250,63 @@ local function class_name(obj)
     return object_name(obj)
 end
 
--- What the game actually handed out for a door order: for each officer on
--- the team whose door activity targets this door, the item it was given.
--- Used to check that grenade and breaching item classes arrived.
+local DOOR_ACTIVITIES = {
+    "ThrowGrenadeThroughDoorActivity", "LaunchGrenadeThroughDoorActivity",
+    "C2DoorActivity", "ShotgunDoorActivity", "RamDoorActivity", "KickDoorActivity",
+}
+
+-- Reads one officer's door activities from its controller. Returns a list of
+-- { name, door, item } (door and item are names or nil) and an error string.
+local function door_activities(officer)
+    local list = {}
+    local ok, err = pcall(function()
+        local controller = officer.actor.Controller
+        if not valid(controller) then error("no controller", 0) end
+        for _, activity_name in ipairs(DOOR_ACTIVITIES) do
+            local activity = controller[activity_name]
+            if valid(activity) then
+                local door, item
+                pcall(function() door = valid(activity.Door) and object_name(activity.Door) or nil end)
+                pcall(function() item = class_name(activity.ThrowItemClass) end)
+                if not item then pcall(function() item = class_name(activity.BreachItem) end) end
+                list[#list + 1] = { name = activity_name:gsub("Activity$", ""), door = door, item = item }
+            end
+        end
+    end)
+    return list, (not ok) and tostring(err) or nil
+end
+
+-- What the game handed out for a door order: officers on the team whose door
+-- activity targets this door, with the item each was given. Returns nil while
+-- nobody has been assigned yet.
 function game.describe_door_activities(team, door)
     local door_name = object_name(door)
     local parts = {}
     for _, o in ipairs(game.officer_actors()) do
         if on_team(o, team) then
-            pcall(function()
-                local controller = o.actor.Controller
-                for _, activity_name in ipairs({ "ThrowGrenadeThroughDoorActivity", "LaunchGrenadeThroughDoorActivity",
-                                                 "C2DoorActivity", "ShotgunDoorActivity", "RamDoorActivity" }) do
-                    local activity = controller[activity_name]
-                    if valid(activity) and valid(activity.Door) and object_name(activity.Door) == door_name then
-                        local item = class_name(activity.ThrowItemClass) or class_name(activity.BreachItem) or "no item"
-                        parts[#parts + 1] = string.format("%s %s: %s", o.name, activity_name:gsub("Activity$", ""), item)
-                    end
+            for _, a in ipairs((door_activities(o))) do
+                if a.door == door_name then
+                    parts[#parts + 1] = string.format("%s %s: %s", o.name, a.name, a.item or "no item")
                 end
-            end)
+            end
         end
     end
-    if #parts == 0 then return "no officer was given a grenade or breaching job for this door" end
+    if #parts == 0 then return nil end
     return table.concat(parts, "; ")
+end
+
+-- Every officer's door activities, for the F7 dump.
+function game.activity_report()
+    local lines = { "RoNTAK door activity dump (time " .. os.time() .. ")",
+                    "CreateInvalidObject available: " .. tostring(CreateInvalidObject ~= nil), "" }
+    for _, o in ipairs(game.officer_actors()) do
+        local list, err = door_activities(o)
+        lines[#lines + 1] = string.format("%s (%s)%s", o.name, o.team, err and ("  ERROR: " .. err) or "")
+        for _, a in ipairs(list) do
+            lines[#lines + 1] = string.format("    %-28s door=%-22s item=%s", a.name, a.door or "-", a.item or "-")
+        end
+    end
+    return lines
 end
 
 function game.officers()
@@ -271,7 +353,9 @@ function game.door_approach(door, team)
         { x = dx, y = dy, z = 0 }
 end
 
-local function refresh_doors(level)
+-- Rebuilds the door list with FindAllOf. Doors do not move, so their
+-- position is read here only.
+local function rescan_doors(level)
     local list, by_id = {}, {}
     for _, actor in ipairs(find_all(config.doors.classes)) do
         if valid(actor) then
@@ -279,26 +363,40 @@ local function refresh_doors(level)
             if pos then
                 local id = object_name(actor)
                 by_id[id] = actor
-                list[#list + 1] = {
-                    id = id,
-                    pos = pos,
-                    yaw = yaw(actor),
-                    locked = door_locked(actor),
-                    open = call_bool(actor, config.doors.open_function),
-                    broken = call_bool(actor, config.doors.broken_function),
-                }
+                list[#list + 1] = { id = id, pos = pos, yaw = yaw(actor), _actor = actor }
             end
         end
     end
-    door_cache = { level = level, at = os.time(), list = list, by_id = by_id }
+    door_cache = { level = level, at = os.time(), state_at = -math.huge, list = list, by_id = by_id }
     log.debug(string.format("found %d doors", #list))
 end
 
-function game.doors(level)
-    if door_cache.level ~= level or os.time() - door_cache.at > DOOR_REFRESH_SECONDS then
-        refresh_doors(level)
+-- Re-reads lock / open / broken state of the cached doors.
+local function refresh_door_states()
+    for _, door in ipairs(door_cache.list) do
+        local actor = door._actor
+        if valid(actor) then
+            door.locked = door_locked(actor)
+            door.open = call_bool(actor, config.doors.open_function)
+            door.broken = call_bool(actor, config.doors.broken_function)
+        end
     end
-    return door_cache.list
+    door_cache.state_at = os.time()
+end
+
+-- Door data for state.json (without the actor objects).
+function game.doors(level)
+    if door_cache.level ~= level or os.time() - door_cache.at >= DOOR_RESCAN_SECONDS then
+        rescan_doors(level)
+    end
+    if os.time() - door_cache.state_at >= DOOR_STATE_SECONDS then
+        refresh_door_states()
+    end
+    local list = {}
+    for i, door in ipairs(door_cache.list) do
+        list[i] = { id = door.id, pos = door.pos, yaw = door.yaw, locked = door.locked, open = door.open, broken = door.broken }
+    end
+    return list
 end
 
 function game.door_by_id(id)
@@ -317,13 +415,20 @@ function game.nearest_door_id(pos)
     return best
 end
 
+local target_cache = {}
+
 -- Builds the object a configured order is called on.
 function game.resolve_target(target, door)
     if target == "player_controller" then return game.player_controller() end
     if target == "player_pawn" then return game.player_pawn() end
     if target == "door" then return door end
-    local obj = FindFirstOf(target)
+    local obj = target_cache[target]
     if valid(obj) then return obj end
+    obj = FindFirstOf(target)
+    if valid(obj) then
+        target_cache[target] = obj
+        return obj
+    end
     return nil
 end
 

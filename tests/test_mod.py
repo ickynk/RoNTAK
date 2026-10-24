@@ -32,10 +32,39 @@ local controller = actor("PlayerController_C_0", 0, 0, 0, 0, {
 })
 
 -- Records every Give...Command call as { fn = name, n = arg count, ... }.
+-- RegisterHook stand-in: pre-hooks get params with get()/set(), like UE4SS.
+hooks = {}
+function RegisterHook(path, fn)
+    hooks[path] = hooks[path] or {}
+    table.insert(hooks[path], fn)
+    return 1, 2
+end
+function UnregisterHook() end
+
+-- When true, the fake drops class (item) arguments the way UE4SS does in game.
+drop_class_args = false
+
+-- Records every Give...Command call as { fn = name, n = arg count, ... }.
 local manager = setmetatable({ IsValid = function() return true end }, {
     __index = function(_, fn)
         return function(self, ...)
             local args = table.pack(...)
+            if drop_class_args then
+                for i = 1, args.n do
+                    if type(args[i]) == "table" and args[i].GetFullName then args[i] = "stale" end
+                end
+            end
+            local params = {}
+            for i = 1, args.n do
+                local index = i
+                params[i] = {
+                    get = function() return args[index] end,
+                    set = function(_, v) args[index] = v end,
+                }
+            end
+            for _, hook in ipairs(hooks["/Script/ReadyOrNot.SWATManager:" .. fn] or {}) do
+                hook({ get = function() return self end }, table.unpack(params, 1, args.n))
+            end
             args.fn = fn
             calls[#calls + 1] = args
         end
@@ -54,7 +83,12 @@ end
 local function inventory(items)
     local objs = {}
     for _, entry in ipairs(items) do
-        classes[entry[1]] = classes[entry[1]] or { name = entry[1] }
+        classes[entry[1]] = classes[entry[1]] or {
+            name = entry[1],
+            GetFullName = function() return "BlueprintGeneratedClass /Game/Items/" .. entry[1] end,
+            GetFName = function() return name(entry[1]) end,
+            IsValid = function() return true end,
+        }
         local class = classes[entry[1]]
         objs[#objs + 1] = {
             IsValid = function() return true end,
@@ -68,7 +102,7 @@ end
 
 -- Controller whose ThrowGrenadeThroughDoorActivity targets a door with an item class.
 function controller_with_throw(door, class)
-    return { ThrowGrenadeThroughDoorActivity = {
+    return { IsValid = function() return true end, ThrowGrenadeThroughDoorActivity = {
         IsValid = function() return true end,
         Door = door,
         ThrowItemClass = { IsValid = function() return true end, GetFName = function() return name(class) end },
@@ -102,7 +136,7 @@ objects = {
 
 function FindAllOf(class) return objects[class] end
 function FindFirstOf(class) return objects[class] and objects[class][1] end
-Key = { F8 = "F8", F9 = "F9", F10 = "F10" }
+Key = { F7 = "F7", F8 = "F8", F9 = "F9", F10 = "F10" }
 keybinds = {}
 function RegisterKeyBind(key, fn) keybinds[key] = fn end
 function ExecuteInGameThread(fn) fn() end
@@ -198,8 +232,8 @@ class ModTest(unittest.TestCase):
         self.assertEqual(fn, "GiveBreachAndClearCommand")
         self.assertEqual(len(args), 12)
         self.assertEqual(args[1:3], [6, 5])  # EDoorBreachType C2, TT_SQUAD
-        self.assertEqual(args[4]["name"], "C2")
-        self.assertEqual(args[5]["name"], "Flashbang")
+        self.assertEqual(args[4]["name"], "Flashbang")
+        self.assertEqual(args[5]["name"], "C2")
         self.assertEqual(args[6:], [False, False, False, False, 0, True])
 
     def test_open_clear_overrides_breach_and_sends_no_items(self):
@@ -218,8 +252,8 @@ class ModTest(unittest.TestCase):
         self.run_orders(self.order(1, "gold", "breach_clear", {"door": "Door_C_7"},
                                    {"breach": "kick", "grenade": "stinger"}))
         fn, args = self.call(1)
-        self.assertIsNone(args[4])
-        self.assertEqual(args[5]["name"], "Stinger")
+        self.assertEqual(args[4]["name"], "Stinger")
+        self.assertIsNone(args[5])
 
     def test_no_item_sends_invalid_object_when_available(self):
         self.lua.execute('function CreateInvalidObject() return { invalid = true } end')
@@ -228,28 +262,49 @@ class ModTest(unittest.TestCase):
         self.assertTrue(args[4]["invalid"])
         self.assertTrue(args[5]["invalid"])
 
+    def test_hook_writes_item_classes_the_call_dropped(self):
+        self.lua.execute("drop_class_args = true")
+        state = self.run_orders(self.order(1, "red", "breach_clear", {"door": "Door_C_7"},
+                                           {"breach": "c2", "grenade": "flashbang"}))
+        fn, args = self.call(1)
+        self.assertEqual(args[4]["name"], "Flashbang")
+        self.assertEqual(args[5]["name"], "C2")
+        self.assertIn("set in call: arg 5 stale -> Flashbang, arg 6 stale -> C2", state["results"][0]["sent"])
+
     def test_breach_order_reports_what_the_game_assigned(self):
         self.lua.execute('objects.CyberneticsSwat_V2_C[1].Controller = controller_with_throw(objects.Door[1], "BP_Flashbang_C")')
         state = self.run_orders(self.order(1, "red", "breach_clear", {"door": "Door_C_7"},
                                            {"breach": "kick", "grenade": "flashbang"}))
-        self.assertNotIn("message", state["results"][0])
-        for _ in range(8):
-            state = self.tick()
         self.assertEqual(state["results"][0]["message"],
+                         "sent grenade Flashbang, breach item none"
+                         " | set in call: arg 5 Flashbang -> Flashbang | "
                          "game assigned: Swat_C_1 ThrowGrenadeThroughDoor: BP_Flashbang_C")
 
     def test_breach_check_when_nobody_assigned(self):
         state = self.run_orders(self.order(1, "blue", "breach_clear", {"door": "Door_C_7"}, {"breach": "kick"}))
-        for _ in range(8):
+        for _ in range(78):
             state = self.tick()
-        self.assertIn("no officer was given", state["results"][0]["message"])
+        self.assertNotIn("message", state["results"][0])  # still watching
+        for _ in range(2):
+            state = self.tick()
+        self.assertIn("no officer got a door job within 20 s", state["results"][0]["message"])
+
+    def test_activity_dump(self):
+        self.lua.execute('objects.CyberneticsSwat_V2_C[1].Controller = controller_with_throw(objects.Door[1], "BP_Flashbang_C")')
+        self.lua.execute('keybinds["F7"]()')
+        text = (self.bridge / "activities.txt").read_text()
+        self.assertIn("Swat_C_1 (red)", text)
+        self.assertIn("ThrowGrenadeThroughDoor", text)
+        self.assertIn("door=Door_C_7", text)
+        self.assertIn("item=BP_Flashbang_C", text)
+        self.assertIn("Swat_C_2 (blue)  ERROR: no controller", text)
 
     def test_move_and_clear_on_open_door(self):
         self.run_orders(self.order(1, "red", "move_clear", {"door": "Door_C_8"}, {"grenade": "flashbang"}))
         fn, args = self.call(1)
         self.assertEqual(fn, "GiveBreachAndClearCommand")
         self.assertEqual(args[1:3], [2, 1])  # EDoorBreachType Move, TT_SERT_RED
-        self.assertEqual(args[5]["name"], "Flashbang")
+        self.assertEqual(args[4]["name"], "Flashbang")
 
     def test_move_and_search_use_map_point_or_player(self):
         self.run_orders(self.order(1, "red", "move_to", {"location": {"x": 7, "y": 8, "z": 9}}),
@@ -261,6 +316,19 @@ class ModTest(unittest.TestCase):
         self.assertEqual(args[0], 5)
         self.assertEqual(dict(args[1]), {"X": 0, "Y": 0, "Z": 0})  # player position
         self.assertEqual(args[2], False)
+
+    def test_object_scans_are_cached_across_ticks(self):
+        self.lua.execute(r"""
+            scans = 0
+            local find_all_of = FindAllOf
+            function FindAllOf(class) scans = scans + 1 return find_all_of(class) end
+        """)
+        for _ in range(40):  # 10 s of ticks, all within the same os.time() second here
+            state = self.tick()
+        # One scan each for the player controller, officers and doors, not one per tick.
+        self.assertLessEqual(self.lua.globals().scans, 3)
+        self.assertEqual(len(state["officers"]), 2)
+        self.assertEqual(len(state["doors"]), 2)
 
     def test_test_order_hotkey(self):
         self.tick()

@@ -20,6 +20,7 @@ config.verbose = false
 
 -- Hotkeys (UE4SS Key names). Set any to nil to disable it.
 config.keys = {
+    activity_dump  = "F7",   -- write every officer's door jobs to bridge/activities.txt
     discovery_dump = "F8",   -- write candidate classes/functions to bridge/discovery.txt
     sniff_toggle   = "F9",   -- start/stop logging calls to config.sniff functions
     test_order     = "F10",  -- send config.test_order through the normal order path
@@ -100,6 +101,14 @@ config.side_args = { auto = 0, split = 1, left = 2, right = 3 }
 -- EFallInPattern: 0 Snake, 1 HalfSnake, 2 Diamond, 3 Flock.
 config.fall_in_pattern = 0
 
+-- UE4SS does not write item class (TSubclassOf) arguments when the mod calls
+-- these functions: the game saw stale values (C2 as the grenade) and never
+-- got the grenade. A pre-hook on each writes $breach_item / $grenade_item into
+-- the call's parameters directly before the game runs it.
+config.class_arg_hooks = {
+    "/Script/ReadyOrNot.SWATManager:GiveBreachAndClearCommand",
+}
+
 -- How each ATAK action is carried out in the game.
 --
 --   target  = where to find the object whose function is called:
@@ -131,8 +140,13 @@ config.fall_in_pattern = 0
 --   GiveFallInCommand(TeamType, FallInPattern)
 --   GiveHoldCommand(TeamType)
 --   GiveSearchAndSecureCommand(TeamType, CommandLocation, bOnlyCurrentRoom)
+--
+-- Note: arguments 5 and 6 are used the other way round from their names in the
+-- header dump. Tested in game: the class in argument 5 is what an officer
+-- throws through the door (C2 put there was "thrown", and a flashbang in
+-- argument 6 was ignored), so the grenade goes in 5 and the breaching item in 6.
 local BREACH_ARGS = {
-    "$door", "$breach", "$team", "$location", "$breach_item", "$grenade_item",
+    "$door", "$breach", "$team", "$location", "$grenade_item", "$breach_item",
     "$with_leader", false, false, false, "$side", true,
 }
 config.actions = {
@@ -174,7 +188,10 @@ config.discovery_keywords = {
 -- Give...Command functions are called from C++ and cannot be hooked (they can
 -- still be called by the mod). Do not try to read the SwatCommand struct inside
 -- a hook: that crashed the game.
+-- The mod's own calls to SWATManager do go through the hookable path, so
+-- sniffing them shows the arguments exactly as the game received them.
 config.sniff = {
+    "/Script/ReadyOrNot.SWATManager:GiveBreachAndClearCommand",
     "/Script/ReadyOrNot.SwatCommandWidget:OnCommandIssued",
     "/Script/ReadyOrNot.ReadyOrNotCommandFunctionLibrary:RespondToSWATCommand",
 }

@@ -29,6 +29,7 @@ local function configured_actions()
 end
 
 local function tick()
+    game.begin_tick()
     local level = game.level_name()
     for _, cmd in ipairs(bridge.new_commands()) do
         remember(orders.execute(cmd))
@@ -49,12 +50,24 @@ local function tick()
     })
 end
 
+-- A tick slower than this is reported (at most every SLOW_TICK_REPORT_SECONDS):
+-- the mod runs on the game thread, so slow ticks show up as stutter.
+local SLOW_TICK_MS = 4
+local SLOW_TICK_REPORT_SECONDS = 30
+local last_slow_report = -math.huge
+
 local function safe_tick()
     if busy then return end
     busy = true
+    local started = os.clock()
     local ok, err = pcall(tick)
+    local ms = (os.clock() - started) * 1000
     busy = false
     if not ok then log.error("tick: " .. tostring(err)) end
+    if ms > SLOW_TICK_MS and os.time() - last_slow_report >= SLOW_TICK_REPORT_SECONDS then
+        last_slow_report = os.time()
+        log.info(string.format("slow tick: %.1f ms (game thread)", ms))
+    end
 end
 
 local function test_order()
@@ -85,9 +98,18 @@ local function bind(key_name, fn)
     RegisterKeyBind(key, function() ExecuteInGameThread(fn) end)
 end
 
+local function activity_dump()
+    local lines = game.activity_report()
+    bridge.write_file("activities.txt", table.concat(lines, "\n"))
+    for _, line in ipairs(lines) do log.info(line) end
+end
+
+bind(config.keys.activity_dump, activity_dump)
 bind(config.keys.discovery_dump, discovery.dump)
 bind(config.keys.sniff_toggle, discovery.toggle_sniff)
 bind(config.keys.test_order, test_order)
+
+orders.install_class_hooks()
 
 LoopAsync(config.tick_ms, function()
     ExecuteInGameThread(safe_tick)
@@ -95,3 +117,4 @@ LoopAsync(config.tick_ms, function()
 end)
 
 log.info("loaded, bridge folder: " .. bridge.dir)
+log.info("CreateInvalidObject available: " .. tostring(CreateInvalidObject ~= nil))
