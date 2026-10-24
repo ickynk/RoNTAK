@@ -41,6 +41,7 @@ end
 -- Scans every loaded object. Takes a few seconds; run it during a mission so
 -- officers and doors are loaded.
 function discovery.dump()
+    discovery.signatures()
     log.info("discovery: scanning loaded objects, the game may freeze briefly...")
     local classes, functions = {}, {}
 
@@ -90,19 +91,108 @@ end
 local hooks = {}
 local sniff_lines = {}
 
+local MAX_DEPTH = 3
+
+-- Turns a game value into text. Structs are expanded field by field so the
+-- contents of e.g. a SwatCommand are visible.
+local function value_text(value, depth)
+    local t = type(value)
+    if t ~= "userdata" and t ~= "table" then return tostring(value) end
+    depth = depth or 0
+
+    local ok, text = pcall(function() return string.format("(%.0f, %.0f, %.0f)", value.X, value.Y, value.Z) end)
+    if ok then return text end
+
+    local full = nil
+    pcall(function() full = value:GetFullName() end)
+    if full and full:find("^ScriptStruct ") then
+        local found, def = pcall(StaticFindObject, (full:gsub("^ScriptStruct ", "")))
+        if not found or not def or depth >= MAX_DEPTH then return full end
+        local fields = {}
+        pcall(function()
+            def:ForEachProperty(function(prop)
+                local name = name_of(prop)
+                local f_ok, field = pcall(function() return value[name] end)
+                fields[#fields + 1] = name .. "=" .. (f_ok and value_text(field, depth + 1) or "?")
+            end)
+        end)
+        return "{" .. table.concat(fields, ", ") .. "}"
+    end
+    if full then return full end
+
+    local n_ok, count = pcall(function() return value:GetArrayNum() end)
+    if n_ok then return string.format("<array of %d>", count) end
+    ok, text = pcall(function() return value:ToString() end)
+    if ok then return text end
+    return "<userdata>"
+end
+
 local function describe(param)
     local ok, value = pcall(function() return param:get() end)
     if not ok then return "?" end
-    if type(value) == "userdata" or type(value) == "table" then
-        local v_ok, v = pcall(function() return string.format("(%.0f, %.0f, %.0f)", value.X, value.Y, value.Z) end)
-        if v_ok then return v end
-        local s_ok, s = pcall(function() return value:GetFullName() end)
-        if s_ok then return s end
-        s_ok, s = pcall(function() return value:ToString() end)
-        if s_ok then return s end
-        return "<userdata>"
+    return value_text(value)
+end
+
+-- Signatures ----------------------------------------------------------------
+
+local function prop_type(prop)
+    local kind = "?"
+    pcall(function() kind = prop:GetClass():GetFName():ToString() end)
+    return kind
+end
+
+local function inner(prop, getter)
+    local ok, obj = pcall(function() return prop[getter](prop) end)
+    if ok and obj and obj:IsValid() then return obj end
+    return nil
+end
+
+local function enum_values(enum)
+    local parts = {}
+    pcall(function()
+        enum:ForEachName(function(name, value)
+            parts[#parts + 1] = string.format("%s=%s", name:ToString(), tostring(value))
+        end)
+    end)
+    return table.concat(parts, ", ")
+end
+
+-- Writes each parameter of a struct or function, then the enums and structs it uses.
+local function describe_fields(def, out, indent, seen)
+    def:ForEachProperty(function(prop)
+        local kind = prop_type(prop)
+        local enum = inner(prop, "GetEnum")
+        local struct = inner(prop, "GetStruct")
+        local class = inner(prop, "GetPropertyClass")
+        local detail = (enum or struct or class) and ("<" .. name_of(enum or struct or class) .. ">") or ""
+        out[#out + 1] = string.format("%s%s: %s%s", indent, name_of(prop), kind, detail)
+        if enum and not seen[name_of(enum)] then
+            seen[name_of(enum)] = true
+            out[#out + 1] = indent .. "    values: " .. enum_values(enum)
+        end
+        if struct and not seen[name_of(struct)] then
+            seen[name_of(struct)] = true
+            describe_fields(struct, out, indent .. "    ", seen)
+        end
+    end)
+end
+
+-- F8 also writes signatures.txt: parameters of every function in config.signatures.
+function discovery.signatures()
+    local out = { "RoNTAK function signatures", "" }
+    for _, path in ipairs(config.signatures or {}) do
+        out[#out + 1] = path
+        local found, fn = pcall(StaticFindObject, path)
+        if found and fn and fn:IsValid() then
+            local ok, err = pcall(describe_fields, fn, out, "    ", {})
+            if not ok then out[#out + 1] = "    (error: " .. tostring(err) .. ")" end
+        else
+            out[#out + 1] = "    (not found)"
+        end
+        out[#out + 1] = ""
     end
-    return tostring(value)
+    bridge.write_file("signatures.txt", table.concat(out, "\n"))
+    log.info(string.format("signatures: %d functions -> signatures.txt", #(config.signatures or {})))
 end
 
 -- Extra values logged with every sniffed call, from config.sniff_context.
