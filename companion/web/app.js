@@ -209,10 +209,17 @@
 
   // Floors from the heights of the level's doors, for maps without any floors
   // yet. Rename them in Calibrate; Save map keeps them.
+  // Ready or Not's floor names: Ground, 1st, 2nd, ... (rename a basement yourself).
+  function floorName(i) {
+    if (i === 0) return "Ground";
+    const suffix = i % 10 === 1 && i !== 11 ? "st" : i % 10 === 2 && i !== 12 ? "nd" : i % 10 === 3 && i !== 13 ? "rd" : "th";
+    return `${i}${suffix}`;
+  }
+
   function autoFloors(doors) {
     const bands = Geo.floorBands(doors.map((d) => d.pos.z));
     return bands.map((b, i) => ({
-      name: bands.length === 1 ? "Ground" : `Floor ${i + 1}`,
+      name: floorName(i),
       image: null, zMin: Math.round(b.zMin), zMax: Math.round(b.zMax), anchors: [], auto: true,
     }));
   }

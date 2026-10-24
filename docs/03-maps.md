@@ -2,12 +2,14 @@
 
 ## Floors are automatic
 
-When you load a level that has no saved map yet, RoNTAK groups the level's doors by height and creates one
-floor per group: "Floor 1" (lowest), "Floor 2" and so on. With **Floor: auto** selected, the map shows the floor
+When you load a level that has no saved map yet, RoNTAK finds the heights where several doors sit together and
+creates one floor for each: "Ground" (lowest), "1st", "2nd" and so on. Doors on stairs and landings don't make
+floors of their own. With **Floor: auto** selected, the map shows the floor
 you're on and switches as you go up and down. Officers on other floors are drawn faded.
 
-Rename the floors in **Calibrate** (for example "Basement", "Ground", "Upstairs"). **Save map** keeps the
-names and heights.
+Rename the floors in **Calibrate** if needed (for example when the lowest floor is a basement). **Save map**
+keeps the names and heights. If a saved map has the wrong floors, delete them in **Calibrate**
+(**Delete floor**) and they're worked out again.
 
 ## Rooms
 

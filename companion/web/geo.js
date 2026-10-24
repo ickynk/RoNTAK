@@ -92,35 +92,36 @@
     return [poly.reduce((s, p) => s + p[0], 0) / n, poly.reduce((s, p) => s + p[1], 0) / n];
   }
 
-  // Groups heights (e.g. every door's Z) into floors: sorted heights split
-  // wherever the gap to the next one exceeds `gap`. Groups with fewer than
-  // `minCount` heights (a lone door on a stair landing) join the nearest group.
-  // Returns [{ zMin, zMax }] lowest first; neighbouring floors meet halfway
-  // between their groups, and the lowest / highest bands are open-ended.
-  function floorBands(zs, gap = 200, minCount = 2) {
-    const sorted = zs.filter((z) => Number.isFinite(z)).sort((a, b) => a - b);
-    if (!sorted.length) return [];
-    let groups = [[sorted[0]]];
-    for (let i = 1; i < sorted.length; i++) {
-      if (sorted[i] - sorted[i - 1] > gap) groups.push([]);
-      groups[groups.length - 1].push(sorted[i]);
+  // Finds floors in a list of heights (e.g. every door's Z). A floor is a
+  // height where at least `minCount` doors sit within `window` of each other;
+  // floors are at least `separation` apart. Doors in between (stairs,
+  // landings, split levels) don't make floors of their own: picking the
+  // densest heights first lets them be absorbed by a nearby floor.
+  // Returns [{ zMin, zMax, z }] lowest first; neighbouring floors meet halfway
+  // between their heights, and the lowest / highest bands are open-ended.
+  function floorBands(zs, separation = 200, minCount = 2, window = 60) {
+    const heights = zs.filter((z) => Number.isFinite(z)).sort((a, b) => a - b);
+    if (!heights.length) return [];
+    const near = (z) => heights.filter((h) => Math.abs(h - z) <= window);
+    let candidates = heights.slice();
+    const floors = [];
+    while (candidates.length) {
+      let best = null, bestCount = 0;
+      for (const z of candidates) {
+        const n = near(z).length;
+        if (n > bestCount) { best = z; bestCount = n; }
+      }
+      if (bestCount < minCount && floors.length) break;
+      const cluster = near(best);
+      floors.push(cluster.reduce((sum, h) => sum + h, 0) / cluster.length);
+      candidates = candidates.filter((z) => Math.abs(z - best) > separation);
     }
-    let merged = true;
-    while (merged && groups.length > 1) {
-      merged = false;
-      const i = groups.findIndex((g) => g.length < minCount);
-      if (i < 0) break;
-      const below = i > 0 ? groups[i][0] - groups[i - 1][groups[i - 1].length - 1] : Infinity;
-      const above = i < groups.length - 1 ? groups[i + 1][0] - groups[i][groups[i].length - 1] : Infinity;
-      const j = below <= above ? i - 1 : i + 1;
-      groups[Math.min(i, j)] = groups[Math.min(i, j)].concat(groups[Math.max(i, j)]);
-      groups.splice(Math.max(i, j), 1);
-      merged = true;
-    }
+    floors.sort((a, b) => a - b);
     const OPEN = 1e7;
-    return groups.map((g, i) => ({
-      zMin: i === 0 ? -OPEN : (groups[i - 1][groups[i - 1].length - 1] + g[0]) / 2,
-      zMax: i === groups.length - 1 ? OPEN : (g[g.length - 1] + groups[i + 1][0]) / 2,
+    return floors.map((z, i) => ({
+      z,
+      zMin: i === 0 ? -OPEN : (floors[i - 1] + z) / 2,
+      zMax: i === floors.length - 1 ? OPEN : (z + floors[i + 1]) / 2,
     }));
   }
 

@@ -16,16 +16,19 @@ def geo(expr):
 
 @unittest.skipUnless(shutil.which("node"), "node not installed")
 class FloorBandsTest(unittest.TestCase):
-    def test_three_floors(self):
-        bands = geo("Geo.floorBands([2090, 2100, 2140, 2420, 2430, 2480, 2780, 2790])")
-        self.assertEqual([(b["zMin"], b["zMax"]) for b in bands], [(-1e7, 2280), (2280, 2630), (2630, 1e7)])
+    def bands(self, zs):
+        return [(round(b["z"]), round(b["zMin"]), round(b["zMax"])) for b in geo(f"Geo.floorBands({zs})")]
+
+    def test_ridgeline_three_floors_with_stair_doors_in_between(self):
+        # Heights seen on Ridgeline: Ground ~2100, 1st ~2480, 2nd ~2780, plus stairs and landings.
+        zs = [2087, 2087, 2141, 1941, 2342, 2419, 2449, 2479, 2480, 2486, 2486, 2496, 2598, 2779, 2782, 2782]
+        self.assertEqual(self.bands(zs), [(2105, -10000000, 2288), (2471, 2288, 2626), (2781, 2626, 10000000)])
 
     def test_single_floor(self):
-        self.assertEqual(geo("Geo.floorBands([0, 5, 10])"), [{"zMin": -1e7, "zMax": 1e7}])
+        self.assertEqual(self.bands([0, 5, 10]), [(5, -10000000, 10000000)])
 
-    def test_lone_landing_door_joins_nearest_floor(self):
-        bands = geo("Geo.floorBands([0, 10, 250, 600, 610])")
-        self.assertEqual([b["zMax"] for b in bands], [425, 1e7])
+    def test_lone_doors_do_not_make_floors(self):
+        self.assertEqual(len(self.bands([0, 10, 250, 600, 610])), 2)
 
     def test_no_heights(self):
         self.assertEqual(geo("Geo.floorBands([])"), [])
