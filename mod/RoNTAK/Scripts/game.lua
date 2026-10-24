@@ -5,7 +5,8 @@ local log = require("log")
 
 local game = {}
 
-local DOOR_REFRESH_SECONDS = 5
+local DOOR_REFRESH_SECONDS = 1
+local INVENTORY_REFRESH_SECONDS = 1
 
 local door_cache = { level = nil, at = 0, list = {}, by_id = {} }
 
@@ -106,7 +107,8 @@ local function excluded(name)
     return false
 end
 
-function game.officers()
+-- Officer actors with their team, for orders that need the actual objects.
+function game.officer_actors()
     local result = {}
     local player_pawn = game.player_pawn()
     -- Compare by name: two UE4SS handles to the same object are not always equal.
@@ -118,17 +120,155 @@ function game.officers()
             if pos and name ~= player_name and not excluded(name) then
                 local raw_team = read_property(actor, config.officers.team_property)
                 result[#result + 1] = {
-                    id = name,
-                    name = read_property(actor, config.officers.name_property) or name,
+                    actor = actor,
+                    name = name,
                     team = config.officers.team_values[raw_team] or "unknown",
                     pos = pos,
-                    yaw = yaw(actor),
-                    health = read_property(actor, config.officers.health_property),
                 }
             end
         end
     end
     return result
+end
+
+local function on_team(officer, team)
+    return team == "gold" or officer.team == team
+end
+
+-- Items the officer can still use: InventoryComp.InventoryItems minus the
+-- ones marked IsDepleted (thrown grenades stay in the list, used up).
+-- Each entry is { item = object, categories = { [EItemCategory] = true } }.
+-- Returns nil if the inventory cannot be read.
+local function usable_items(actor)
+    local list = {}
+    local ok = pcall(function()
+        actor.InventoryComp.InventoryItems:ForEach(function(_, element)
+            local item = element:get()
+            if valid(item) and call_bool(item, "IsDepleted") ~= true then
+                local categories = {}
+                pcall(function()
+                    item.ItemCategories:ForEach(function(_, c) categories[c:get()] = true end)
+                end)
+                list[#list + 1] = { item = item, categories = categories }
+            end
+        end)
+    end)
+    if ok then return list end
+    return nil
+end
+
+local inventory_cache = { at = -1, by_name = {} }
+
+-- Counts of config.inventory items per officer name, refreshed once a second.
+local function inventories()
+    if os.time() - inventory_cache.at >= INVENTORY_REFRESH_SECONDS then
+        local by_name = {}
+        for _, o in ipairs(game.officer_actors()) do
+            local items = usable_items(o.actor)
+            if items then
+                local counts = {}
+                for name, category in pairs(config.inventory or {}) do
+                    counts[name] = 0
+                    for _, entry in ipairs(items) do
+                        if entry.categories[category] then counts[name] = counts[name] + 1 end
+                    end
+                end
+                by_name[o.name] = counts
+            end
+        end
+        inventory_cache = { at = os.time(), by_name = by_name }
+    end
+    return inventory_cache.by_name
+end
+
+-- Class of a usable item (EItemCategory) carried by an officer on the team,
+-- or nil, so the game is never told to use an item the team has run out of.
+function game.team_item_class(team, category)
+    for _, o in ipairs(game.officer_actors()) do
+        if on_team(o, team) then
+            for _, entry in ipairs(usable_items(o.actor) or {}) do
+                if entry.categories[category] then
+                    local ok, class = pcall(function() return entry.item:GetClass() end)
+                    if ok and class then return class end
+                end
+            end
+        end
+    end
+    return nil
+end
+
+local function class_name(obj)
+    if not valid(obj) then return nil end
+    return object_name(obj)
+end
+
+-- What the game actually handed out for a door order: for each officer on
+-- the team whose door activity targets this door, the item it was given.
+-- Used to check that grenade and breaching item classes arrived.
+function game.describe_door_activities(team, door)
+    local door_name = object_name(door)
+    local parts = {}
+    for _, o in ipairs(game.officer_actors()) do
+        if on_team(o, team) then
+            pcall(function()
+                local controller = o.actor.Controller
+                for _, activity_name in ipairs({ "ThrowGrenadeThroughDoorActivity", "LaunchGrenadeThroughDoorActivity",
+                                                 "C2DoorActivity", "ShotgunDoorActivity", "RamDoorActivity" }) do
+                    local activity = controller[activity_name]
+                    if valid(activity) and valid(activity.Door) and object_name(activity.Door) == door_name then
+                        local item = class_name(activity.ThrowItemClass) or class_name(activity.BreachItem) or "no item"
+                        parts[#parts + 1] = string.format("%s %s: %s", o.name, activity_name:gsub("Activity$", ""), item)
+                    end
+                end
+            end)
+        end
+    end
+    if #parts == 0 then return "no officer was given a grenade or breaching job for this door" end
+    return table.concat(parts, "; ")
+end
+
+function game.officers()
+    local result = {}
+    local items = inventories()
+    for _, o in ipairs(game.officer_actors()) do
+        result[#result + 1] = {
+            id = o.name,
+            name = read_property(o.actor, config.officers.name_property) or o.name,
+            team = o.team,
+            pos = o.pos,
+            yaw = yaw(o.actor),
+            health = read_property(o.actor, config.officers.health_property),
+            items = items[o.name],
+        }
+    end
+    return result
+end
+
+-- A point just outside the door on the team's side, and the direction from
+-- the door to that side: what the game gets when you aim at a door yourself.
+function game.door_approach(door, team)
+    local ok, mid = pcall(function() return door:GetDoorMidLocation() end)
+    local center = ok and mid and { x = mid.X, y = mid.Y, z = mid.Z } or location(door)
+    if not center then return nil, nil end
+
+    local sx, sy, n = 0, 0, 0
+    for _, o in ipairs(game.officer_actors()) do
+        if on_team(o, team) then sx, sy, n = sx + o.pos.x, sy + o.pos.y, n + 1 end
+    end
+    if n == 0 then
+        local player = game.player()
+        if player and player.pos then sx, sy, n = player.pos.x, player.pos.y, 1 end
+    end
+
+    local dx, dy = 1, 0
+    if n > 0 then
+        dx, dy = sx / n - center.x, sy / n - center.y
+        local len = math.sqrt(dx * dx + dy * dy)
+        if len > 1 then dx, dy = dx / len, dy / len else dx, dy = 1, 0 end
+    end
+    local APPROACH_DISTANCE = 40
+    return { x = center.x + dx * APPROACH_DISTANCE, y = center.y + dy * APPROACH_DISTANCE, z = center.z },
+        { x = dx, y = dy, z = 0 }
 end
 
 local function refresh_doors(level)
@@ -144,6 +284,8 @@ local function refresh_doors(level)
                     pos = pos,
                     yaw = yaw(actor),
                     locked = door_locked(actor),
+                    open = call_bool(actor, config.doors.open_function),
+                    broken = call_bool(actor, config.doors.broken_function),
                 }
             end
         end

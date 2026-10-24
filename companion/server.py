@@ -35,7 +35,7 @@ MAX_UPLOAD_BYTES = 30 * 1024 * 1024
 
 TEAMS = {"red", "blue", "gold"}
 ACTIONS = {
-    "stack_up", "open_clear", "breach_clear", "scan_door", "wedge_door",
+    "stack_up", "open_clear", "breach_clear", "move_clear", "scan_door", "wedge_door",
     "move_to", "fall_in", "hold", "search_secure",
 }
 IMAGE_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp", ".svg": "image/svg+xml"}

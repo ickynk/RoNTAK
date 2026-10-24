@@ -4,8 +4,10 @@ An ATAK-style tactical map and team orders mod for **Ready or Not**.
 
 - Live map with floor plans, your position, and every SWAT officer, colored by team
 - Tap a **door**, a **room**, or a **spot** on the map, pick **RED / BLUE / GOLD**, and give an order:
-  Stack Up, Breach & Clear (Kick / Shotgun / C2 / Ram / Leader + Flash / Stinger / CS), Open & Clear,
-  Mirror Door, Wedge Door, Move To, Fall In, Hold, Search & Secure
+  Stack Up, Breach & Clear (Kick / Shotgun / C2 / Ram / Leader + Flash / Stinger / CS / 9-Bang / Launcher),
+  Open & Clear, Move & Clear (open doors), Mirror Door, Wedge Door, Move To, Fall In, Hold, Search & Secure
+- Options the selected team has no gear for are greyed out, with counts (e.g. "C2 ×1")
+- Doors show their state (closed, open, broken, known locked) and only allow orders that fit it
 - Each order shows whether the game accepted it
 - Works on a second monitor, or on a phone or tablet on your Wi-Fi, like real ATAK
 

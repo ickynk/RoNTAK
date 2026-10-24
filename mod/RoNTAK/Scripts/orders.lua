@@ -6,16 +6,40 @@ local log = require("log")
 
 local orders = {}
 
-local function option_value(table_name, options, key, default)
-    local id = (options and options[key]) or default
+-- Orders whose item handout is checked a little after they are given.
+local CHECK_AFTER_TICKS = 8
+local CHECKED_ACTIONS = { breach_clear = true, open_clear = true, move_clear = true }
+local pending_checks = {}
+
+local function lookup(table_name, id)
     local value = config[table_name][id]
-    if value == nil then error(string.format("unknown %s '%s'", key, tostring(id))) end
+    if value == nil then error(string.format("unknown %s option '%s'", table_name, tostring(id))) end
     return value
 end
 
+-- A definite "no object" for item class arguments. A Lua nil may leave the
+-- game's argument unset; CreateInvalidObject() is written as a null pointer.
+local function no_object()
+    if CreateInvalidObject then return CreateInvalidObject() end
+    return nil
+end
+
+local function vector(v)
+    return { X = v.x, Y = v.y, Z = v.z or 0 }
+end
+
+-- Fills in the "$" placeholders of an action's argument list. Returns the
+-- arguments and their count (some, like $breach_item, can be nil).
 local function build_args(spec, cmd, door)
+    local options = {}
+    for k, v in pairs(cmd.options or {}) do options[k] = v end
+    for k, v in pairs(spec.options or {}) do options[k] = v end
+    local breach = options.breach or "kick"
+
+    local approach, normal
+    if door then approach, normal = game.door_approach(door, cmd.team) end
+
     local args = {}
-    local options = cmd.options or {}
     for i, arg in ipairs(spec.args or {}) do
         local value = arg
         if arg == "$team" then
@@ -25,19 +49,40 @@ local function build_args(spec, cmd, door)
             if not door then error("this order needs a door") end
             value = door
         elseif arg == "$location" then
-            local loc = cmd.target and cmd.target.location
+            local player = game.player()
+            local loc = approach or (cmd.target and cmd.target.location) or (player and player.pos)
             if not loc then error("this order needs a map location") end
-            value = { X = loc.x, Y = loc.y, Z = loc.z or 0 }
+            value = vector(loc)
+        elseif arg == "$normal" then
+            if not normal then error("this order needs a door") end
+            value = vector(normal)
         elseif arg == "$breach" then
-            value = option_value("breach_args", options, "breach", "kick")
-        elseif arg == "$grenade" then
-            value = option_value("grenade_args", options, "grenade", "none")
+            value = lookup("breach_args", breach)
+        elseif arg == "$breach_item" then
+            local category = config.breach_items[breach]
+            value = no_object()
+            if category then
+                value = game.team_item_class(cmd.team, category)
+                if not value then error("no officer on " .. cmd.team .. " carries the " .. breach .. " item") end
+            end
+        elseif arg == "$grenade_item" then
+            local grenade = options.grenade or "none"
+            value = no_object()
+            if grenade ~= "none" then
+                local category = lookup("grenade_items", grenade)
+                value = game.team_item_class(cmd.team, category)
+                if not value then error("no officer on " .. cmd.team .. " carries a " .. grenade) end
+            end
         elseif arg == "$side" then
-            value = option_value("side_args", options, "side", "auto")
+            value = lookup("side_args", options.side or "auto")
+        elseif arg == "$with_leader" then
+            value = breach == "leader"
+        elseif arg == "$fall_in" then
+            value = config.fall_in_pattern
         end
         args[i] = value
     end
-    return args
+    return args, #spec.args
 end
 
 -- Runs one order. Returns a result table for state.json.
@@ -54,8 +99,8 @@ function orders.execute(cmd)
         return result
     end
 
+    local door = nil
     local ok, err = pcall(function()
-        local door = nil
         local door_id = cmd.target and cmd.target.door
         if door_id then
             door = game.door_by_id(door_id)
@@ -65,17 +110,35 @@ function orders.execute(cmd)
         if not target then error("could not find target '" .. tostring(spec.target) .. "'") end
         local fn = target[spec.fn]
         if not fn then error(string.format("%s has no function %s", game.object_name(target), spec.fn)) end
-        fn(target, table.unpack(build_args(spec, cmd, door)))
+        local args, count = build_args(spec, cmd, door)
+        fn(target, table.unpack(args, 1, count))
     end)
 
     if ok then
         result.status = "ok"
         log.info(string.format("order %d: %s %s", cmd.id, cmd.team, cmd.action))
+        if door and CHECKED_ACTIONS[cmd.action] then
+            pending_checks[#pending_checks + 1] = { result = result, team = cmd.team, door = door, ticks = CHECK_AFTER_TICKS }
+        end
     else
         result.status, result.message = "error", tostring(err)
         log.error(string.format("order %d failed: %s", cmd.id, tostring(err)))
     end
     return result
+end
+
+-- Called every tick: fills in the item check of recent breach orders.
+function orders.run_checks()
+    for i = #pending_checks, 1, -1 do
+        local check = pending_checks[i]
+        check.ticks = check.ticks - 1
+        if check.ticks <= 0 then
+            table.remove(pending_checks, i)
+            local ok, text = pcall(game.describe_door_activities, check.team, check.door)
+            check.result.message = "game assigned: " .. (ok and text or tostring(text))
+            log.info(string.format("order %d check: %s", check.result.id, check.result.message))
+        end
+    end
 end
 
 return orders

@@ -40,6 +40,7 @@ ROOMS_PX = {
 }
 
 # id: (u, v, wall orientation, room, stack direction in px, locked)
+OPEN_DOORS = {"BP_Door_C_2"}
 DOORS_PX = {
     "BP_Door_C_1": (200, 300, "h", "Kitchen", (0, 1), False),
     "BP_Door_C_2": (700, 300, "h", "Living Room", (0, 1), False),
@@ -49,7 +50,8 @@ DOORS_PX = {
     "BP_Door_C_6": (1000, 375, "v", "Hallway", (1, 0), False),
 }
 
-UNCONFIGURED = {"wedge_door"}
+UNCONFIGURED = set()
+BREACH_ITEMS = {"c2", "shotgun", "ram"}
 
 
 def room_polygon_world(name):
@@ -67,9 +69,9 @@ def px_dir_to_world(du, dv):
 
 
 class Officer:
-    def __init__(self, oid, name, team, u, v):
+    def __init__(self, oid, name, team, u, v, items):
         x, y = px_to_world(u, v)
-        self.id, self.name, self.team = oid, name, team
+        self.id, self.name, self.team, self.items = oid, name, team, dict(items)
         self.pos = [x, y, 0.0]
         self.yaw = 180.0
         self.path = []
@@ -100,16 +102,16 @@ class Officer:
     def state(self):
         return {"id": self.id, "name": self.name, "team": self.team,
                 "pos": {"x": self.pos[0], "y": self.pos[1], "z": self.pos[2]},
-                "yaw": self.yaw, "health": 100}
+                "yaw": self.yaw, "health": 100, "items": self.items}
 
 
 class MockGame:
     def __init__(self):
         self.officers = [
-            Officer("SWATCharacter_C_1", "Judge", "red", 1050, 340),
-            Officer("SWATCharacter_C_2", "Hayes", "red", 1050, 370),
-            Officer("SWATCharacter_C_3", "Kona", "blue", 1050, 400),
-            Officer("SWATCharacter_C_4", "Sierra", "blue", 1050, 430),
+            Officer("SWATCharacter_C_1", "Judge", "red", 1050, 340, {"c2": 1, "flashbang": 2, "mirror": 1}),
+            Officer("SWATCharacter_C_2", "Hayes", "red", 1050, 370, {"ram": 1, "stinger": 1, "wedge": 2}),
+            Officer("SWATCharacter_C_3", "Kona", "blue", 1050, 400, {"shotgun": 1, "cs": 1}),
+            Officer("SWATCharacter_C_4", "Sierra", "blue", 1050, 430, {"launcher": 1, "ninebang": 1}),
         ]
         self.player_route = [px_to_world(u, v) for u, v in ((1060, 375), (1075, 330), (1075, 420))]
         self.player = {"pos": {"x": 0, "y": 0, "z": 0}, "yaw": 180.0}
@@ -120,6 +122,7 @@ class MockGame:
             self.doors[did] = {
                 "id": did, "pos": {"x": x, "y": y, "z": 0.0},
                 "yaw": 90.0 if wall == "h" else 0.0, "locked": locked,
+                "open": did in OPEN_DOORS, "broken": False,
                 "_room": room, "_stack": px_dir_to_world(*stack),
             }
         self.results = []
@@ -168,21 +171,32 @@ class MockGame:
         for o in members:
             o.follow = None
 
-        if action in ("stack_up", "open_clear", "breach_clear", "scan_door", "wedge_door"):
+        if action in ("stack_up", "open_clear", "breach_clear", "move_clear", "scan_door", "wedge_door"):
             if not door:
                 return dict(result, status="error", message="this order needs a door")
             if action == "open_clear" and door["locked"]:
                 return dict(result, status="error", message="door is locked, use breach")
+            # Like the mod: refuse items nobody on the team has left.
+            needed = [options.get("grenade")] if options.get("grenade", "none") != "none" else []
+            if action == "breach_clear" and options.get("breach") in BREACH_ITEMS:
+                needed.append(options["breach"])
+            needed += {"wedge_door": ["wedge"], "scan_door": ["mirror"]}.get(action, [])
+            for item in needed:
+                carrier = next((o for o in members if o.items.get(item, 0) > 0), None)
+                if not carrier:
+                    return dict(result, status="error", message=f"no officer on {cmd['team']} carries {item}")
+                carrier.items[item] -= 1
             stack = self.stack_points(door, len(members), options.get("side", "auto"))
             for i, o in enumerate(members):
                 o.path = [stack[i]]
-                if action in ("open_clear", "breach_clear"):
+                if action in ("open_clear", "breach_clear", "move_clear"):
                     cx, cy = room_center_world(door["_room"])
                     ang = i * math.pi / 2
                     o.path += [(door["pos"]["x"], door["pos"]["y"]),
                                (cx + 80 * math.cos(ang), cy + 80 * math.sin(ang))]
-            if action == "breach_clear":
+            if action in ("open_clear", "breach_clear", "move_clear"):
                 door["locked"] = False
+                door["open"] = True
         elif action == "move_to":
             loc = target.get("location")
             if not loc:
@@ -224,7 +238,7 @@ class MockGame:
             "officers": [o.state() for o in self.officers],
             "doors": [{k: v for k, v in d.items() if not k.startswith("_")} for d in self.doors.values()],
             "results": self.results,
-            "configured_actions": sorted({"stack_up", "open_clear", "breach_clear", "scan_door", "wedge_door",
+            "configured_actions": sorted({"stack_up", "open_clear", "breach_clear", "move_clear", "scan_door", "wedge_door",
                                           "move_to", "fall_in", "hold", "search_secure"} - UNCONFIGURED),
         }
         tmp = bridge / "state.json.tmp"
