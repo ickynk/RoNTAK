@@ -5,7 +5,8 @@ local log = require("log")
 
 local game = {}
 
-local DOOR_REFRESH_SECONDS = 5
+local DOOR_REFRESH_SECONDS = 1
+local INVENTORY_REFRESH_SECONDS = 1
 
 local door_cache = { level = nil, at = 0, list = {}, by_id = {} }
 
@@ -130,29 +131,41 @@ function game.officer_actors()
     return result
 end
 
-function game.officers()
-    local result = {}
-    for _, o in ipairs(game.officer_actors()) do
-        result[#result + 1] = {
-            id = o.name,
-            name = read_property(o.actor, config.officers.name_property) or o.name,
-            team = o.team,
-            pos = o.pos,
-            yaw = yaw(o.actor),
-            health = read_property(o.actor, config.officers.health_property),
-        }
-    end
-    return result
-end
-
 local function on_team(officer, team)
     return team == "gold" or officer.team == team
 end
 
+local function item_count(actor, category)
+    local ok, count = pcall(function() return actor.InventoryComp:CountInventoryItemType(category) end)
+    if ok and type(count) == "number" then return count end
+    return nil
+end
+
+local inventory_cache = { at = -1, by_name = {} }
+
+-- Counts of config.inventory items per officer name, refreshed once a second.
+local function inventories()
+    if os.time() - inventory_cache.at >= INVENTORY_REFRESH_SECONDS then
+        local by_name = {}
+        for _, o in ipairs(game.officer_actors()) do
+            local items = {}
+            for item, category in pairs(config.inventory or {}) do
+                items[item] = item_count(o.actor, category)
+            end
+            by_name[o.name] = items
+        end
+        inventory_cache = { at = os.time(), by_name = by_name }
+    end
+    return inventory_cache.by_name
+end
+
 -- Class of an item (EItemCategory) carried by an officer on the team, or nil.
+-- Only officers that still have at least one are considered, so the game is
+-- never told to use an item the team has run out of.
 function game.team_item_class(team, category)
     for _, o in ipairs(game.officer_actors()) do
-        if on_team(o, team) then
+        local count = item_count(o.actor, category)
+        if on_team(o, team) and (count == nil or count > 0) then
             local ok, class = pcall(function()
                 local item = o.actor.InventoryComp:GetInventoryItemOfType(category)
                 if item and item:IsValid() then return item:GetClass() end
@@ -162,6 +175,23 @@ function game.team_item_class(team, category)
         end
     end
     return nil
+end
+
+function game.officers()
+    local result = {}
+    local items = inventories()
+    for _, o in ipairs(game.officer_actors()) do
+        result[#result + 1] = {
+            id = o.name,
+            name = read_property(o.actor, config.officers.name_property) or o.name,
+            team = o.team,
+            pos = o.pos,
+            yaw = yaw(o.actor),
+            health = read_property(o.actor, config.officers.health_property),
+            items = items[o.name],
+        }
+    end
+    return result
 end
 
 -- A point just outside the door on the team's side, and the direction from
@@ -204,6 +234,8 @@ local function refresh_doors(level)
                     pos = pos,
                     yaw = yaw(actor),
                     locked = door_locked(actor),
+                    open = call_bool(actor, config.doors.open_function),
+                    broken = call_bool(actor, config.doors.broken_function),
                 }
             end
         end

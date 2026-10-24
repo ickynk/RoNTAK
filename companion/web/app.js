@@ -10,17 +10,28 @@
   const TEAM_LABEL = { red: "RED", blue: "BLUE", gold: "GOLD" };
 
   const OPTION_CHOICES = {
-    breach: [["kick", "Kick"], ["shotgun", "Shotgun"], ["c2", "C2"], ["ram", "Ram"], ["leader", "Leader"], ["open", "Open"]],
-    grenade: [["none", "None"], ["flashbang", "Flash"], ["stinger", "Stinger"], ["cs", "CS Gas"]],
+    breach: [["kick", "Kick"], ["shotgun", "Shotgun"], ["c2", "C2"], ["ram", "Ram"], ["leader", "Leader"]],
+    grenade: [["none", "None"], ["flashbang", "Flash"], ["stinger", "Stinger"], ["cs", "CS Gas"],
+      ["ninebang", "9-Bang"], ["launcher", "Launcher"]],
     side: [["auto", "Auto"], ["split", "Split"], ["left", "Left"], ["right", "Right"]],
   };
   const OPTION_LABEL = { breach: "Breach", grenade: "Grenade", side: "Stack" };
+  // Option values that use up an item. The mod reports item counts per officer.
+  const OPTION_ITEMS = {
+    breach: { c2: "c2", shotgun: "shotgun", ram: "ram" },
+    grenade: { flashbang: "flashbang", stinger: "stinger", cs: "cs", ninebang: "ninebang", launcher: "launcher" },
+  };
+  const OPTION_FALLBACK = { breach: "kick", grenade: "none" };
+  const ACTION_ITEMS = { wedge_door: "wedge", scan_door: "mirror" };
+  // Orders the game allows on a door that is already open or broken.
+  const OPEN_DOOR_ACTIONS = new Set(["move_clear", "stack_up"]);
 
   // needs: "door" (door or room target), "location" (any target), null (team-wide)
   const ACTIONS = [
     { id: "stack_up", label: "Stack Up", needs: "door", options: ["side"] },
     { id: "breach_clear", label: "Breach & Clear", needs: "door", options: ["breach", "grenade"] },
     { id: "open_clear", label: "Open & Clear", needs: "door", options: ["grenade"] },
+    { id: "move_clear", label: "Move & Clear", needs: "door", options: ["grenade"] },
     { id: "scan_door", label: "Mirror Door", needs: "door", options: [] },
     { id: "wedge_door", label: "Wedge Door", needs: "door", options: [] },
     { id: "move_to", label: "Move To", needs: "location", options: [] },
@@ -100,7 +111,10 @@
     const room = app.map.rooms.find((r) => (r.doors || []).includes(id));
     const door = doorById(id);
     const base = room ? `${room.name} door` : `Door ${id.replace(/^.*_/, "#")}`;
-    return door && door.locked ? `${base} (locked)` : base;
+    if (!door) return base;
+    if (door.broken) return `${base} (broken)`;
+    if (door.open) return `${base} (open)`;
+    return door.locked ? `${base} (locked)` : base;
   }
 
   function teamMembers(team) {
@@ -315,7 +329,7 @@
       const [bx, by] = worldToScreen(d.pos.x - Math.cos(rad) * 45, d.pos.y - Math.sin(rad) * 45);
       const sel = d.id === selectedId;
       ctx.lineCap = "round";
-      ctx.strokeStyle = sel ? "#00bcd4" : d.locked ? "#ff7043" : "#ffd54f";
+      ctx.strokeStyle = sel ? "#00bcd4" : d.broken ? "#9e9e9e" : d.open ? "#66bb6a" : d.locked ? "#ff7043" : "#ffd54f";
       ctx.lineWidth = sel ? 7 : 5;
       ctx.beginPath();
       ctx.moveTo(bx, by);
@@ -550,16 +564,52 @@
   function defaultAction() {
     if (!app.target) return null;
     if (app.target.type === "location") return "move_to";
-    return app.target.door ? "stack_up" : "move_to";
+    if (!app.target.door) return "move_to";
+    return doorIsOpen(doorById(app.target.door)) ? "move_clear" : "stack_up";
   }
 
   // ---------------------------------------------------------------- orders
 
+  function doorIsOpen(door) {
+    return Boolean(door && (door.open || door.broken));
+  }
+
+  // Total of an item carried by the selected team, or null when the mod does
+  // not report inventory (then nothing is disabled).
+  function teamItemCount(item) {
+    const members = teamMembers(app.team).filter((o) => o.items);
+    if (!members.length) return null;
+    return members.reduce((sum, o) => sum + (o.items[item] || 0), 0);
+  }
+
+  function itemMissing(item) {
+    return item && teamItemCount(item) === 0;
+  }
+
+  // Why an order cannot be given right now, or null if it can.
+  function blockedReason(action) {
+    if (!action.needs) return null;
+    if (!app.target) return "pick a target";
+    if (action.needs !== "door") return null;
+    if (!app.target.door) return "needs a door";
+    const door = doorById(app.target.door);
+    if (doorIsOpen(door) && !OPEN_DOOR_ACTIONS.has(action.id)) return "door is open";
+    if (door && !doorIsOpen(door) && action.id === "move_clear") return "door is closed";
+    if (door && door.locked && action.id === "open_clear") return "door is locked";
+    const item = ACTION_ITEMS[action.id];
+    if (itemMissing(item)) return `no ${item} on ${TEAM_LABEL[app.team]}`;
+    return null;
+  }
+
   function actionAllowed(action) {
-    if (!action.needs) return true;
-    if (!app.target) return false;
-    if (action.needs === "door") return Boolean(app.target.door);
-    return true;
+    return blockedReason(action) === null;
+  }
+
+  // Switches options the team has no item for back to one that needs none.
+  function fixOptions() {
+    for (const [key, items] of Object.entries(OPTION_ITEMS)) {
+      if (itemMissing(items[app.options[key]])) app.options[key] = OPTION_FALLBACK[key];
+    }
   }
 
   function targetLocation() {
@@ -593,6 +643,7 @@
   }
 
   async function execute() {
+    fixOptions();
     const action = ACTION_BY_ID[app.action];
     if (!action || !actionAllowed(action)) return;
     const target = {};
@@ -617,6 +668,8 @@
   // ---------------------------------------------------------------- panels
 
   function renderOrders() {
+    fixOptions();
+    if (app.action && !actionAllowed(ACTION_BY_ID[app.action])) app.action = defaultAction();
     $("target-text").textContent = describeTarget();
 
     const choice = $("door-choice");
@@ -641,12 +694,15 @@
     for (const a of ACTIONS) {
       const b = document.createElement("button");
       b.textContent = a.label;
-      b.disabled = !actionAllowed(a);
+      const reason = blockedReason(a);
+      b.disabled = reason !== null;
       b.className = a.id === app.action ? "active" : "";
-      if (app.state && app.state.connected && !configured.has(a.id)) {
+      const note = app.state && app.state.connected && !configured.has(a.id) ? "not set up in config.lua"
+        : reason && reason !== "pick a target" && reason !== "needs a door" ? reason : null;
+      if (note) {
         const tag = document.createElement("span");
         tag.className = "tag";
-        tag.textContent = "not set up in config.lua";
+        tag.textContent = note;
         b.appendChild(tag);
       }
       b.onclick = () => { app.action = a.id; renderOrders(); };
@@ -664,7 +720,10 @@
       chips.className = "chips";
       for (const [value, label] of OPTION_CHOICES[key]) {
         const b = document.createElement("button");
-        b.textContent = label;
+        const item = (OPTION_ITEMS[key] || {})[value];
+        const count = item ? teamItemCount(item) : null;
+        b.textContent = count === null ? label : `${label} ×${count}`;
+        b.disabled = count === 0;
         b.className = app.options[key] === value ? "active" : "";
         b.onclick = () => { app.options[key] = value; renderOrders(); };
         chips.appendChild(b);
@@ -940,7 +999,11 @@
     renderTasks();
     if (app.mode === "orders") {
       // Keep the "not set up" tags current without stealing focus.
-      const configuredKey = JSON.stringify([(app.state && app.state.configured_actions) || [], app.state && app.state.connected]);
+      // Re-render when anything the order panel depends on changes.
+      const s = app.state || {};
+      const door = app.target && app.target.door ? doorById(app.target.door) : null;
+      const configuredKey = JSON.stringify([s.configured_actions || [], s.connected,
+        teamMembers(app.team).map((o) => o.items || null), door && [door.open, door.broken, door.locked]]);
       if (configuredKey !== app.lastConfiguredKey) { app.lastConfiguredKey = configuredKey; renderOrders(); }
     }
     redraw();

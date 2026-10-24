@@ -43,31 +43,42 @@ local manager = setmetatable({ IsValid = function() return true end }, {
 })
 
 classes = {}
+-- items: category -> { class name, count }
 local function inventory(items)
-    return { GetInventoryItemOfType = function(self, category)
-        local class = items[category]
-        if not class then return nil end
-        classes[class] = classes[class] or { name = class }
-        return { IsValid = function() return true end, GetClass = function() return classes[class] end }
-    end }
+    return {
+        GetInventoryItemOfType = function(self, category)
+            local entry = items[category]
+            if not entry then return nil end
+            classes[entry[1]] = classes[entry[1]] or { name = entry[1] }
+            return { IsValid = function() return true end, GetClass = function() return classes[entry[1]] end }
+        end,
+        CountInventoryItemType = function(self, category)
+            return items[category] and items[category][2] or 0
+        end,
+    }
 end
 
 objects = {
     PlayerController = { controller },
     SWATManager = { manager },
     CyberneticsSwat_V2_C = {
-        actor("Swat_C_1", 100, 200, 0, 0, { SquadPosition = 0, InventoryComp = inventory({ [38] = "C2", [30] = "Flashbang" }) }),
-        actor("Swat_C_2", 150, 250, 0, 45, { SquadPosition = 2, InventoryComp = inventory({ [33] = "Stinger" }) }),
+        actor("Swat_C_1", 100, 200, 0, 0, { SquadPosition = 0,
+            InventoryComp = inventory({ [38] = { "C2", 1 }, [30] = { "Flashbang", 2 }, [33] = { "StingerEmpty", 0 } }) }),
+        actor("Swat_C_2", 150, 250, 0, 45, { SquadPosition = 2,
+            InventoryComp = inventory({ [33] = { "Stinger", 1 } }) }),
     },
     Door = {
         actor("Door_C_7", 500, 0, 0, 90, {
             IsLocked = function() return true end,
             GetSWATKnowsLockState = function() return true end,
             GetDoorMidLocation = function() return { X = 500, Y = 20, Z = 0 } end,
+            IsOpen = function() return false end,
+            IsDoorBroken = function() return false end,
         }),
         actor("Door_C_8", 40, 30, 0, 0, {
             IsLocked = function() return true end,
             GetSWATKnowsLockState = function() return false end,
+            IsOpen = function() return true end,
         }),
     },
 }
@@ -122,8 +133,15 @@ class ModTest(unittest.TestCase):
         self.assertEqual(state["player"]["yaw"], 90)
         self.assertEqual([(o["id"], o["team"]) for o in state["officers"]],
                          [("Swat_C_1", "red"), ("Swat_C_2", "blue")])
-        self.assertEqual({d["id"]: d.get("locked") for d in state["doors"]}, {"Door_C_7": True, "Door_C_8": None})
-        self.assertEqual(len(state["configured_actions"]), 9)
+        self.assertEqual({d["id"]: (d.get("locked"), d.get("open"), d.get("broken")) for d in state["doors"]},
+                         {"Door_C_7": (True, False, False), "Door_C_8": (None, True, None)})
+        self.assertEqual(len(state["configured_actions"]), 10)
+        items = {o["id"]: o["items"] for o in state["officers"]}
+        self.assertEqual(items["Swat_C_1"]["c2"], 1)
+        self.assertEqual(items["Swat_C_1"]["flashbang"], 2)
+        self.assertEqual(items["Swat_C_1"]["stinger"], 0)
+        self.assertEqual(items["Swat_C_2"]["stinger"], 1)
+        self.assertEqual(items["Swat_C_2"]["ninebang"], 0)
 
     def test_stale_orders_skipped_and_not_rerun(self):
         hold = self.order(1, "blue", "hold")
@@ -177,6 +195,21 @@ class ModTest(unittest.TestCase):
         state = self.run_orders(self.order(1, "blue", "breach_clear", {"door": "Door_C_7"}, {"breach": "shotgun"}))
         self.assertEqual(len(self.lua.globals().calls), 0)
         self.assertIn("carries the shotgun item", state["results"][0]["message"])
+
+    def test_item_taken_from_officer_who_still_has_one(self):
+        # Swat_C_1 carries an empty stinger slot; the class must come from Swat_C_2.
+        self.run_orders(self.order(1, "gold", "breach_clear", {"door": "Door_C_7"},
+                                   {"breach": "kick", "grenade": "stinger"}))
+        fn, args = self.call(1)
+        self.assertIsNone(args[4])
+        self.assertEqual(args[5]["name"], "Stinger")
+
+    def test_move_and_clear_on_open_door(self):
+        self.run_orders(self.order(1, "red", "move_clear", {"door": "Door_C_8"}, {"grenade": "flashbang"}))
+        fn, args = self.call(1)
+        self.assertEqual(fn, "GiveBreachAndClearCommand")
+        self.assertEqual(args[1:3], [2, 1])  # EDoorBreachType Move, TT_SERT_RED
+        self.assertEqual(args[5]["name"], "Flashbang")
 
     def test_move_and_search_use_map_point_or_player(self):
         self.run_orders(self.order(1, "red", "move_to", {"location": {"x": 7, "y": 8, "z": 9}}),

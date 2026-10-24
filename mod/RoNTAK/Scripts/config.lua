@@ -59,6 +59,9 @@ config.doors = {
     -- Optional function returning whether your team knows the lock state.
     -- When it returns false the map shows the door as unknown, not locked.
     lock_known_function = "GetSWATKnowsLockState",
+    -- Optional functions returning whether the door is open / broken.
+    open_function = "IsOpen",
+    broken_function = "IsDoorBroken",
 }
 
 ---------------------------------------------------------------------------
@@ -72,14 +75,24 @@ config.doors = {
 config.team_args = { red = 1, blue = 2, gold = 5 }
 
 -- EDoorBreachType, passed as "$breach".
-config.breach_args = { open = 1, kick = 3, shotgun = 4, ram = 5, c2 = 6, leader = 7 }
+-- "move" is Move & Clear, used for doors that are already open.
+config.breach_args = { open = 1, move = 2, kick = 3, shotgun = 4, ram = 5, c2 = 6, leader = 7 }
 
 -- EItemCategory of the item each breach type uses. The item's class is taken
 -- from the inventory of an officer on the ordered team ("$breach_item").
 config.breach_items = { shotgun = 42, ram = 41, c2 = 38 }
 
 -- EItemCategory of each grenade ("$grenade_item"). "none" sends no grenade.
-config.grenade_items = { flashbang = 30, stinger = 33, cs = 32 }
+-- "launcher" makes the officer fire the grenade launcher through the door.
+config.grenade_items = { flashbang = 30, stinger = 33, cs = 32, ninebang = 31, launcher = 47 }
+
+-- Items counted on every officer and sent to the ATAK screen, which disables
+-- options nobody on the selected team carries. EItemCategory values.
+config.inventory = {
+    c2 = 38, shotgun = 42, ram = 41,
+    flashbang = 30, stinger = 33, cs = 32, ninebang = 31, launcher = 47,
+    wedge = 40, mirror = 34,
+}
 
 -- EStackUpStyle, passed as "$side".
 config.side_args = { auto = 0, split = 1, left = 2, right = 3 }
@@ -126,6 +139,8 @@ config.actions = {
     stack_up      = { target = "SWATManager", fn = "GiveStackUpCommand",
                       args = { "$door", "$team", "$location", "$normal", true, "$side" } },
     breach_clear  = { target = "SWATManager", fn = "GiveBreachAndClearCommand", args = BREACH_ARGS },
+    move_clear    = { target = "SWATManager", fn = "GiveBreachAndClearCommand", args = BREACH_ARGS,
+                      options = { breach = "move" } },
     open_clear    = { target = "SWATManager", fn = "GiveBreachAndClearCommand", args = BREACH_ARGS,
                       options = { breach = "open" } },
     scan_door     = { target = "SWATManager", fn = "GiveCheckForContactsCommand",
