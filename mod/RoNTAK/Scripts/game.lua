@@ -45,6 +45,14 @@ local function plain(value)
     return value
 end
 
+-- A property value as UE4SS returns it (object wrappers, FStrings...).
+local function read_raw(obj, name)
+    if not name then return nil end
+    local ok, value = pcall(function() return obj[name] end)
+    if ok then return value end
+    return nil
+end
+
 local function read_property(obj, name)
     if not name then return nil end
     local ok, value = pcall(function() return obj[name] end)
@@ -144,6 +152,20 @@ local function excluded(name)
     return false
 end
 
+-- "First Last" from the officer's roster entry, else its squad slot name.
+-- The roster object can be empty: check it before reading from it (UE4SS
+-- errors on empty objects are not caught by pcall).
+local function officer_display_name(actor, raw_squad)
+    local roster = read_raw(actor, config.officers.roster_property)
+    if valid(roster) then
+        local first = name_text(read_raw(roster, "FirstName"))
+        local last = name_text(read_raw(roster, "LastName"))
+        local full = table.concat({ first or "", last or "" }, " "):gsub("^%s+", ""):gsub("%s+$", "")
+        if full ~= "" then return full end
+    end
+    return (config.officers.squad_names or {})[raw_squad]
+end
+
 local officer_cache = { at = -math.huge, list = {} }
 
 -- The officer actors, rebuilt with FindAllOf every RESCAN_SECONDS or when
@@ -168,7 +190,10 @@ local function officer_list()
             local name = object_name(actor)
             if name ~= player_name and not excluded(name) then
                 local raw_team = read_property(actor, config.officers.team_property)
-                list[#list + 1] = { actor = actor, name = name, team = config.officers.team_values[raw_team] or "unknown" }
+                list[#list + 1] = {
+                    actor = actor, name = name, team = config.officers.team_values[raw_team] or "unknown",
+                    display_name = officer_display_name(actor, raw_team),
+                }
             end
         end
     end
@@ -187,7 +212,7 @@ function game.officer_actors()
         if valid(o.actor) then
             local pos = location(o.actor)
             if pos then
-                result[#result + 1] = { actor = o.actor, name = o.name, team = o.team, pos = pos }
+                result[#result + 1] = { actor = o.actor, name = o.name, team = o.team, pos = pos, display_name = o.display_name }
             end
         end
     end
@@ -331,7 +356,7 @@ function game.officers()
     for _, o in ipairs(game.officer_actors()) do
         result[#result + 1] = {
             id = o.name,
-            name = read_property(o.actor, config.officers.name_property) or o.name,
+            name = o.display_name or o.name,
             team = o.team,
             pos = o.pos,
             yaw = yaw(o.actor),

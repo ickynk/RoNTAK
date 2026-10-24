@@ -194,6 +194,21 @@ class ModTest(unittest.TestCase):
         self.assertEqual(items["Swat_C_2"]["stinger"], 1)
         self.assertEqual(items["Swat_C_2"]["ninebang"], 0)
 
+    def test_officer_names_from_roster_or_squad_slot(self):
+        self.lua.execute(r"""
+            local function fstr(s) return { ToString = function() return s end } end
+            objects.CyberneticsSwat_V2_C[1].RosterCharacter = {
+                IsValid = function() return true end, FirstName = fstr("Dennis"), LastName = fstr("Judge"),
+            }
+            -- An empty roster object: reading from it would be a UE4SS error in game.
+            objects.CyberneticsSwat_V2_C[2].RosterCharacter = setmetatable({ IsValid = function() return false end }, {
+                __index = function(_, k) error("read " .. k .. " from an empty object") end,
+            })
+        """)
+        state = self.tick()
+        names = {o["id"]: o["name"] for o in state["officers"]}
+        self.assertEqual(names, {"Swat_C_1": "Dennis Judge", "Swat_C_2": "Alpha"})
+
     def test_stale_orders_skipped_and_not_rerun(self):
         hold = self.order(1, "blue", "hold")
         self.send("A", [hold])

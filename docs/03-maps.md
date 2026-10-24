@@ -1,19 +1,21 @@
-# 3. Maps: game rooms and floor plan images
+# 3. Maps: floors, floor plan images, and rooms
 
-## Rooms come from the game (automatic)
+## Floors are automatic
 
-When you load into a mission, RoNTAK reads the level's rooms from the game itself. The AI uses these same
-rooms when it clears. Within a few seconds of loading in, the ATAK map shows:
+When you load a level that has no saved map yet, RoNTAK groups the level's doors by height and creates one
+floor per group: "Floor 1" (lowest), "Floor 2" and so on. With **Floor: auto** selected, the map shows the floor
+you're on and switches as you go up and down. Officers on other floors are drawn faded.
 
-- **Room names and dashed outlines.** The outline is drawn around the points the AI checks inside each room,
-  so it sits slightly inside the walls.
-- **Door labels with the rooms on both sides**, for example "Kitchen / Hallway door".
+Rename the floors in **Calibrate** (for example "Basement", "Ground", "Upstairs"). **Save map** keeps the
+names and heights.
 
-Tap inside a room to target it. "Breach & Clear the Kitchen" uses the Kitchen door nearest the selected
-team, or pick one with the **Entry** buttons.
+## Rooms
 
-This works on every level with no setup. The rooms are written to `Mods\RoNTAK\bridge\rooms.json` if you
-want to look at them.
+The game only knows its rooms by number ("Room 5"), and their outlines are rough, so they're hidden by default.
+You name rooms yourself on top of a floor plan image (see "Drawing rooms" below).
+
+To see the game's rooms as a rough guide while drawing, press **Rooms** and tick **Show the game's room
+outlines**. With it on, doors are also labelled with the game's room numbers on each side.
 
 ## Add a floor plan image (optional)
 
@@ -40,19 +42,32 @@ standing in game.
 
 ### Several floors
 
-1. Press **Add floor**, load that floor's image, and calibrate it the same way using that floor's doors.
-2. Set **Min height (Z)** and **Max height (Z)** for each floor. The **Your in-game position** box shows your
-   current Z. Example: ground floor Z ≈ 0 and upstairs Z ≈ 350 → ground floor `-1000` to `200`,
-   upstairs `200` to `1000`.
-   Pressing **F6** in game writes the game's own floor heights for each building to
-   `Mods\RoNTAK\bridge\mapinfo.json`, if you want exact numbers.
-3. With **Floor: auto** selected, the map switches floors as you go up and down. Officers on other floors are
-   drawn faded.
+Each floor gets its own image. The floors already exist (see "Floors are automatic").
 
-## Drawing your own rooms (optional)
+1. Pick the floor in the **Floor** list at the top (or walk onto it in game with **Floor: auto**).
+2. Load that floor's image and line it up with two of **that floor's** doors, as above.
+3. Repeat for each floor, then **Save map**.
 
-If a game room is missing or its outline is too rough, draw it yourself:
+If a floor switches at the wrong height (for example on a staircase), adjust its **Min height (Z)** /
+**Max height (Z)** in Calibrate. The **Your in-game position** box shows your current Z. Pressing **F6** in game
+writes the game's own floor heights per building to `Mods\RoNTAK\bridge\mapinfo.json`.
 
-1. Press **Rooms**, tap the corners of the room in order, and press **Finish room**.
-2. Name it. Give it the **same name** as the game room to replace that one.
-3. Press **Save map**.
+## Drawing rooms
+
+Name rooms once you have a floor plan image lined up:
+
+1. Press **Rooms**, tap the corners of a room in order, and press **Finish room**.
+2. Name it, for example "Kitchen". Doors on its walls are linked automatically.
+3. Repeat for each room, then press **Save map**.
+
+Tap inside a named room to target it. "Breach & Clear the Kitchen" uses the Kitchen door nearest the selected
+team, or pick one with the **Entry** buttons.
+
+## Where maps are saved, and sharing them
+
+Everything for a level (image, calibration, floors, rooms) is saved in `companion\maps\<LevelName>\` on your
+PC. It is **not** uploaded anywhere automatically. To include a map in the RoNTAK repository, commit that folder,
+or send its files to whoever maintains the repository.
+
+Community-made maps belong to their creators. Only add one to the public repository if the creator allows it,
+or its license allows sharing, and credit the creator (for example in a `CREDITS.txt` in the level's folder).

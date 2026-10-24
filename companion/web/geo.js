@@ -92,7 +92,39 @@
     return [poly.reduce((s, p) => s + p[0], 0) / n, poly.reduce((s, p) => s + p[1], 0) / n];
   }
 
-  const api = { DEFAULT, fit, apply, invert, pointInPolygon, distToPolygonEdge, centroid };
+  // Groups heights (e.g. every door's Z) into floors: sorted heights split
+  // wherever the gap to the next one exceeds `gap`. Groups with fewer than
+  // `minCount` heights (a lone door on a stair landing) join the nearest group.
+  // Returns [{ zMin, zMax }] lowest first; neighbouring floors meet halfway
+  // between their groups, and the lowest / highest bands are open-ended.
+  function floorBands(zs, gap = 200, minCount = 2) {
+    const sorted = zs.filter((z) => Number.isFinite(z)).sort((a, b) => a - b);
+    if (!sorted.length) return [];
+    let groups = [[sorted[0]]];
+    for (let i = 1; i < sorted.length; i++) {
+      if (sorted[i] - sorted[i - 1] > gap) groups.push([]);
+      groups[groups.length - 1].push(sorted[i]);
+    }
+    let merged = true;
+    while (merged && groups.length > 1) {
+      merged = false;
+      const i = groups.findIndex((g) => g.length < minCount);
+      if (i < 0) break;
+      const below = i > 0 ? groups[i][0] - groups[i - 1][groups[i - 1].length - 1] : Infinity;
+      const above = i < groups.length - 1 ? groups[i + 1][0] - groups[i][groups[i].length - 1] : Infinity;
+      const j = below <= above ? i - 1 : i + 1;
+      groups[Math.min(i, j)] = groups[Math.min(i, j)].concat(groups[Math.max(i, j)]);
+      groups.splice(Math.max(i, j), 1);
+      merged = true;
+    }
+    const OPEN = 1e7;
+    return groups.map((g, i) => ({
+      zMin: i === 0 ? -OPEN : (groups[i - 1][groups[i - 1].length - 1] + g[0]) / 2,
+      zMax: i === groups.length - 1 ? OPEN : (g[g.length - 1] + groups[i + 1][0]) / 2,
+    }));
+  }
+
+  const api = { DEFAULT, fit, apply, invert, pointInPolygon, distToPolygonEdge, centroid, floorBands };
   root.Geo = api;
   if (typeof module !== "undefined") module.exports = api;
 })(typeof window !== "undefined" ? window : globalThis);

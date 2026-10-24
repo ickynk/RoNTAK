@@ -42,8 +42,10 @@ config.officers = {
     -- Which squad slot belongs to which team (checked in game: Alpha and Beta
     -- are BLUE, Charlie and Delta are RED).
     team_values = { [0] = "blue", [1] = "blue", [2] = "red", [3] = "red" },
-    -- Optional property with the officer's display name.
-    name_property = nil,
+    -- Officer names: RosterCharacter.FirstName / LastName. The roster entry
+    -- can be empty (it is checked before use); then the squad slot name is used.
+    roster_property = "RosterCharacter",
+    squad_names = { [0] = "Alpha", [1] = "Beta", [2] = "Charlie", [3] = "Delta" },
     -- Optional property with health (number). Shown as a status bar.
     health_property = nil,
     -- Skip actors whose object name contains any of these (e.g. the player

@@ -37,8 +37,9 @@ It ships filled in and tested. If a game update breaks something, the mod has to
 | Live map: player, officers by team, doors with open / locked state | Working in game |
 | Orders: stack up, breach / open / move & clear with breaching tools and grenades, mirror, wedge, move, fall in, hold, search & secure | Working in game |
 | Gear-aware options (counts, greyed-out options) | Working in game |
-| Rooms from the game: names, outlines, door labels | Automatic on every level (to be confirmed in game) |
-| Floor plan images (community maps, screenshots) | Add per level; line up by tapping two doors (docs/03) |
+| Floors: automatic from door heights, auto-switching as you move | Working in the companion |
+| Officer names from the roster | Added (to be confirmed in game) |
+| Floor plan images (community maps) and named rooms | Add per level; line up by tapping two doors (docs/03) |
 
 ## Try it now (no game needed)
 

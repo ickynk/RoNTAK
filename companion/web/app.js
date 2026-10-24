@@ -42,6 +42,14 @@
   const ACTION_BY_ID = Object.fromEntries(ACTIONS.map((a) => [a.id, a]));
 
   const $ = (id) => document.getElementById(id);
+
+  // Per-browser settings; storage can be unavailable (private windows).
+  function loadSetting(key) {
+    try { return localStorage.getItem("rontak." + key); } catch (e) { return null; }
+  }
+  function saveSetting(key, value) {
+    try { localStorage.setItem("rontak." + key, value); } catch (e) { /* not remembered */ }
+  }
   const canvas = $("map");
   const ctx = canvas.getContext("2d");
 
@@ -60,6 +68,8 @@
     options: { breach: "kick", grenade: "flashbang", side: "auto" },
     sent: [],
     gameRooms: [], // rooms read from the game (rooms.json), see loadGameRooms()
+    showGameRooms: loadSetting("showGameRooms") === "1", // off: their names are just "Room 5"
+    mapLoaded: false, // map.json of app.level has been read
     roomsVersion: null,
     pendingAnchor: null, // calibration: world position of the door tapped first
     draft: [],
@@ -134,9 +144,11 @@
     return String(name).replace(/_/g, " ").replace(/\s+/g, " ").trim();
   }
 
-  // Rooms drawn by hand (map.json) win over the game's room with the same name.
+  // Rooms drawn by hand (map.json), plus, when the guide is switched on, the
+  // game's rooms (a hand-drawn room with the same name wins).
   function allRooms() {
     const manual = app.map.rooms;
+    if (!app.showGameRooms) return manual;
     const names = new Set(manual.map((r) => r.name));
     return manual.concat(app.gameRooms.filter((r) => !names.has(r.name)));
   }
@@ -160,7 +172,7 @@
 
   function doorLabel(id) {
     const door = doorById(id);
-    const sides = door ? [door.front_room, door.back_room].filter(Boolean).map(prettyRoom) : [];
+    const sides = door && app.showGameRooms ? [door.front_room, door.back_room].filter(Boolean).map(prettyRoom) : [];
     const room = sides.length ? null : allRooms().find((r) => (r.doors || []).includes(id));
     const base = sides.length ? `${sides.join(" / ")} door` : room ? `${room.name} door` : `Door ${id.replace(/^.*_/, "#")}`;
     if (!door) return base;
@@ -195,7 +207,28 @@
 
   // ---------------------------------------------------------------- map data
 
+  // Floors from the heights of the level's doors, for maps without any floors
+  // yet. Rename them in Calibrate; Save map keeps them.
+  function autoFloors(doors) {
+    const bands = Geo.floorBands(doors.map((d) => d.pos.z));
+    return bands.map((b, i) => ({
+      name: bands.length === 1 ? "Ground" : `Floor ${i + 1}`,
+      image: null, zMin: Math.round(b.zMin), zMax: Math.round(b.zMax), anchors: [], auto: true,
+    }));
+  }
+
+  function ensureAutoFloors() {
+    const doors = (app.state && app.state.doors) || [];
+    if (!app.mapLoaded || app.map.floors.length || !doors.length) return;
+    app.map.floors = autoFloors(doors);
+    app.floorIndex = 0;
+    app.view.fitted = false;
+    renderFloorSelect();
+    renderCalibration();
+  }
+
   async function loadMap(level) {
+    app.mapLoaded = false;
     app.map = { floors: [], rooms: [] };
     app.images = {};
     app.view.fitted = false;
@@ -206,6 +239,7 @@
       console.warn("map load failed", e);
     }
     app.floorIndex = 0;
+    app.mapLoaded = true;
     app.map.floors.forEach(loadImage);
     renderFloorSelect();
     renderCalibration();
@@ -1034,12 +1068,18 @@
       list.appendChild(li);
     }
     if (!app.map.rooms.length) list.innerHTML = "<li>No hand-drawn rooms</li>";
-    if (app.gameRooms.length) {
-      const li = document.createElement("li");
-      li.textContent = `${app.gameRooms.length} rooms from the game (dashed outlines)`;
-      list.prepend(li);
-    }
+    $("show-game-rooms").checked = app.showGameRooms;
+    $("game-room-count").textContent = app.gameRooms.length ? `(${app.gameRooms.length})` : "";
   }
+
+  $("show-game-rooms").onchange = (e) => {
+    app.showGameRooms = e.target.checked;
+    saveSetting("showGameRooms", app.showGameRooms ? "1" : "0");
+    if (app.target && app.target.type === "room" && !findRoom(app.target.room)) app.target = null;
+    renderRooms();
+    renderOrders();
+    redraw();
+  };
 
   $("room-undo").onclick = () => { app.draft.pop(); redraw(); };
 
@@ -1113,6 +1153,7 @@
         app.level = s.level;
         await loadMap(s.level);
       }
+      ensureAutoFloors();
       if (s.rooms_version && s.rooms_version !== app.roomsVersion) {
         app.roomsVersion = s.rooms_version;
         await loadGameRooms();
