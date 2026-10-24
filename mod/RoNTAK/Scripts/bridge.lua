@@ -38,11 +38,20 @@ function bridge.write_file(name, text)
     end
     f:write(text)
     f:close()
-    -- Windows cannot rename over an existing file.
+    -- Windows cannot rename over an existing file, and cannot remove it while
+    -- the companion is reading it; then write it in place (the companion
+    -- retries a half-written file).
     os.remove(path(name))
-    local ok, rename_err = os.rename(tmp, path(name))
-    if not ok then log.error("cannot replace " .. name .. ": " .. tostring(rename_err)) end
-    return ok
+    if os.rename(tmp, path(name)) then return true end
+    os.remove(tmp)
+    local direct = io.open(path(name), "wb")
+    if not direct then
+        log.debug("cannot replace " .. name .. " (in use), skipped this update")
+        return false
+    end
+    direct:write(text)
+    direct:close()
+    return true
 end
 
 function bridge.write_state(state)

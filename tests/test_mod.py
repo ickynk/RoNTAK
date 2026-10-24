@@ -32,10 +32,39 @@ local controller = actor("PlayerController_C_0", 0, 0, 0, 0, {
 })
 
 -- Records every Give...Command call as { fn = name, n = arg count, ... }.
+-- RegisterHook stand-in: pre-hooks get params with get()/set(), like UE4SS.
+hooks = {}
+function RegisterHook(path, fn)
+    hooks[path] = hooks[path] or {}
+    table.insert(hooks[path], fn)
+    return 1, 2
+end
+function UnregisterHook() end
+
+-- When true, the fake drops class (item) arguments the way UE4SS does in game.
+drop_class_args = false
+
+-- Records every Give...Command call as { fn = name, n = arg count, ... }.
 local manager = setmetatable({ IsValid = function() return true end }, {
     __index = function(_, fn)
         return function(self, ...)
             local args = table.pack(...)
+            if drop_class_args then
+                for i = 1, args.n do
+                    if type(args[i]) == "table" and args[i].GetFullName then args[i] = "stale" end
+                end
+            end
+            local params = {}
+            for i = 1, args.n do
+                local index = i
+                params[i] = {
+                    get = function() return args[index] end,
+                    set = function(_, v) args[index] = v end,
+                }
+            end
+            for _, hook in ipairs(hooks["/Script/ReadyOrNot.SWATManager:" .. fn] or {}) do
+                hook({ get = function() return self end }, table.unpack(params, 1, args.n))
+            end
             args.fn = fn
             calls[#calls + 1] = args
         end
@@ -57,6 +86,8 @@ local function inventory(items)
         classes[entry[1]] = classes[entry[1]] or {
             name = entry[1],
             GetFullName = function() return "BlueprintGeneratedClass /Game/Items/" .. entry[1] end,
+            GetFName = function() return name(entry[1]) end,
+            IsValid = function() return true end,
         }
         local class = classes[entry[1]]
         objs[#objs + 1] = {
@@ -231,12 +262,22 @@ class ModTest(unittest.TestCase):
         self.assertTrue(args[4]["invalid"])
         self.assertTrue(args[5]["invalid"])
 
+    def test_hook_writes_item_classes_the_call_dropped(self):
+        self.lua.execute("drop_class_args = true")
+        state = self.run_orders(self.order(1, "red", "breach_clear", {"door": "Door_C_7"},
+                                           {"breach": "c2", "grenade": "flashbang"}))
+        fn, args = self.call(1)
+        self.assertEqual(args[4]["name"], "C2")
+        self.assertEqual(args[5]["name"], "Flashbang")
+        self.assertIn("set in call: arg 5 stale -> C2, arg 6 stale -> Flashbang", state["results"][0]["sent"])
+
     def test_breach_order_reports_what_the_game_assigned(self):
         self.lua.execute('objects.CyberneticsSwat_V2_C[1].Controller = controller_with_throw(objects.Door[1], "BP_Flashbang_C")')
         state = self.run_orders(self.order(1, "red", "breach_clear", {"door": "Door_C_7"},
                                            {"breach": "kick", "grenade": "flashbang"}))
         self.assertEqual(state["results"][0]["message"],
-                         "sent breach item none, grenade BlueprintGeneratedClass /Game/Items/Flashbang | "
+                         "sent breach item none, grenade BlueprintGeneratedClass /Game/Items/Flashbang"
+                         " | set in call: arg 6 Flashbang -> Flashbang | "
                          "game assigned: Swat_C_1 ThrowGrenadeThroughDoor: BP_Flashbang_C")
 
     def test_breach_check_when_nobody_assigned(self):

@@ -101,6 +101,14 @@ config.side_args = { auto = 0, split = 1, left = 2, right = 3 }
 -- EFallInPattern: 0 Snake, 1 HalfSnake, 2 Diamond, 3 Flock.
 config.fall_in_pattern = 0
 
+-- UE4SS does not write item class (TSubclassOf) arguments when the mod calls
+-- these functions: the game saw stale values (C2 as the grenade) and never
+-- got the grenade. A pre-hook on each writes $breach_item / $grenade_item into
+-- the call's parameters directly before the game runs it.
+config.class_arg_hooks = {
+    "/Script/ReadyOrNot.SWATManager:GiveBreachAndClearCommand",
+}
+
 -- How each ATAK action is carried out in the game.
 --
 --   target  = where to find the object whose function is called:

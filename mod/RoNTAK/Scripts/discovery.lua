@@ -96,10 +96,12 @@ local function describe(param)
     if type(value) == "userdata" or type(value) == "table" then
         local v_ok, v = pcall(function() return string.format("(%.0f, %.0f, %.0f)", value.X, value.Y, value.Z) end)
         if v_ok then return v end
+        local valid_ok, is_valid = pcall(function() return value:IsValid() end)
+        if valid_ok and is_valid == false then return "null" end
         local s_ok, s = pcall(function() return value:GetFullName() end)
-        if s_ok then return s end
+        if s_ok and s ~= nil then return tostring(s) end
         s_ok, s = pcall(function() return value:ToString() end)
-        if s_ok then return s end
+        if s_ok and s ~= nil then return tostring(s) end
         return "<userdata>"
     end
     return tostring(value)

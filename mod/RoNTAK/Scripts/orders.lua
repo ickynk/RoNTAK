@@ -18,11 +18,52 @@ local function lookup(table_name, id)
     return value
 end
 
--- A definite "no object" for item class arguments. A Lua nil may leave the
--- game's argument unset; CreateInvalidObject() is written as a null pointer.
+-- A definite "no object" for item class arguments: an invalid UObject is
+-- written as a null pointer, where a Lua nil may leave the argument unset.
 local function no_object()
     if CreateInvalidObject then return CreateInvalidObject() end
+    local ok, obj = pcall(FindFirstOf, "RoNTAK_NoSuchClass")
+    if ok then return obj end
     return nil
+end
+
+local function param_text(param)
+    local ok, value = pcall(function() return param:get() end)
+    if not ok then return "?" end
+    if value == nil then return "null" end
+    local v_ok, is_valid = pcall(function() return value:IsValid() end)
+    if v_ok and is_valid == false then return "null" end
+    local n_ok, name = pcall(function() return value:GetFName():ToString() end)
+    if n_ok and name then return name end
+    return tostring(value)
+end
+
+-- Item class arguments of the call being made right now ({ [arg index] =
+-- class }), written by the pre-hooks in config.class_arg_hooks.
+local class_args = nil
+local class_report = nil
+
+function orders.install_class_hooks()
+    if not RegisterHook then return end
+    for _, fn_path in ipairs(config.class_arg_hooks or {}) do
+        local ok, err = pcall(RegisterHook, fn_path, function(self, ...)
+            if not class_args then return end
+            local params = { ... }
+            local report = {}
+            for i, value in pairs(class_args) do
+                local param = params[i]
+                if param then
+                    local before = param_text(param)
+                    local set_ok = pcall(function() param:set(value) end)
+                    report[#report + 1] = string.format("arg %d %s -> %s%s", i, before, param_text(param),
+                        set_ok and "" or " (set failed)")
+                end
+            end
+            table.sort(report)
+            class_report = table.concat(report, ", ")
+        end)
+        if not ok then log.error("cannot hook " .. fn_path .. ": " .. tostring(err)) end
+    end
 end
 
 local function vector(v)
@@ -40,6 +81,7 @@ end
 -- naming the item classes sent.
 local function build_args(spec, cmd, door)
     local sent = {}
+    local classes = {}
     local options = {}
     for k, v in pairs(cmd.options or {}) do options[k] = v end
     for k, v in pairs(spec.options or {}) do options[k] = v end
@@ -75,6 +117,7 @@ local function build_args(spec, cmd, door)
                 if not value then error("no officer on " .. cmd.team .. " carries the " .. breach .. " item") end
             end
             sent[#sent + 1] = "breach item " .. name_of(value)
+            classes[i] = value
         elseif arg == "$grenade_item" then
             local grenade = options.grenade or "none"
             value = no_object()
@@ -84,6 +127,7 @@ local function build_args(spec, cmd, door)
                 if not value then error("no officer on " .. cmd.team .. " carries a " .. grenade) end
             end
             sent[#sent + 1] = "grenade " .. name_of(value)
+            classes[i] = value
         elseif arg == "$side" then
             value = lookup("side_args", options.side or "auto")
         elseif arg == "$with_leader" then
@@ -93,7 +137,7 @@ local function build_args(spec, cmd, door)
         end
         args[i] = value
     end
-    return args, #spec.args, table.concat(sent, ", ")
+    return args, #spec.args, table.concat(sent, ", "), classes
 end
 
 -- Runs one order. Returns a result table for state.json.
@@ -121,14 +165,18 @@ function orders.execute(cmd)
         if not target then error("could not find target '" .. tostring(spec.target) .. "'") end
         local fn = target[spec.fn]
         if not fn then error(string.format("%s has no function %s", game.object_name(target), spec.fn)) end
-        local args, count
-        args, count, sent = build_args(spec, cmd, door)
-        fn(target, table.unpack(args, 1, count))
+        local args, count, classes
+        args, count, sent, classes = build_args(spec, cmd, door)
+        class_args, class_report = (next(classes) and classes or nil), nil
+        local call_ok, call_err = pcall(fn, target, table.unpack(args, 1, count))
+        class_args = nil
+        if not call_ok then error(call_err, 0) end
     end)
 
     if ok then
         result.status = "ok"
         if sent ~= "" then result.sent = "sent " .. sent end
+        if class_report then result.sent = (result.sent or "") .. " | set in call: " .. class_report end
         log.info(string.format("order %d: %s %s %s", cmd.id, cmd.team, cmd.action, result.sent or ""))
         if door and CHECKED_ACTIONS[cmd.action] then
             pending_checks[#pending_checks + 1] = { result = result, team = cmd.team, door = door, ticks = CHECK_MAX_TICKS }

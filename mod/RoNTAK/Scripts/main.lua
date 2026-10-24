@@ -96,6 +96,8 @@ bind(config.keys.discovery_dump, discovery.dump)
 bind(config.keys.sniff_toggle, discovery.toggle_sniff)
 bind(config.keys.test_order, test_order)
 
+orders.install_class_hooks()
+
 LoopAsync(config.tick_ms, function()
     ExecuteInGameThread(safe_tick)
     return false -- keep looping
