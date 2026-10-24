@@ -264,21 +264,24 @@ class ModTest(unittest.TestCase):
 
     def test_hook_writes_item_classes_the_call_dropped(self):
         self.lua.execute("drop_class_args = true")
+        self.lua.execute("logged = {} print = function(s) logged[#logged + 1] = s end")
         state = self.run_orders(self.order(1, "red", "breach_clear", {"door": "Door_C_7"},
                                            {"breach": "c2", "grenade": "flashbang"}))
         fn, args = self.call(1)
         self.assertEqual(args[4]["name"], "Flashbang")
         self.assertEqual(args[5]["name"], "C2")
-        self.assertIn("set in call: arg 5 stale -> Flashbang, arg 6 stale -> C2", state["results"][0]["sent"])
+        log = "\n".join(self.lua.globals().logged.values())
+        self.assertIn("set in call: arg 5 stale -> Flashbang, arg 6 stale -> C2", log)
+        self.assertNotIn("message", state["results"][0])  # nothing to show on ATAK when all is well
 
-    def test_breach_order_reports_what_the_game_assigned(self):
+    def test_breach_order_logs_what_the_game_assigned(self):
         self.lua.execute('objects.CyberneticsSwat_V2_C[1].Controller = controller_with_throw(objects.Door[1], "BP_Flashbang_C")')
+        self.lua.execute("logged = {} print = function(s) logged[#logged + 1] = s end")
         state = self.run_orders(self.order(1, "red", "breach_clear", {"door": "Door_C_7"},
                                            {"breach": "kick", "grenade": "flashbang"}))
-        self.assertEqual(state["results"][0]["message"],
-                         "sent grenade Flashbang, breach item none"
-                         " | set in call: arg 5 Flashbang -> Flashbang | "
-                         "game assigned: Swat_C_1 ThrowGrenadeThroughDoor: BP_Flashbang_C")
+        log = "\n".join(self.lua.globals().logged.values())
+        self.assertIn("order 1: game assigned Swat_C_1 ThrowGrenadeThroughDoor: BP_Flashbang_C", log)
+        self.assertNotIn("message", state["results"][0])
 
     def test_breach_check_when_nobody_assigned(self):
         state = self.run_orders(self.order(1, "blue", "breach_clear", {"door": "Door_C_7"}, {"breach": "kick"}))
@@ -287,7 +290,7 @@ class ModTest(unittest.TestCase):
         self.assertNotIn("message", state["results"][0])  # still watching
         for _ in range(2):
             state = self.tick()
-        self.assertIn("no officer got a door job within 20 s", state["results"][0]["message"])
+        self.assertEqual(state["results"][0]["message"], "the team did not start the breach within 20 s")
 
     def test_activity_dump(self):
         self.lua.execute('objects.CyberneticsSwat_V2_C[1].Controller = controller_with_throw(objects.Door[1], "BP_Flashbang_C")')
