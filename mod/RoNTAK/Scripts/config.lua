@@ -64,7 +64,7 @@ config.doors = {
 ---------------------------------------------------------------------------
 
 -- Team id -> value passed as the "$team" argument.
-config.team_args = { gold = 0, red = 1, blue = 2 }                  -- UNVERIFIED
+config.team_args = { red = 1, blue = 2, gold = 5 }                 -- confirmed by sniffer
 
 -- Breach option id -> value passed as "$breach".
 config.breach_args = {                                              -- UNVERIFIED
@@ -120,38 +120,37 @@ config.discovery_keywords = {
 
 -- Full function paths to hook with the F9 sniffer, copied from discovery.txt.
 -- Example: "/Script/ReadyOrNot.SomeClass:SomeFunction"
--- SWATManager has a Give...Command function for every order; the sniffer shows
--- which arguments the command wheel passes to them.
+-- Only OnCommandIssued fires when using the command wheel: the SWATManager
+-- Give...Command functions are called from C++ and cannot be hooked (they can
+-- still be called by the mod). Its SwatCommand argument is expanded field by field.
 config.sniff = {
+    "/Script/ReadyOrNot.SwatCommandWidget:OnCommandIssued",
+    "/Script/ReadyOrNot.ReadyOrNotCommandFunctionLibrary:RespondToSWATCommand",
+}
+
+-- Functions whose parameters (and the enum values they use) the F8 dump writes
+-- to signatures.txt.
+config.signatures = {
+    "/Script/ReadyOrNot.SWATManager:GiveStackUpCommand",
     "/Script/ReadyOrNot.SWATManager:GiveBreachAndClearCommand",
-    "/Script/ReadyOrNot.SWATManager:GiveCheckForContactsCommand",
-    "/Script/ReadyOrNot.SWATManager:GiveCheckForTrapsCommand",
+    "/Script/ReadyOrNot.SWATManager:GiveOpenDoorCommand",
+    "/Script/ReadyOrNot.SWATManager:GiveScanDoorCommand",
+    "/Script/ReadyOrNot.SWATManager:GiveWedgeDoorCommand",
+    "/Script/ReadyOrNot.SWATManager:GivePickLockCommand",
     "/Script/ReadyOrNot.SWATManager:GiveCloseDoorCommand",
-    "/Script/ReadyOrNot.SWATManager:GiveCollectEvidenceCommand",
-    "/Script/ReadyOrNot.SWATManager:GiveCoverAreaCommand",
-    "/Script/ReadyOrNot.SWATManager:GiveDeployGrenadeAtLocation",
-    "/Script/ReadyOrNot.SWATManager:GiveDeployNonLethalItemAtTargetCommand",
-    "/Script/ReadyOrNot.SWATManager:GiveDeployShield",
-    "/Script/ReadyOrNot.SWATManager:GiveDisarmStandaloneTrapCommand",
-    "/Script/ReadyOrNot.SWATManager:GiveDisarmTrapOnDoorCommand",
-    "/Script/ReadyOrNot.SWATManager:GiveDropChemlightAtLocation",
+    "/Script/ReadyOrNot.SWATManager:GiveMoveCommand",
     "/Script/ReadyOrNot.SWATManager:GiveFallInCommand",
     "/Script/ReadyOrNot.SWATManager:GiveHoldCommand",
-    "/Script/ReadyOrNot.SWATManager:GiveMoveCommand",
-    "/Script/ReadyOrNot.SWATManager:GiveOpenDoorCommand",
-    "/Script/ReadyOrNot.SWATManager:GivePickLockCommand",
-    "/Script/ReadyOrNot.SWATManager:GiveRemoveWedgeCommand",
-    "/Script/ReadyOrNot.SWATManager:GiveReportTargetCommand",
-    "/Script/ReadyOrNot.SWATManager:GiveRestrainCommand",
-    "/Script/ReadyOrNot.SWATManager:GiveScanDoorCommand",
-    "/Script/ReadyOrNot.SWATManager:GiveSearchAndSecureCommand",
-    "/Script/ReadyOrNot.SWATManager:GiveSearchAndSecureCommand_Individual",
-    "/Script/ReadyOrNot.SWATManager:GiveStackUpCommand",
-    "/Script/ReadyOrNot.SWATManager:GiveWedgeDoorCommand",
     "/Script/ReadyOrNot.SWATManager:RemoveHoldCommand",
+    "/Script/ReadyOrNot.SWATManager:GiveSearchAndSecureCommand",
+    "/Script/ReadyOrNot.SWATManager:GiveCoverAreaCommand",
+    "/Script/ReadyOrNot.SWATManager:GiveDeployGrenadeAtLocation",
+    "/Script/ReadyOrNot.SWATManager:GetSwatTeam",
+    "/Script/ReadyOrNot.SWATManager:GetSwatCharacterAtSquadPosition",
     "/Script/ReadyOrNot.SwatCommandWidget:DoCommand",
     "/Script/ReadyOrNot.SwatCommandWidget:OnCommandIssued",
     "/Script/ReadyOrNot.ReadyOrNotCommandFunctionLibrary:RespondToSWATCommand",
+    "/Script/ReadyOrNot.ReadyOrNotCharacter:GetTeam",
 }
 
 -- Values printed with every sniffed call, to see which team the wheel had selected.
