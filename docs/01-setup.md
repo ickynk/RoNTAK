@@ -59,12 +59,14 @@ You'll install UE4SS (the mod loader), copy in the RoNTAK mod, and start the com
 2. The server prints an address like `http://192.168.1.20:8080`. Open it on a phone on the same Wi-Fi.
 3. If it won't load, allow Python through Windows Firewall on **Private** networks when Windows asks.
 
-## What you'll see at this point
+## What you'll see
 
-Before you complete [02-discovery](02-discovery.md), expect:
+- **The map:** your arrow, your officers (red and blue dots), and the doors (yellow closed, green open,
+  orange known-locked) move live while you're in a mission.
+- **Orders:** pick a team, tap a door, room, or spot, choose an order, and press the big button. Options your
+  team has no gear for are greyed out.
+- **No floor plan yet:** until you add one, markers sit on a dark grid. See [03-maps.md](03-maps.md).
 
-- **Your own marker should move.** It uses standard Unreal names, so it should work right away.
-- **Officers and doors may not show yet.** Their class names in `config.lua` are guesses until you confirm them.
-- **Orders will say "NOT CONFIGURED".** That's expected until you fill in `config.actions`.
+If something doesn't work after a game update, see [02-discovery.md](02-discovery.md).
 
-Next: [02-discovery.md](02-discovery.md)
+Next: [03-maps.md](03-maps.md)

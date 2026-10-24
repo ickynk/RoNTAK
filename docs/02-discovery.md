@@ -1,147 +1,76 @@
-# 2. Find the game's names and fill in config.lua
+# 2. After a game update: finding the game's names again
 
-The mod needs four things that only exist inside your copy of the game:
+`config.lua` ships with every value already filled in and tested. You only need this guide if a Ready or Not
+update breaks something, such as officers missing from the map or an order that stops working.
 
-| What | Where it goes in `config.lua` |
-| --- | --- |
-| The class of AI officers, and the property that holds their team | `config.officers` |
-| The class of doors | `config.doors` |
-| The function the game calls when you give an order | `config.actions` |
-| The number values the game uses for teams, breach types, and so on | `config.team_args`, `config.breach_args`, … |
+All game-specific names live in `mod\RoNTAK\Scripts\config.lua`. After every edit, restart the game so the mod
+reloads it.
 
-Two in-game hotkeys find them for you:
+## The tools
 
-- **F8**: dump. Lists matching classes, their properties, and functions into `bridge\discovery.txt`.
-- **F9**: sniffer. Records which functions fire while you use the normal command wheel, into `bridge\sniff.txt`.
+| Key | What it does | Output |
+| --- | --- | --- |
+| **F6** | The level's map data: planning-map calibration, floor textures, floor heights | `bridge\mapinfo.json` |
+| **F7** | Every officer's current door job: which door, which item | `bridge\activities.txt` and the console |
+| **F8** | Lists game classes (with live counts and properties) and functions | `bridge\discovery.txt` |
+| **F9** | Start/stop logging calls to the functions in `config.sniff` | `bridge\sniff.txt` and the console |
+| **F10** | Sends `config.test_order` (GOLD Fall In) through the normal order path | console |
 
-After every edit to `config.lua`, restart the game so the mod reloads it.
+The UE4SS **header dump** is the most useful tool. In a mission, open the UE4SS console window, go to the
+**Dumpers** tab and click **Dump CXX Headers**. A `CXXHeaderDump` folder appears next to the UE4SS files. The two
+files that matter are:
 
----
+- `ReadyOrNot.hpp`: every class, its properties, and every function with its exact parameters
+- `ReadyOrNot_enums.hpp`: the number behind every option name
 
-## Part A: Officers and doors
+## Officers or doors missing from the map
 
-1. Start a mission with your AI team, and wait until you're in control.
-2. Press **F8**. The game may freeze for a few seconds while it scans.
-3. Open `Mods\RoNTAK\bridge\discovery.txt` in Notepad. The top section looks like this (example):
-   ```
-       5  SWATCharacter
-            . TeamId (EnumProperty)
-            . Health (FloatProperty)
-       0  SWATCommandWidget
-      41  Door
-   ```
-   The number is **how many exist right now**.
-4. **Officer class:** pick the class whose count equals your number of AI officers. It may be one higher if your
-   own character uses the same class; the mod skips you automatically. Put its name in
-   `config.officers.classes = { "ThatName" }`.
-5. **Team property:** under that class, look for a property with *team*, *squad*, or *element* in its name.
-   Put it in `config.officers.team_property = "ThatName"`.
-6. **Team values:** restart the game and open the ATAK screen. The roster shows each officer's team. If red
-   and blue are swapped, or show as UNKNOWN, adjust the numbers in `config.officers.team_values`.
-7. **Door class:** pick the class whose count roughly matches the number of doors in the level. Put it in
+1. In a mission, press **F8** and open `bridge\discovery.txt`. The number before each class is how many exist
+   right now.
+2. **Officers:** find the class whose count matches your AI team (it was `CyberneticsSwat_V2_C`, 4 live) and put
+   it in `config.officers.classes`.
+3. **Team colors:** officers are colored by their `SquadPosition` (0 Alpha, 1 Beta, 2 Charlie, 3 Delta). If
+   RED and BLUE show swapped, swap `"red"` and `"blue"` in `config.officers.team_values`.
+4. **Doors:** find the class whose count matches the doors in the level (it was `Door`, 32 live) and put it in
    `config.doors.classes`.
-8. Restart the game. Officers and yellow door markers should now appear on the ATAK map.
 
-> If a class has properties for the officer's name or health, put them in `name_property` and
-> `health_property` to show them in the roster.
+## An order stops working
 
----
+1. Look at the order on the ATAK screen. **ERROR** comes with a reason, such as a missing function or a
+   missing door.
+2. Search `ReadyOrNot.hpp` for the function named in `config.actions` (for example `GiveStackUpCommand`) and
+   compare its parameters with the `args` list. The comment above `config.actions` lists the signatures the
+   mod was built against.
+3. Check the option numbers (`config.team_args`, `breach_args`, `side_args`, and so on) against
+   `ReadyOrNot_enums.hpp`, for example `enum class ETeamType` or `enum class EDoorBreachType`.
 
-## Part B: Orders
+## Breaches start but the grenade or breaching tool is wrong
 
-This is the most important part. You'll record what the game does when *you* give an order with the normal
-command wheel, then tell RoNTAK to do the same thing.
+The UE4SS console log shows, for each breach order, the item classes the mod sent, what was written into the
+call, and which officer the game gave the job. For example:
 
-### B1: Choose functions to watch
-
-1. In `discovery.txt`, scroll to the **Functions** section.
-2. Copy every line that looks like it issues orders. Look for words like `Order`, `Command`, `Issue`, `Stack`,
-   `Breach`, `Clear`, `Team`, or `Swat`. When unsure, include it; 20 to 50 is fine.
-3. Paste them into `config.sniff` **without** the leading `Function `, each in quotes and followed by a comma:
-   ```lua
-   config.sniff = {
-       "/Script/ReadyOrNot.SomeClass:SomeOrderFunction",
-       "/Script/ReadyOrNot.OtherClass:AnotherFunction",
-   }
-   ```
-4. Restart the game.
-
-### B2: Record orders
-
-1. In a mission, press **F9**. The console says `sniffer started on N functions`.
-2. Use the in-game command wheel to give **one** order, for example RED → Stack Up on a door.
-3. Watch the console. Lines like this appear:
-   ```
-   sniff: /Script/ReadyOrNot.X:IssueOrder  self=… PlayerController_C …  args=[1, …Door_C_12, 0]
-   ```
-4. Give a few more orders, changing **one thing at a time**: same order but BLUE, then GOLD; different breach
-   types; different grenades. This reveals which number means which team or option.
-5. Press **F9** again to stop. Everything is saved to `bridge\sniff.txt`.
-
-> If too many lines appear (functions firing every frame), remove those functions from `config.sniff` and
-> try again.
-
-### B3: Fill in config.actions
-
-For each order, write down from the sniff lines:
-
-- the **function name**: the part after `:` in the path
-- **what `self` was**: your PlayerController, your character, the door, or some manager object
-- **the arguments in order**
-
-Then edit that action. Example: the sniffer showed
-`/Script/ReadyOrNot.SWATManager:IssueTeamOrder self=SWATManager args=[1, Door_C_12, 3, 1]`
-for RED → Breach & Clear → C2 → Flashbang. The action becomes:
-
-```lua
-breach_clear = { target = "SWATManager", fn = "IssueTeamOrder", args = { "$team", "$door", "$breach", "$grenade" } },
+```
+order 12: red breach_clear sent grenade Grenade_Flashbang_V2_C, breach item none | set in call: arg 5 null -> Grenade_Flashbang_V2_C, arg 6 null -> null
+order 12: game assigned CyberneticsSwat_V2_C_2147443415 ThrowGrenadeThroughDoor: Grenade_Flashbang_V2_C
 ```
 
-These names are an **illustration only**. Use what your sniffer shows.
+What we learned getting this working:
 
-- `target`: `"player_controller"`, `"player_pawn"`, `"door"`, or the class name of whatever `self` was.
-- Placeholders: `$team $door $location $breach $grenade $side`. Any other value is passed as-is.
-- Then set the numbers you observed in `config.team_args`, `config.breach_args`, `config.grenade_args`,
-  and `config.side_args`. Example: if RED sent `1` and BLUE sent `2`, set `red = 1, blue = 2`.
+- UE4SS does not pass item class arguments (`TSubclassOf`) when Lua calls a game function. The mod writes them
+  from a hook instead (`config.class_arg_hooks`). Leave that in place.
+- In `GiveBreachAndClearCommand`, argument 5 is the item thrown through the door and argument 6 is the
+  breaching tool. That's the reverse of their names in the header dump. If grenades stop being thrown after an
+  update, try swapping `"$grenade_item"` and `"$breach_item"` in `BREACH_ARGS`.
+- To compare with the game's own behavior, give the same breach with the command wheel and press **F7** when
+  the officer throws. `activities.txt` shows the item the game uses (for example
+  `ThrowGrenadeThroughDoor door=BP_Door_New15 item=Grenade_Flashbang_V2_C`).
 
-### B4: Test without the ATAK screen
+## Watching functions (F9)
 
-1. Set `config.test_order` to the order you configured.
-2. Restart the game, stand near a door, and press **F10**.
-3. The console prints `test order: ok` and your team should move. If you get an error instead, it names the
-   missing piece.
+Put full function paths from `discovery.txt` or the header dump into `config.sniff`, without the leading
+`Function `. Press **F9**, give orders, and press **F9** again. Each call is logged with its arguments.
 
-Then try the same order from the ATAK screen. The order list shows **OK**, **ERROR** (with the reason), or
-**NOT CONFIGURED**.
-
----
-
-## Get exact function parameters (header dump)
-
-Some order functions are called from the game's C++ code, so the sniffer never sees them. In Ready or Not
-this includes all the `SWATManager:Give...Command` functions. The mod can still call them; it just needs
-their exact parameters. UE4SS can write them out:
-
-1. Start a mission, so everything is loaded.
-2. In the UE4SS console window, open the **Dumpers** tab and click **Dump CXX Headers**. The game freezes
-   for a little while.
-3. A `CXXHeaderDump` folder appears next to the UE4SS files (in `Win64` or `Win64\ue4ss`).
-4. The files that matter are `ReadyOrNot.hpp` (classes and functions) and `ReadyOrNot_enums.hpp`
-   (the number behind every option name).
-
-Search `ReadyOrNot.hpp` for `GiveStackUpCommand` to see its parameters.
-
-## If the sniffer never shows an order
-
-Some games process orders in C++ code that isn't exposed as a function UE4SS can hook. Try these, in order:
-
-1. Hook the **command menu widget's** functions. Search `discovery.txt` for classes with `Widget`, `Menu`,
-   or `Wheel`, and sniff their functions. Menu buttons usually end in exposed functions.
-2. Use UE4SS's **Live View** tab in the console window to browse the objects and functions of your
-   officers and controller while in a mission.
-3. Use **Dump CXX Headers** in the UE4SS console to generate full header files for the game, and search
-   them for `Order`.
-
-If you get stuck, share the relevant `sniff.txt` / `discovery.txt` lines and I can help map them.
-
-Next: [03-maps.md](03-maps.md)
+- When you use the command wheel, most order functions do **not** show up, because the game calls them
+  directly from C++. `SwatCommandWidget:OnCommandIssued` does show up.
+- Orders sent by RoNTAK **do** show up, so sniffing a `SWATManager` function shows exactly what the mod passed.
+- Don't sniff functions that run every frame; the log floods and the game slows down.

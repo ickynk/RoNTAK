@@ -6,6 +6,7 @@ local config = require("config")
 local discovery = require("discovery")
 local game = require("game")
 local log = require("log")
+local mapinfo = require("mapinfo")
 local orders = require("orders")
 
 local MAX_RESULTS = 30
@@ -104,6 +105,7 @@ local function activity_dump()
     for _, line in ipairs(lines) do log.info(line) end
 end
 
+bind(config.keys.map_info, mapinfo.dump)
 bind(config.keys.activity_dump, activity_dump)
 bind(config.keys.discovery_dump, discovery.dump)
 bind(config.keys.sniff_toggle, discovery.toggle_sniff)

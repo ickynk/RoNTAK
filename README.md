@@ -25,19 +25,19 @@ An ATAK-style tactical map and team orders mod for **Ready or Not**.
    It needs nothing installed except Python.
 
 All game-specific names (classes, functions, enum values) are in **one file**: `mod/RoNTAK/Scripts/config.lua`.
-Ready or Not's internals are not publicly documented, so the mod includes tools to find these names on your
-own install (F8 / F9 in game). See [docs/02-discovery.md](docs/02-discovery.md).
+It ships filled in and tested. If a game update breaks something, the mod has tools to find the new names
+(F7 / F8 / F9 in game); see [docs/02-discovery.md](docs/02-discovery.md).
 
 ## Project status
 
+**v0.1**: all orders tested in game (October 2026).
+
 | Part | Status |
 | --- | --- |
-| ATAK interface (map, teams, orders, calibration, room drawing) | Done; tested against the simulated game |
-| Companion server and file bridge | Done; tested |
-| Mod: tracking, order dispatch, discovery and sniffer tools | Done; tested against a fake UE4SS. **Not yet run in the real game** |
-| Game class/function names in `config.lua` | **To find on your PC** (docs/02) |
-| Floor plans for each level | **To add** (docs/03) |
-| Drawing the map on the in-game ATAK device itself | Phase 2 (docs/04) |
+| Live map: player, officers by team, doors with open / locked state | Working in game |
+| Orders: stack up, breach / open / move & clear with breaching tools and grenades, mirror, wedge, move, fall in, hold, search & secure | Working in game |
+| Gear-aware options (counts, greyed-out options) | Working in game |
+| Floor plans | Manual for now (docs/03); automatic floor plans from the game's planning map are in progress |
 
 ## Try it now (no game needed)
 
@@ -56,9 +56,9 @@ own install (F8 / F9 in game). See [docs/02-discovery.md](docs/02-discovery.md).
 Follow the guides in order:
 
 1. [docs/01-setup.md](docs/01-setup.md): install UE4SS and the mod, start the companion
-2. [docs/02-discovery.md](docs/02-discovery.md): find the game's names and fill in `config.lua`
-3. [docs/03-maps.md](docs/03-maps.md): add floor plans and rooms for each level
-4. [docs/04-in-game-device.md](docs/04-in-game-device.md): Phase 2, show it on the in-game ATAK
+2. [docs/03-maps.md](docs/03-maps.md): add floor plans and rooms for each level
+
+If a game update breaks something: [docs/02-discovery.md](docs/02-discovery.md).
 
 ## Running the tests
 

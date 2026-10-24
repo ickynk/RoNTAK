@@ -1,10 +1,10 @@
 -- RoNTAK configuration.
 --
--- Everything that depends on Ready or Not's internals lives in this file.
--- The game's class/function/property names are NOT publicly documented, so the
--- values marked "UNVERIFIED" below are starting guesses. Use the discovery
--- tools (F8 / F9, see docs/02-discovery.md) to find the real names on your
--- install, then edit this file. You never need to touch the other scripts.
+-- Everything that depends on Ready or Not's internals lives in this file. The
+-- values below were found with the UE4SS header dump and the discovery tools
+-- and tested in game (October 2026, Unreal Engine 5 build of Ready or Not).
+-- If a game update breaks something, docs/02-discovery.md explains how to find
+-- the new names. You never need to touch the other scripts.
 
 local config = {}
 
@@ -20,6 +20,7 @@ config.verbose = false
 
 -- Hotkeys (UE4SS Key names). Set any to nil to disable it.
 config.keys = {
+    map_info       = "F6",   -- write the level's map data to bridge/mapinfo.json
     activity_dump  = "F7",   -- write every officer's door jobs to bridge/activities.txt
     discovery_dump = "F8",   -- write candidate classes/functions to bridge/discovery.txt
     sniff_toggle   = "F9",   -- start/stop logging calls to config.sniff functions
@@ -184,12 +185,11 @@ config.discovery_keywords = {
 
 -- Full function paths to hook with the F9 sniffer, copied from discovery.txt.
 -- Example: "/Script/ReadyOrNot.SomeClass:SomeFunction"
--- Only OnCommandIssued fires when using the command wheel: the SWATManager
--- Give...Command functions are called from C++ and cannot be hooked (they can
--- still be called by the mod). Do not try to read the SwatCommand struct inside
--- a hook: that crashed the game.
--- The mod's own calls to SWATManager do go through the hookable path, so
--- sniffing them shows the arguments exactly as the game received them.
+-- For troubleshooting only. When you use the command wheel only
+-- OnCommandIssued fires (SWATManager is called from C++). The mod's own calls
+-- to SWATManager do pass through the hook, so sniffing them shows the
+-- arguments as the game received them. Do not read the SwatCommand struct
+-- inside a hook: that crashed the game.
 config.sniff = {
     "/Script/ReadyOrNot.SWATManager:GiveBreachAndClearCommand",
     "/Script/ReadyOrNot.SwatCommandWidget:OnCommandIssued",

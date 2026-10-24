@@ -177,9 +177,10 @@ function orders.execute(cmd)
 
     if ok then
         result.status = "ok"
-        if sent ~= "" then result.sent = "sent " .. sent end
-        if class_report then result.sent = (result.sent or "") .. " | set in call: " .. class_report end
-        log.info(string.format("order %d: %s %s %s", cmd.id, cmd.team, cmd.action, result.sent or ""))
+        -- Details for troubleshooting go to the UE4SS log, not the ATAK screen.
+        local detail = sent ~= "" and ("sent " .. sent) or ""
+        if class_report then detail = detail .. " | set in call: " .. class_report end
+        log.info(string.format("order %d: %s %s %s", cmd.id, cmd.team, cmd.action, detail))
         if door and CHECKED_ACTIONS[cmd.action] then
             pending_checks[#pending_checks + 1] = { result = result, team = cmd.team, door = door, ticks = CHECK_MAX_TICKS }
         end
@@ -197,12 +198,16 @@ function orders.run_checks()
         local check = pending_checks[i]
         check.ticks = check.ticks - 1
         local ok, text = pcall(game.describe_door_activities, check.team, check.door)
-        if not ok then text = "check failed: " .. tostring(text) end
-        if text or check.ticks <= 0 then
+        if not ok then
             table.remove(pending_checks, i)
-            check.result.message = (check.result.sent and (check.result.sent .. " | ") or "") .. "game assigned: "
-                .. (text or "no officer got a door job within 20 s (press F7 during the breach)")
-            log.info(string.format("order %d check: %s", check.result.id, check.result.message))
+            log.error(string.format("order %d check failed: %s", check.result.id, tostring(text)))
+        elseif text then
+            table.remove(pending_checks, i)
+            log.info(string.format("order %d: game assigned %s", check.result.id, text))
+        elseif check.ticks <= 0 then
+            table.remove(pending_checks, i)
+            check.result.message = "the team did not start the breach within 20 s"
+            log.info(string.format("order %d: %s (F7 shows every officer's door job)", check.result.id, check.result.message))
         end
     end
 end
