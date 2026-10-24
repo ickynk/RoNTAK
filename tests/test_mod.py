@@ -54,7 +54,10 @@ end
 local function inventory(items)
     local objs = {}
     for _, entry in ipairs(items) do
-        classes[entry[1]] = classes[entry[1]] or { name = entry[1] }
+        classes[entry[1]] = classes[entry[1]] or {
+            name = entry[1],
+            GetFullName = function() return "BlueprintGeneratedClass /Game/Items/" .. entry[1] end,
+        }
         local class = classes[entry[1]]
         objs[#objs + 1] = {
             IsValid = function() return true end,
@@ -233,6 +236,7 @@ class ModTest(unittest.TestCase):
         state = self.run_orders(self.order(1, "red", "breach_clear", {"door": "Door_C_7"},
                                            {"breach": "kick", "grenade": "flashbang"}))
         self.assertEqual(state["results"][0]["message"],
+                         "sent breach item none, grenade BlueprintGeneratedClass /Game/Items/Flashbang | "
                          "game assigned: Swat_C_1 ThrowGrenadeThroughDoor: BP_Flashbang_C")
 
     def test_breach_check_when_nobody_assigned(self):

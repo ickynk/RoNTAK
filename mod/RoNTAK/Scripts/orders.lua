@@ -29,9 +29,17 @@ local function vector(v)
     return { X = v.x, Y = v.y, Z = v.z or 0 }
 end
 
+local function name_of(obj)
+    if obj == nil then return "none" end
+    local ok, name = pcall(function() return obj:GetFullName() end)
+    return ok and name or tostring(obj)
+end
+
 -- Fills in the "$" placeholders of an action's argument list. Returns the
--- arguments and their count (some, like $breach_item, can be nil).
+-- arguments, their count (some, like $breach_item, can be nil) and a note
+-- naming the item classes sent.
 local function build_args(spec, cmd, door)
+    local sent = {}
     local options = {}
     for k, v in pairs(cmd.options or {}) do options[k] = v end
     for k, v in pairs(spec.options or {}) do options[k] = v end
@@ -66,6 +74,7 @@ local function build_args(spec, cmd, door)
                 value = game.team_item_class(cmd.team, category)
                 if not value then error("no officer on " .. cmd.team .. " carries the " .. breach .. " item") end
             end
+            sent[#sent + 1] = "breach item " .. name_of(value)
         elseif arg == "$grenade_item" then
             local grenade = options.grenade or "none"
             value = no_object()
@@ -74,6 +83,7 @@ local function build_args(spec, cmd, door)
                 value = game.team_item_class(cmd.team, category)
                 if not value then error("no officer on " .. cmd.team .. " carries a " .. grenade) end
             end
+            sent[#sent + 1] = "grenade " .. name_of(value)
         elseif arg == "$side" then
             value = lookup("side_args", options.side or "auto")
         elseif arg == "$with_leader" then
@@ -83,7 +93,7 @@ local function build_args(spec, cmd, door)
         end
         args[i] = value
     end
-    return args, #spec.args
+    return args, #spec.args, table.concat(sent, ", ")
 end
 
 -- Runs one order. Returns a result table for state.json.
@@ -100,7 +110,7 @@ function orders.execute(cmd)
         return result
     end
 
-    local door = nil
+    local door, sent = nil, ""
     local ok, err = pcall(function()
         local door_id = cmd.target and cmd.target.door
         if door_id then
@@ -111,13 +121,15 @@ function orders.execute(cmd)
         if not target then error("could not find target '" .. tostring(spec.target) .. "'") end
         local fn = target[spec.fn]
         if not fn then error(string.format("%s has no function %s", game.object_name(target), spec.fn)) end
-        local args, count = build_args(spec, cmd, door)
+        local args, count
+        args, count, sent = build_args(spec, cmd, door)
         fn(target, table.unpack(args, 1, count))
     end)
 
     if ok then
         result.status = "ok"
-        log.info(string.format("order %d: %s %s", cmd.id, cmd.team, cmd.action))
+        if sent ~= "" then result.sent = "sent " .. sent end
+        log.info(string.format("order %d: %s %s %s", cmd.id, cmd.team, cmd.action, result.sent or ""))
         if door and CHECKED_ACTIONS[cmd.action] then
             pending_checks[#pending_checks + 1] = { result = result, team = cmd.team, door = door, ticks = CHECK_MAX_TICKS }
         end
@@ -138,7 +150,8 @@ function orders.run_checks()
         if not ok then text = "check failed: " .. tostring(text) end
         if text or check.ticks <= 0 then
             table.remove(pending_checks, i)
-            check.result.message = "game assigned: " .. (text or "no officer got a door job within 20 s (press F7 during the breach)")
+            check.result.message = (check.result.sent and (check.result.sent .. " | ") or "") .. "game assigned: "
+                .. (text or "no officer got a door job within 20 s (press F7 during the breach)")
             log.info(string.format("order %d check: %s", check.result.id, check.result.message))
         end
     end

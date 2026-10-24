@@ -175,7 +175,10 @@ config.discovery_keywords = {
 -- Give...Command functions are called from C++ and cannot be hooked (they can
 -- still be called by the mod). Do not try to read the SwatCommand struct inside
 -- a hook: that crashed the game.
+-- The mod's own calls to SWATManager do go through the hookable path, so
+-- sniffing them shows the arguments exactly as the game received them.
 config.sniff = {
+    "/Script/ReadyOrNot.SWATManager:GiveBreachAndClearCommand",
     "/Script/ReadyOrNot.SwatCommandWidget:OnCommandIssued",
     "/Script/ReadyOrNot.ReadyOrNotCommandFunctionLibrary:RespondToSWATCommand",
 }
