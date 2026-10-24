@@ -27,18 +27,25 @@ local function vec3(v)
     return ok and r or nil
 end
 
--- Asset path of a TSoftObjectPtr. UE4SS exposes these differently between
--- versions, so several ways are tried; the one that worked is reported too.
+-- Asset path of a TSoftObjectPtr. Returns the path (or nil) and how it was
+-- found. UE4SS hands these back as an object wrapper that is empty while the
+-- asset is not loaded, so check that first instead of calling methods on an
+-- empty object (UE4SS logs an error for each such call).
 local function soft_path(value)
-    if value == nil then return nil end
+    if value == nil then return nil, "nil" end
+    local valid_ok, is_valid = pcall(function() return value:IsValid() end)
+    if valid_ok and is_valid == false then return nil, "not loaded" end
+    if valid_ok and is_valid == true then
+        local ok, name = pcall(function() return value:GetFullName() end)
+        if ok and name then return tostring(name), "loaded object" end
+    end
     local attempts = {
-        { "ToString", function() return value:ToString() end },
         { "AssetPath", function()
             local p = value.SoftObjectPtr.ObjectID.AssetPath
             return p.PackageName:ToString() .. "." .. p.AssetName:ToString()
         end },
         { "AssetPathName", function() return value.SoftObjectPtr.ObjectID.AssetPathName:ToString() end },
-        { "Get", function() return value:Get():GetFullName() end },
+        { "ToString", function() return value:ToString() end },
     }
     for _, attempt in ipairs(attempts) do
         local ok, s = pcall(attempt[2])
@@ -46,7 +53,7 @@ local function soft_path(value)
             return s, attempt[1]
         end
     end
-    return nil, "none worked"
+    return nil, "unreadable (" .. type(value) .. ")"
 end
 
 local function each(array, fn)
@@ -68,6 +75,7 @@ local function read_level_data(info)
     log.info("mapinfo: reading MapLayout")
     local layout = level.MapLayout
     local overview, method = soft_path(layout.MapOverviewTexture)
+    info.overview_texture_status = method
     info.map_layout = {
         origin = vec2(layout.MapOrigin),
         size = layout.MapSize,
@@ -83,6 +91,7 @@ local function read_level_data(info)
             full_name = text(floor.FloorFullName),
             short_name = text(floor.FloorShortName),
             layout_texture = (soft_path(floor.FloorLayout)),
+            layout_texture_status = select(2, soft_path(floor.FloorLayout)),
             floorplan_material = (soft_path(floor.FloorplanMaterial)),
         }
     end)

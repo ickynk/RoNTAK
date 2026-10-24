@@ -331,6 +331,22 @@ class ModTest(unittest.TestCase):
         self.assertEqual(info["floors"][0]["floor_map"], "/Game/Maps/T_F1.T_F1")
         self.assertEqual(info["buildings"][0]["floors"][0]["extent"], {"x": 1000, "y": 800, "z": 150})
 
+    def test_map_info_unloaded_texture(self):
+        self.lua.execute(r"""
+            local empty = { IsValid = function() return false end,
+                            ToString = function() error("Tried calling a member function but the UObject instance is nullptr") end }
+            objects.ReadyOrNotGameState = { {
+                IsValid = function() return true end,
+                LevelData = { MapLayout = { MapOrigin = { X = 1, Y = 2 }, MapSize = 3, MapOverviewTexture = empty },
+                              MapFloors = tarray({}), Floors = tarray({}) },
+            } }
+        """)
+        self.lua.execute('keybinds["F6"]()')
+        info = json.loads((self.bridge / "mapinfo.json").read_text())
+        self.assertEqual(info["errors"], [])
+        self.assertEqual(info["overview_texture_status"], "not loaded")
+        self.assertEqual(info["map_layout"]["size"], 3)
+
     def test_map_info_dump_without_game_state(self):
         self.lua.execute('keybinds["F6"]()')
         info = json.loads((self.bridge / "mapinfo.json").read_text())
