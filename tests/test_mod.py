@@ -39,7 +39,16 @@ objects = {
         actor("SWATCharacter_C_1", 100, 200, 0, 0, { TeamId = 0 }),
         actor("SWATCharacter_C_2", 150, 250, 0, 45, { TeamId = 1 }),
     },
-    Door = { actor("Door_C_7", 500, 0, 0, 90), actor("Door_C_8", 40, 30, 0, 0) },
+    Door = {
+        actor("Door_C_7", 500, 0, 0, 90, {
+            IsLocked = function() return true end,
+            GetSWATKnowsLockState = function() return true end,
+        }),
+        actor("Door_C_8", 40, 30, 0, 0, {
+            IsLocked = function() return true end,
+            GetSWATKnowsLockState = function() return false end,
+        }),
+    },
 }
 
 function FindAllOf(class) return objects[class] end
@@ -63,6 +72,7 @@ class ModTest(unittest.TestCase):
         lua.execute("print = function() end")
         config = lua.eval('(require("config"))')
         config.bridge_dir = str(self.bridge)
+        config.officers.classes = lua.table("SWATCharacter")
         config.officers.team_property = "TeamId"
         config.actions.stack_up.fn = "IssueOrder"
         lua.execute('require("main")')
@@ -80,7 +90,7 @@ class ModTest(unittest.TestCase):
         self.assertEqual(state["player"]["yaw"], 90)
         self.assertEqual([(o["id"], o["team"]) for o in state["officers"]],
                          [("SWATCharacter_C_1", "red"), ("SWATCharacter_C_2", "blue")])
-        self.assertEqual({d["id"] for d in state["doors"]}, {"Door_C_7", "Door_C_8"})
+        self.assertEqual({d["id"]: d.get("locked") for d in state["doors"]}, {"Door_C_7": True, "Door_C_8": None})
         self.assertEqual(state["configured_actions"], ["stack_up"])
 
     def test_orders_flow(self):
@@ -142,6 +152,34 @@ class DiscoveryTest(ModTest):
         self.assertIn("/Script/ReadyOrNot.SWATManager:IssueTeamOrder", text)
         self.assertNotIn("Lamp", text)
         self.assertNotIn("Actor:Tick", text)
+
+
+class SnifferTest(unittest.TestCase):
+    def test_logs_args_vectors_and_context(self):
+        bridge = Path(tempfile.mkdtemp())
+        lua = LuaRuntime(unpack_returned_tuples=True)
+        lua.execute(f'package.path = [[{SCRIPTS}/?.lua;]] .. package.path')
+        lua.execute(FAKE_UE4SS)
+        lua.execute("print = function() end")
+        lua.execute(r"""
+            hooks = {}
+            function RegisterHook(path, fn) hooks[path] = fn return 1, 2 end
+            function UnregisterHook() end
+            objects.SwatCommandWidget = { { IsValid = function() return true end, ActiveTeamType = 2 } }
+        """)
+        config = lua.eval('(require("config"))')
+        config.bridge_dir = str(bridge)
+        lua.execute('require("main")')
+        lua.execute(r"""
+            keybinds["F9"]()
+            local function param(v) return { get = function() return v end } end
+            hooks["/Script/ReadyOrNot.SWATManager:GiveMoveCommand"](param(objects.Door[1]), param(1), param({ X = 10, Y = 20, Z = 30 }))
+            keybinds["F9"]()
+        """)
+        text = (bridge / "sniff.txt").read_text()
+        self.assertIn("SWATManager:GiveMoveCommand", text)
+        self.assertIn("args=[1, (10, 20, 30)]", text)
+        self.assertIn("SwatCommandWidget.ActiveTeamType=2", text)
 
 
 class JsonTest(unittest.TestCase):

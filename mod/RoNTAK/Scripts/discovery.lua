@@ -93,7 +93,9 @@ local sniff_lines = {}
 local function describe(param)
     local ok, value = pcall(function() return param:get() end)
     if not ok then return "?" end
-    if type(value) == "userdata" then
+    if type(value) == "userdata" or type(value) == "table" then
+        local v_ok, v = pcall(function() return string.format("(%.0f, %.0f, %.0f)", value.X, value.Y, value.Z) end)
+        if v_ok then return v end
         local s_ok, s = pcall(function() return value:GetFullName() end)
         if s_ok then return s end
         s_ok, s = pcall(function() return value:ToString() end)
@@ -101,6 +103,20 @@ local function describe(param)
         return "<userdata>"
     end
     return tostring(value)
+end
+
+-- Extra values logged with every sniffed call, from config.sniff_context.
+local function context()
+    local parts = {}
+    for _, c in ipairs(config.sniff_context or {}) do
+        local value = "?"
+        pcall(function()
+            local obj = FindFirstOf(c.class)
+            if obj and obj:IsValid() then value = tostring(obj[c.property]) end
+        end)
+        parts[#parts + 1] = string.format("%s.%s=%s", c.class, c.property, value)
+    end
+    return table.concat(parts, " ")
 end
 
 local function flush_sniff()
@@ -124,7 +140,8 @@ function discovery.toggle_sniff()
         local ok, pre, post = pcall(RegisterHook, fn_path, function(self, ...)
             local args = {}
             for i, p in ipairs({ ... }) do args[i] = describe(p) end
-            local line = string.format("%s  self=%s  args=[%s]", fn_path, describe(self), table.concat(args, ", "))
+            local line = string.format("%s  self=%s  args=[%s]  %s",
+                fn_path, describe(self), table.concat(args, ", "), context())
             sniff_lines[#sniff_lines + 1] = line
             log.info("sniff: " .. line)
         end)

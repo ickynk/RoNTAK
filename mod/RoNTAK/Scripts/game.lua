@@ -37,6 +37,21 @@ local function read_property(obj, name)
     return plain(value)
 end
 
+-- Calls a no-argument function that returns a bool; nil if it is missing or fails.
+local function call_bool(obj, fn_name)
+    if not fn_name then return nil end
+    local ok, value = pcall(function() return obj[fn_name](obj) end)
+    if ok and type(value) == "boolean" then return value end
+    return nil
+end
+
+local function door_locked(door)
+    if call_bool(door, config.doors.lock_known_function) == false then return nil end
+    local locked = read_property(door, config.doors.locked_property)
+    if locked == nil then locked = call_bool(door, config.doors.locked_function) end
+    return locked
+end
+
 local function find_all(classes)
     for _, class_name in ipairs(classes) do
         local found = FindAllOf(class_name)
@@ -128,7 +143,7 @@ local function refresh_doors(level)
                     id = id,
                     pos = pos,
                     yaw = yaw(actor),
-                    locked = read_property(actor, config.doors.locked_property),
+                    locked = door_locked(actor),
                 }
             end
         end
