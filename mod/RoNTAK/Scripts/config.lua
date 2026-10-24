@@ -37,9 +37,9 @@ config.officers = {
     -- Property on the officer holding its team. SquadPosition is an
     -- ESquadPosition: 0 Alpha, 1 Beta, 2 Charlie, 3 Delta (from the header dump).
     team_property = "SquadPosition",
-    -- Which squad slot belongs to which team. UNVERIFIED: if RED and BLUE are
-    -- swapped on the ATAK map, swap "red" and "blue" here.
-    team_values = { [0] = "red", [1] = "red", [2] = "blue", [3] = "blue" },
+    -- Which squad slot belongs to which team (checked in game: Alpha and Beta
+    -- are BLUE, Charlie and Delta are RED).
+    team_values = { [0] = "blue", [1] = "blue", [2] = "red", [3] = "red" },
     -- Optional property with the officer's display name.
     name_property = nil,
     -- Optional property with health (number). Shown as a status bar.

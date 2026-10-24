@@ -62,9 +62,9 @@ objects = {
     PlayerController = { controller },
     SWATManager = { manager },
     CyberneticsSwat_V2_C = {
-        actor("Swat_C_1", 100, 200, 0, 0, { SquadPosition = 0,
+        actor("Swat_C_1", 100, 200, 0, 0, { SquadPosition = 2,
             InventoryComp = inventory({ [38] = { "C2", 1 }, [30] = { "Flashbang", 2 }, [33] = { "StingerEmpty", 0 } }) }),
-        actor("Swat_C_2", 150, 250, 0, 45, { SquadPosition = 2,
+        actor("Swat_C_2", 150, 250, 0, 45, { SquadPosition = 0,
             InventoryComp = inventory({ [33] = { "Stinger", 1 } }) }),
     },
     Door = {
