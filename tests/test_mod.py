@@ -13,7 +13,7 @@ SCRIPTS = ROOT / "mod" / "RoNTAK" / "Scripts"
 FAKE_UE4SS = r"""
 local function name(n) return { ToString = function() return n end } end
 
-local function actor(n, x, y, z, yaw, props)
+function actor(n, x, y, z, yaw, props)
     local a = props or {}
     a.IsValid = function() return true end
     a.GetFName = function() return name(n) end
@@ -73,7 +73,7 @@ local manager = setmetatable({ IsValid = function() return true end }, {
 
 classes = {}
 -- TArray stand-in: ForEach(fn) calls fn(index, element) with element:get().
-local function tarray(values)
+function tarray(values)
     return { ForEach = function(self, fn)
         for i, v in ipairs(values) do fn(i, { get = function() return v end }) end
     end }
@@ -136,7 +136,7 @@ objects = {
 
 function FindAllOf(class) return objects[class] end
 function FindFirstOf(class) return objects[class] and objects[class][1] end
-Key = { F7 = "F7", F8 = "F8", F9 = "F9", F10 = "F10" }
+Key = { F6 = "F6", F7 = "F7", F8 = "F8", F9 = "F9", F10 = "F10" }
 keybinds = {}
 function RegisterKeyBind(key, fn) keybinds[key] = fn end
 function ExecuteInGameThread(fn) fn() end
@@ -291,6 +291,50 @@ class ModTest(unittest.TestCase):
         for _ in range(2):
             state = self.tick()
         self.assertEqual(state["results"][0]["message"], "the team did not start the breach within 20 s")
+
+    def test_map_info_dump(self):
+        self.lua.execute(r"""
+            local function txt(s) return { ToString = function() return s end } end
+            local function soft(path) return { ToString = function() return path end } end
+            objects.ReadyOrNotGameState = { {
+                IsValid = function() return true end,
+                LevelData = {
+                    FriendlyLevelName = txt("23 Megabytes A Second"),
+                    DefaultFloorIndex = 1,
+                    MapLayout = { MapOrigin = { X = -5000, Y = 2500 }, MapSize = 12000,
+                                  MapOverviewTexture = soft("/Game/Maps/T_Overview.T_Overview") },
+                    MapFloors = tarray({
+                        { FloorFullName = txt("Ground Floor"), FloorShortName = txt("1F"),
+                          FloorLayout = soft("/Game/Maps/T_Floor1.T_Floor1"), FloorplanMaterial = soft("") },
+                    }),
+                    Floors = tarray({ { Name = txt("Ground"), Number = 0, FloorMap = soft("/Game/Maps/T_F1.T_F1") } }),
+                },
+            } }
+            local building = actor("BuildingTrigger_1", 0, 0, 0, 0, {
+                BuildingName = txt("House"), NumberOfFloors = 2,
+                GeneratedFloors = tarray({
+                    { Number = 0, Height = 300, Name = txt("Ground"), Location = { X = 0, Y = 0, Z = 0 }, Extent = { X = 1000, Y = 800, Z = 150 } },
+                }),
+            })
+            objects.BuildingTrigger = { building }
+        """)
+        self.lua.execute('keybinds["F6"]()')
+        info = json.loads((self.bridge / "mapinfo.json").read_text())
+        self.assertEqual(info["errors"], [])
+        self.assertEqual(info["level"], "RiverwoodHouse")
+        self.assertEqual(info["map_layout"], {"origin": {"x": -5000, "y": 2500}, "size": 12000,
+                                              "overview_texture": "/Game/Maps/T_Overview.T_Overview"})
+        self.assertEqual(info["soft_path_method"], "ToString")
+        self.assertEqual(info["map_floors"][0]["short_name"], "1F")
+        self.assertEqual(info["map_floors"][0]["layout_texture"], "/Game/Maps/T_Floor1.T_Floor1")
+        self.assertIsNone(info["map_floors"][0].get("floorplan_material"))
+        self.assertEqual(info["floors"][0]["floor_map"], "/Game/Maps/T_F1.T_F1")
+        self.assertEqual(info["buildings"][0]["floors"][0]["extent"], {"x": 1000, "y": 800, "z": 150})
+
+    def test_map_info_dump_without_game_state(self):
+        self.lua.execute('keybinds["F6"]()')
+        info = json.loads((self.bridge / "mapinfo.json").read_text())
+        self.assertIn("no ReadyOrNotGameState", info["errors"])
 
     def test_activity_dump(self):
         self.lua.execute('objects.CyberneticsSwat_V2_C[1].Controller = controller_with_throw(objects.Door[1], "BP_Flashbang_C")')

@@ -20,6 +20,7 @@ config.verbose = false
 
 -- Hotkeys (UE4SS Key names). Set any to nil to disable it.
 config.keys = {
+    map_info       = "F6",   -- write the level's map data to bridge/mapinfo.json
     activity_dump  = "F7",   -- write every officer's door jobs to bridge/activities.txt
     discovery_dump = "F8",   -- write candidate classes/functions to bridge/discovery.txt
     sniff_toggle   = "F9",   -- start/stop logging calls to config.sniff functions
