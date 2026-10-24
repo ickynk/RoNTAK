@@ -53,7 +53,6 @@ objects = {
 
 function FindAllOf(class) return objects[class] end
 function FindFirstOf(class) return objects[class] and objects[class][1] end
-function StaticFindObject(path) return nil end
 Key = { F8 = "F8", F9 = "F9", F10 = "F10" }
 keybinds = {}
 function RegisterKeyBind(key, fn) keybinds[key] = fn end
@@ -167,18 +166,6 @@ class SnifferTest(unittest.TestCase):
             function RegisterHook(path, fn) hooks[path] = fn return 1, 2 end
             function UnregisterHook() end
             objects.SwatCommandWidget = { { IsValid = function() return true end, ActiveTeamType = 2 } }
-            local function named(n, extra)
-                local o = extra or {}
-                o.GetFName = function() return { ToString = function() return n end } end
-                o.IsValid = function() return true end
-                return o
-            end
-            local defs = {
-                ["/Script/ReadyOrNot.SwatCommand"] = named("SwatCommand", {
-                    ForEachProperty = function(self, fn) fn(named("Command")) fn(named("Target")) end,
-                }),
-            }
-            function StaticFindObject(path) return defs[path] end
         """)
         config = lua.eval('(require("config"))')
         config.bridge_dir = str(bridge)
@@ -186,62 +173,13 @@ class SnifferTest(unittest.TestCase):
         lua.execute(r"""
             keybinds["F9"]()
             local function param(v) return { get = function() return v end } end
-            local cmd = {
-                GetFullName = function() return "ScriptStruct /Script/ReadyOrNot.SwatCommand" end,
-                Command = 7, Target = objects.Door[1],
-            }
-            hooks["/Script/ReadyOrNot.SwatCommandWidget:OnCommandIssued"](param(objects.Door[1]), param(1), param({ X = 10, Y = 20, Z = 30 }), param(cmd))
+            hooks["/Script/ReadyOrNot.SwatCommandWidget:OnCommandIssued"](param(objects.Door[1]), param(1), param({ X = 10, Y = 20, Z = 30 }))
             keybinds["F9"]()
         """)
         text = (bridge / "sniff.txt").read_text()
         self.assertIn("SwatCommandWidget:OnCommandIssued", text)
-        self.assertIn("args=[1, (10, 20, 30), {Command=7, Target=BP_C Door_C_7}]", text)
+        self.assertIn("args=[1, (10, 20, 30)]", text)
         self.assertIn("SwatCommandWidget.ActiveTeamType=2", text)
-
-
-class SignatureTest(ModTest):
-    def test_signatures_list_params_enums_and_structs(self):
-        self.lua.execute(r"""
-            local function named(n, extra)
-                local o = extra or {}
-                o.GetFName = function() return { ToString = function() return n end } end
-                o.IsValid = function() return true end
-                return o
-            end
-            local function prop(n, kind, extra)
-                local p = named(n, extra)
-                p.GetClass = function() return named(kind) end
-                return p
-            end
-            local team_enum = named("ETeamType", {
-                ForEachName = function(self, fn)
-                    fn({ ToString = function() return "ETeamType::TT_RED" end }, 1)
-                    fn({ ToString = function() return "ETeamType::TT_GOLD" end }, 5)
-                end,
-            })
-            local cmd_struct = named("SwatCommand", {
-                ForEachProperty = function(self, fn) fn(prop("Team", "EnumProperty", { GetEnum = function() return team_enum end })) end,
-            })
-            local stack = named("GiveStackUpCommand", {
-                ForEachProperty = function(self, fn)
-                    fn(prop("Team", "EnumProperty", { GetEnum = function() return team_enum end }))
-                    fn(prop("Door", "ObjectProperty", { GetPropertyClass = function() return named("Door") end }))
-                    fn(prop("Command", "StructProperty", { GetStruct = function() return cmd_struct end }))
-                end,
-            })
-            function StaticFindObject(path)
-                if path == "/Script/ReadyOrNot.SWATManager:GiveStackUpCommand" then return stack end
-            end
-            function ForEachUObject() end
-        """)
-        self.lua.execute('keybinds["F8"]()')
-        text = (self.bridge / "signatures.txt").read_text()
-        self.assertIn("SWATManager:GiveStackUpCommand\n    Team: EnumProperty<ETeamType>\n"
-                      "        values: ETeamType::TT_RED=1, ETeamType::TT_GOLD=5\n"
-                      "    Door: ObjectProperty<Door>\n"
-                      "    Command: StructProperty<SwatCommand>\n"
-                      "        Team: EnumProperty<ETeamType>\n", text)
-        self.assertIn("SWATManager:GiveBreachAndClearCommand\n    (not found)", text)
 
 
 class JsonTest(unittest.TestCase):

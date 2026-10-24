@@ -116,6 +116,21 @@ Then try the same order from the ATAK screen. The order list shows **OK**, **ERR
 
 ---
 
+## Get exact function parameters (header dump)
+
+Some order functions are called from the game's C++ code, so the sniffer never sees them. In Ready or Not
+this includes all the `SWATManager:Give...Command` functions. The mod can still call them; it just needs
+their exact parameters. UE4SS can write them out:
+
+1. Start a mission, so everything is loaded.
+2. In the UE4SS console window, open the **Dumpers** tab and click **Dump CXX Headers**. The game freezes
+   for a little while.
+3. A `CXXHeaderDump` folder appears next to the UE4SS files (in `Win64` or `Win64\ue4ss`).
+4. The files that matter are `ReadyOrNot.hpp` (classes and functions) and `ReadyOrNot_enums.hpp`
+   (the number behind every option name).
+
+Search `ReadyOrNot.hpp` for `GiveStackUpCommand` to see its parameters.
+
 ## If the sniffer never shows an order
 
 Some games process orders in C++ code that isn't exposed as a function UE4SS can hook. Try these, in order:

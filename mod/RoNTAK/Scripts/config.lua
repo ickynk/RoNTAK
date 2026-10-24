@@ -122,35 +122,11 @@ config.discovery_keywords = {
 -- Example: "/Script/ReadyOrNot.SomeClass:SomeFunction"
 -- Only OnCommandIssued fires when using the command wheel: the SWATManager
 -- Give...Command functions are called from C++ and cannot be hooked (they can
--- still be called by the mod). Its SwatCommand argument is expanded field by field.
+-- still be called by the mod). Do not try to read the SwatCommand struct inside
+-- a hook: that crashed the game.
 config.sniff = {
     "/Script/ReadyOrNot.SwatCommandWidget:OnCommandIssued",
     "/Script/ReadyOrNot.ReadyOrNotCommandFunctionLibrary:RespondToSWATCommand",
-}
-
--- Functions whose parameters (and the enum values they use) the F8 dump writes
--- to signatures.txt.
-config.signatures = {
-    "/Script/ReadyOrNot.SWATManager:GiveStackUpCommand",
-    "/Script/ReadyOrNot.SWATManager:GiveBreachAndClearCommand",
-    "/Script/ReadyOrNot.SWATManager:GiveOpenDoorCommand",
-    "/Script/ReadyOrNot.SWATManager:GiveScanDoorCommand",
-    "/Script/ReadyOrNot.SWATManager:GiveWedgeDoorCommand",
-    "/Script/ReadyOrNot.SWATManager:GivePickLockCommand",
-    "/Script/ReadyOrNot.SWATManager:GiveCloseDoorCommand",
-    "/Script/ReadyOrNot.SWATManager:GiveMoveCommand",
-    "/Script/ReadyOrNot.SWATManager:GiveFallInCommand",
-    "/Script/ReadyOrNot.SWATManager:GiveHoldCommand",
-    "/Script/ReadyOrNot.SWATManager:RemoveHoldCommand",
-    "/Script/ReadyOrNot.SWATManager:GiveSearchAndSecureCommand",
-    "/Script/ReadyOrNot.SWATManager:GiveCoverAreaCommand",
-    "/Script/ReadyOrNot.SWATManager:GiveDeployGrenadeAtLocation",
-    "/Script/ReadyOrNot.SWATManager:GetSwatTeam",
-    "/Script/ReadyOrNot.SWATManager:GetSwatCharacterAtSquadPosition",
-    "/Script/ReadyOrNot.SwatCommandWidget:DoCommand",
-    "/Script/ReadyOrNot.SwatCommandWidget:OnCommandIssued",
-    "/Script/ReadyOrNot.ReadyOrNotCommandFunctionLibrary:RespondToSWATCommand",
-    "/Script/ReadyOrNot.ReadyOrNotCharacter:GetTeam",
 }
 
 -- Values printed with every sniffed call, to see which team the wheel had selected.
