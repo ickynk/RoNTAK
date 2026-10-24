@@ -106,7 +106,8 @@ local function excluded(name)
     return false
 end
 
-function game.officers()
+-- Officer actors with their team, for orders that need the actual objects.
+function game.officer_actors()
     local result = {}
     local player_pawn = game.player_pawn()
     -- Compare by name: two UE4SS handles to the same object are not always equal.
@@ -118,17 +119,76 @@ function game.officers()
             if pos and name ~= player_name and not excluded(name) then
                 local raw_team = read_property(actor, config.officers.team_property)
                 result[#result + 1] = {
-                    id = name,
-                    name = read_property(actor, config.officers.name_property) or name,
+                    actor = actor,
+                    name = name,
                     team = config.officers.team_values[raw_team] or "unknown",
                     pos = pos,
-                    yaw = yaw(actor),
-                    health = read_property(actor, config.officers.health_property),
                 }
             end
         end
     end
     return result
+end
+
+function game.officers()
+    local result = {}
+    for _, o in ipairs(game.officer_actors()) do
+        result[#result + 1] = {
+            id = o.name,
+            name = read_property(o.actor, config.officers.name_property) or o.name,
+            team = o.team,
+            pos = o.pos,
+            yaw = yaw(o.actor),
+            health = read_property(o.actor, config.officers.health_property),
+        }
+    end
+    return result
+end
+
+local function on_team(officer, team)
+    return team == "gold" or officer.team == team
+end
+
+-- Class of an item (EItemCategory) carried by an officer on the team, or nil.
+function game.team_item_class(team, category)
+    for _, o in ipairs(game.officer_actors()) do
+        if on_team(o, team) then
+            local ok, class = pcall(function()
+                local item = o.actor.InventoryComp:GetInventoryItemOfType(category)
+                if item and item:IsValid() then return item:GetClass() end
+                return nil
+            end)
+            if ok and class then return class end
+        end
+    end
+    return nil
+end
+
+-- A point just outside the door on the team's side, and the direction from
+-- the door to that side: what the game gets when you aim at a door yourself.
+function game.door_approach(door, team)
+    local ok, mid = pcall(function() return door:GetDoorMidLocation() end)
+    local center = ok and mid and { x = mid.X, y = mid.Y, z = mid.Z } or location(door)
+    if not center then return nil, nil end
+
+    local sx, sy, n = 0, 0, 0
+    for _, o in ipairs(game.officer_actors()) do
+        if on_team(o, team) then sx, sy, n = sx + o.pos.x, sy + o.pos.y, n + 1 end
+    end
+    if n == 0 then
+        local player = game.player()
+        if player and player.pos then sx, sy, n = player.pos.x, player.pos.y, 1 end
+    end
+
+    local dx, dy = 1, 0
+    if n > 0 then
+        dx, dy = sx / n - center.x, sy / n - center.y
+        local len = math.sqrt(dx * dx + dy * dy)
+        if len > 1 then dx, dy = dx / len, dy / len else dx, dy = 1, 0 end
+    end
+    local APPROACH_DISTANCE = 40
+    return { x = center.x + dx * APPROACH_DISTANCE, y = center.y + dy * APPROACH_DISTANCE, z = center.z },
+        { x = dx, y = dy, z = 0 }
 end
 
 local function refresh_doors(level)

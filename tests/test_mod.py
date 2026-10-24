@@ -29,20 +29,41 @@ local controller = actor("PlayerController_C_0", 0, 0, 0, 0, {
     Pawn = pawn,
     Player = { IsValid = function() return true end },
     GetWorld = function() return { GetFName = function() return name("RiverwoodHouse") end } end,
-    IssueOrder = function(self, ...) calls[#calls + 1] = { ... } end,
 })
+
+-- Records every Give...Command call as { fn = name, n = arg count, ... }.
+local manager = setmetatable({ IsValid = function() return true end }, {
+    __index = function(_, fn)
+        return function(self, ...)
+            local args = table.pack(...)
+            args.fn = fn
+            calls[#calls + 1] = args
+        end
+    end,
+})
+
+classes = {}
+local function inventory(items)
+    return { GetInventoryItemOfType = function(self, category)
+        local class = items[category]
+        if not class then return nil end
+        classes[class] = classes[class] or { name = class }
+        return { IsValid = function() return true end, GetClass = function() return classes[class] end }
+    end }
+end
 
 objects = {
     PlayerController = { controller },
-    SWATCharacter = {
-        pawn, -- the player shares the class and must be skipped
-        actor("SWATCharacter_C_1", 100, 200, 0, 0, { TeamId = 0 }),
-        actor("SWATCharacter_C_2", 150, 250, 0, 45, { TeamId = 1 }),
+    SWATManager = { manager },
+    CyberneticsSwat_V2_C = {
+        actor("Swat_C_1", 100, 200, 0, 0, { SquadPosition = 0, InventoryComp = inventory({ [38] = "C2", [30] = "Flashbang" }) }),
+        actor("Swat_C_2", 150, 250, 0, 45, { SquadPosition = 2, InventoryComp = inventory({ [33] = "Stinger" }) }),
     },
     Door = {
         actor("Door_C_7", 500, 0, 0, 90, {
             IsLocked = function() return true end,
             GetSWATKnowsLockState = function() return true end,
+            GetDoorMidLocation = function() return { X = 500, Y = 20, Z = 0 } end,
         }),
         actor("Door_C_8", 40, 30, 0, 0, {
             IsLocked = function() return true end,
@@ -72,9 +93,6 @@ class ModTest(unittest.TestCase):
         lua.execute("print = function() end")
         config = lua.eval('(require("config"))')
         config.bridge_dir = str(self.bridge)
-        config.officers.classes = lua.table("SWATCharacter")
-        config.officers.team_property = "TeamId"
-        config.actions.stack_up.fn = "IssueOrder"
         lua.execute('require("main")')
 
     def tick(self):
@@ -84,46 +102,97 @@ class ModTest(unittest.TestCase):
     def send(self, session, commands):
         (self.bridge / "commands.json").write_text(json.dumps({"session": session, "commands": commands}))
 
+    def order(self, cmd_id, team, action, target=None, options=None):
+        return {"id": cmd_id, "team": team, "action": action, "target": target or {}, "options": options or {}}
+
+    def run_orders(self, *orders):
+        """Sends orders after a first tick, so they are not skipped as stale."""
+        self.send("A", [])
+        self.tick()
+        self.send("A", list(orders))
+        return self.tick()
+
+    def call(self, i):
+        c = self.lua.globals().calls[i]
+        return c.fn, [c[k] for k in range(1, c.n + 1)]
+
     def test_state_contents(self):
         state = self.tick()
         self.assertEqual(state["level"], "RiverwoodHouse")
         self.assertEqual(state["player"]["yaw"], 90)
         self.assertEqual([(o["id"], o["team"]) for o in state["officers"]],
-                         [("SWATCharacter_C_1", "red"), ("SWATCharacter_C_2", "blue")])
+                         [("Swat_C_1", "red"), ("Swat_C_2", "blue")])
         self.assertEqual({d["id"]: d.get("locked") for d in state["doors"]}, {"Door_C_7": True, "Door_C_8": None})
-        self.assertEqual(state["configured_actions"], ["stack_up"])
+        self.assertEqual(len(state["configured_actions"]), 9)
 
-    def test_orders_flow(self):
-        order = {"team": "red", "action": "stack_up", "target": {"door": "Door_C_7"}, "options": {"side": "left"}}
-        self.send("A", [dict(order, id=1)])
+    def test_stale_orders_skipped_and_not_rerun(self):
+        hold = self.order(1, "blue", "hold")
+        self.send("A", [hold])
         self.tick()  # queued before the mod saw any orders: skipped
         self.assertEqual(len(self.lua.globals().calls), 0)
-
-        self.send("A", [dict(order, id=1), dict(order, id=2),
-                        {"id": 3, "team": "blue", "action": "hold", "target": {}, "options": {}}])
+        self.send("A", [hold, self.order(2, "blue", "hold")])
         state = self.tick()
-        calls = self.lua.globals().calls
-        self.assertEqual(len(calls), 1)
-        args = calls[1]
-        self.assertEqual(args[1], 1)  # config.team_args.red
-        self.assertEqual(args[2].GetFName().ToString(), "Door_C_7")
-        self.assertEqual(args[3], 2)  # config.side_args.left
-        results = {r["id"]: r["status"] for r in state["results"]}
-        self.assertEqual(results, {2: "ok", 3: "not_configured"})
-
         self.tick()  # nothing new: nothing re-run
-        self.assertEqual(len(calls), 1)
+        self.assertEqual(len(self.lua.globals().calls), 1)
+        self.assertEqual(self.call(1), ("GiveHoldCommand", [2]))
+        self.assertEqual(state["results"][0]["status"], "ok")
 
-        self.send("B", [dict(order, id=1, target={"door": "missing"})])  # server restarted
+        self.send("B", [self.order(1, "red", "stack_up", {"door": "missing"})])  # server restarted
         state = self.tick()
         self.assertEqual(state["results"][0]["status"], "error")
         self.assertIn("no longer exists", state["results"][0]["message"])
 
-    def test_test_order_hotkey_uses_nearest_door(self):
+    def test_stack_up_from_team_side_of_door(self):
+        self.run_orders(self.order(1, "red", "stack_up", {"door": "Door_C_7"}, {"side": "left"}))
+        fn, args = self.call(1)
+        self.assertEqual(fn, "GiveStackUpCommand")
+        self.assertEqual(args[0].GetFName().ToString(), "Door_C_7")
+        self.assertEqual(args[1], 1)  # TT_SERT_RED
+        # Red officer is at (100, 200); door middle at (500, 20): approach from that side.
+        nx, ny = args[3]["X"], args[3]["Y"]
+        self.assertLess(nx, 0)
+        self.assertGreater(ny, 0)
+        self.assertAlmostEqual(nx * nx + ny * ny, 1.0)
+        self.assertAlmostEqual(args[2]["X"], 500 + nx * 40)
+        self.assertEqual(args[4:], [True, 2])  # bCheckDoor, EStackUpStyle Left
+
+    def test_breach_c2_flashbang(self):
+        self.run_orders(self.order(1, "gold", "breach_clear", {"door": "Door_C_7"},
+                                   {"breach": "c2", "grenade": "flashbang"}))
+        fn, args = self.call(1)
+        self.assertEqual(fn, "GiveBreachAndClearCommand")
+        self.assertEqual(len(args), 12)
+        self.assertEqual(args[1:3], [6, 5])  # EDoorBreachType C2, TT_SQUAD
+        self.assertEqual(args[4]["name"], "C2")
+        self.assertEqual(args[5]["name"], "Flashbang")
+        self.assertEqual(args[6:], [False, False, False, False, 0, True])
+
+    def test_open_clear_overrides_breach_and_sends_no_items(self):
+        self.run_orders(self.order(1, "blue", "open_clear", {"door": "Door_C_7"}, {"breach": "c2", "grenade": "none"}))
+        fn, args = self.call(1)
+        self.assertEqual(args[1:3], [1, 2])  # EDoorBreachType Open, TT_SERT_BLUE
+        self.assertEqual(args[4:6], [None, None])
+
+    def test_missing_item_is_reported(self):
+        state = self.run_orders(self.order(1, "blue", "breach_clear", {"door": "Door_C_7"}, {"breach": "shotgun"}))
+        self.assertEqual(len(self.lua.globals().calls), 0)
+        self.assertIn("carries the shotgun item", state["results"][0]["message"])
+
+    def test_move_and_search_use_map_point_or_player(self):
+        self.run_orders(self.order(1, "red", "move_to", {"location": {"x": 7, "y": 8, "z": 9}}),
+                        self.order(2, "gold", "search_secure"))
+        fn, args = self.call(1)
+        self.assertEqual((fn, args[0], dict(args[1])), ("GiveMoveCommand", 1, {"X": 7, "Y": 8, "Z": 9}))
+        fn, args = self.call(2)
+        self.assertEqual(fn, "GiveSearchAndSecureCommand")
+        self.assertEqual(args[0], 5)
+        self.assertEqual(dict(args[1]), {"X": 0, "Y": 0, "Z": 0})  # player position
+        self.assertEqual(args[2], False)
+
+    def test_test_order_hotkey(self):
         self.tick()
         self.lua.execute('keybinds["F10"]()')
-        args = self.lua.globals().calls[1]
-        self.assertEqual(args[2].GetFName().ToString(), "Door_C_8")
+        self.assertEqual(self.call(1), ("GiveFallInCommand", [5, 0]))
 
 
 class DiscoveryTest(ModTest):
@@ -138,7 +207,7 @@ class DiscoveryTest(ModTest):
             end
             local prop = obj("TeamId", "EnumProperty")
             local all = {
-                obj("SWATCharacter", "Class", nil, { ForEachProperty = function(self, fn) fn(prop) end }),
+                obj("CyberneticsSwat_V2_C", "Class", nil, { ForEachProperty = function(self, fn) fn(prop) end }),
                 obj("Lamp", "Class"),
                 obj("IssueTeamOrder", "Function", "Function /Script/ReadyOrNot.SWATManager:IssueTeamOrder"),
                 obj("Tick", "Function", "Function /Script/Engine.Actor:Tick"),
@@ -147,7 +216,7 @@ class DiscoveryTest(ModTest):
         """)
         self.lua.execute('keybinds["F8"]()')
         text = (self.bridge / "discovery.txt").read_text()
-        self.assertIn("    3  SWATCharacter", text)
+        self.assertIn("    2  CyberneticsSwat_V2_C", text)
         self.assertIn(". TeamId (EnumProperty)", text)
         self.assertIn("/Script/ReadyOrNot.SWATManager:IssueTeamOrder", text)
         self.assertNotIn("Lamp", text)

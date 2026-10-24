@@ -34,10 +34,12 @@ config.officers = {
     -- CyberneticsSwat_V2_C = your AI officers (4 live in the discovery dump).
     -- SWATCharacter also matches 4 TrailerSWATCharacter actors, so it is only a fallback.
     classes = { "CyberneticsSwat_V2_C", "SWATCharacter" },
-    -- Property on the officer holding its team (Red/Blue). nil = unknown.
-    team_property = nil,                                             -- UNVERIFIED
-    -- Map raw property values (numbers for enums, or strings) to team ids.
-    team_values = { [0] = "red", [1] = "blue" },                      -- UNVERIFIED
+    -- Property on the officer holding its team. SquadPosition is an
+    -- ESquadPosition: 0 Alpha, 1 Beta, 2 Charlie, 3 Delta (from the header dump).
+    team_property = "SquadPosition",
+    -- Which squad slot belongs to which team. UNVERIFIED: if RED and BLUE are
+    -- swapped on the ATAK map, swap "red" and "blue" here.
+    team_values = { [0] = "red", [1] = "red", [2] = "blue", [3] = "blue" },
     -- Optional property with the officer's display name.
     name_property = nil,
     -- Optional property with health (number). Shown as a status bar.
@@ -63,49 +65,82 @@ config.doors = {
 -- Orders
 ---------------------------------------------------------------------------
 
--- Team id -> value passed as the "$team" argument.
-config.team_args = { red = 1, blue = 2, gold = 5 }                 -- confirmed by sniffer
+-- All values below come from the UE4SS header dump (ReadyOrNot.hpp and
+-- ReadyOrNot_enums.hpp) and the sniffer.
 
--- Breach option id -> value passed as "$breach".
-config.breach_args = {                                              -- UNVERIFIED
-    open = 0, kick = 1, shotgun = 2, c2 = 3, ram = 4, leader = 5,
-}
+-- ETeamType: TT_SERT_RED = 1, TT_SERT_BLUE = 2, TT_SQUAD = 5 (gold).
+config.team_args = { red = 1, blue = 2, gold = 5 }
 
--- Grenade option id -> value passed as "$grenade".
-config.grenade_args = {                                             -- UNVERIFIED
-    none = 0, flashbang = 1, stinger = 2, cs = 3,
-}
+-- EDoorBreachType, passed as "$breach".
+config.breach_args = { open = 1, kick = 3, shotgun = 4, ram = 5, c2 = 6, leader = 7 }
 
--- Stack side option id -> value passed as "$side".
-config.side_args = { auto = 0, split = 1, left = 2, right = 3 }      -- UNVERIFIED
+-- EItemCategory of the item each breach type uses. The item's class is taken
+-- from the inventory of an officer on the ordered team ("$breach_item").
+config.breach_items = { shotgun = 42, ram = 41, c2 = 38 }
+
+-- EItemCategory of each grenade ("$grenade_item"). "none" sends no grenade.
+config.grenade_items = { flashbang = 30, stinger = 33, cs = 32 }
+
+-- EStackUpStyle, passed as "$side".
+config.side_args = { auto = 0, split = 1, left = 2, right = 3 }
+
+-- EFallInPattern: 0 Snake, 1 HalfSnake, 2 Diamond, 3 Flock.
+config.fall_in_pattern = 0
 
 -- How each ATAK action is carried out in the game.
 --
---   target   = where to find the object whose function is called:
---              "player_controller", "player_pawn", "door" (the tapped door),
---              or a class name (the first object of that class is used).
---   fn       = name of the function to call on that object.
---   args     = list of arguments. Strings starting with "$" are filled in:
---              $team $door $location $breach $grenade $side
---              Anything else is passed as-is.
+--   target  = where to find the object whose function is called:
+--             "player_controller", "player_pawn", "door" (the tapped door),
+--             or a class name (the first object of that class is used).
+--   fn      = name of the function to call on that object.
+--   args    = list of arguments. Strings starting with "$" are filled in:
+--               $team          ETeamType of the ordered team
+--               $door          the tapped door
+--               $location      door orders: a point just outside the door on the
+--                              team's side; other orders: the tapped map point
+--               $normal        door orders: direction from the door to that side
+--               $breach        EDoorBreachType      $side  EStackUpStyle
+--               $breach_item   class of the breaching item (nil for kick/open/leader)
+--               $grenade_item  class of the grenade (nil for none)
+--               $with_leader   true when the breach type is "leader"
+--               $fall_in       config.fall_in_pattern
+--             Anything else (true, false, numbers) is passed as-is.
+--   options = fixed options that override the ATAK ones (e.g. breach = "open").
 --
--- An action with fn = nil is shown in the ATAK menu but reports
--- "not configured" when used. Find the real functions with the sniffer
--- (docs/02-discovery.md) and fill them in here.
+-- Signatures (USWATManager, from ReadyOrNot.hpp):
+--   GiveStackUpCommand(Target, TeamType, CommandLocation, CommandNormal, bCheckDoor, StackUpStyle)
+--   GiveBreachAndClearCommand(Door, DoorBreachType, TeamType, CommandLocation,
+--       DoorBreachItemClass, DoorUseItemClass, bWithLeader, bWithLeaderItem,
+--       bAutoClear, bLastAutoClear, CustomStackUpStyle, bIsSWATCommand)
+--   GiveCheckForContactsCommand(Target, TeamType, CommandLocation, CommandNormal)
+--   GiveWedgeDoorCommand(Target, TeamType, CommandLocation, CommandNormal)
+--   GiveMoveCommand(TeamType, CommandLocation)
+--   GiveFallInCommand(TeamType, FallInPattern)
+--   GiveHoldCommand(TeamType)
+--   GiveSearchAndSecureCommand(TeamType, CommandLocation, bOnlyCurrentRoom)
+local BREACH_ARGS = {
+    "$door", "$breach", "$team", "$location", "$breach_item", "$grenade_item",
+    "$with_leader", false, false, false, "$side", true,
+}
 config.actions = {
-    stack_up      = { target = "player_controller", fn = nil, args = { "$team", "$door", "$side" } },
-    open_clear    = { target = "player_controller", fn = nil, args = { "$team", "$door", "$grenade" } },
-    breach_clear  = { target = "player_controller", fn = nil, args = { "$team", "$door", "$breach", "$grenade" } },
-    scan_door     = { target = "player_controller", fn = nil, args = { "$team", "$door" } },
-    wedge_door    = { target = "player_controller", fn = nil, args = { "$team", "$door" } },
-    move_to       = { target = "player_controller", fn = nil, args = { "$team", "$location" } },
-    fall_in       = { target = "player_controller", fn = nil, args = { "$team" } },
-    hold          = { target = "player_controller", fn = nil, args = { "$team" } },
-    search_secure = { target = "player_controller", fn = nil, args = { "$team" } },
+    stack_up      = { target = "SWATManager", fn = "GiveStackUpCommand",
+                      args = { "$door", "$team", "$location", "$normal", true, "$side" } },
+    breach_clear  = { target = "SWATManager", fn = "GiveBreachAndClearCommand", args = BREACH_ARGS },
+    open_clear    = { target = "SWATManager", fn = "GiveBreachAndClearCommand", args = BREACH_ARGS,
+                      options = { breach = "open" } },
+    scan_door     = { target = "SWATManager", fn = "GiveCheckForContactsCommand",
+                      args = { "$door", "$team", "$location", "$normal" } },
+    wedge_door    = { target = "SWATManager", fn = "GiveWedgeDoorCommand",
+                      args = { "$door", "$team", "$location", "$normal" } },
+    move_to       = { target = "SWATManager", fn = "GiveMoveCommand", args = { "$team", "$location" } },
+    fall_in       = { target = "SWATManager", fn = "GiveFallInCommand", args = { "$team", "$fall_in" } },
+    hold          = { target = "SWATManager", fn = "GiveHoldCommand", args = { "$team" } },
+    search_secure = { target = "SWATManager", fn = "GiveSearchAndSecureCommand",
+                      args = { "$team", "$location", false } },
 }
 
--- Order sent by the test hotkey, using the nearest door to the player.
-config.test_order = { team = "red", action = "stack_up", options = { side = "auto" } }
+-- Order sent by the test hotkey. Door orders use the door nearest the player.
+config.test_order = { team = "gold", action = "fall_in", options = {} }
 
 ---------------------------------------------------------------------------
 -- Discovery & sniffing
