@@ -29,6 +29,7 @@ local function configured_actions()
 end
 
 local function tick()
+    game.begin_tick()
     local level = game.level_name()
     for _, cmd in ipairs(bridge.new_commands()) do
         remember(orders.execute(cmd))
@@ -49,12 +50,24 @@ local function tick()
     })
 end
 
+-- A tick slower than this is reported (at most every SLOW_TICK_REPORT_SECONDS):
+-- the mod runs on the game thread, so slow ticks show up as stutter.
+local SLOW_TICK_MS = 4
+local SLOW_TICK_REPORT_SECONDS = 30
+local last_slow_report = -math.huge
+
 local function safe_tick()
     if busy then return end
     busy = true
+    local started = os.clock()
     local ok, err = pcall(tick)
+    local ms = (os.clock() - started) * 1000
     busy = false
     if not ok then log.error("tick: " .. tostring(err)) end
+    if ms > SLOW_TICK_MS and os.time() - last_slow_report >= SLOW_TICK_REPORT_SECONDS then
+        last_slow_report = os.time()
+        log.info(string.format("slow tick: %.1f ms (game thread)", ms))
+    end
 end
 
 local function test_order()

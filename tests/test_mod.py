@@ -317,6 +317,19 @@ class ModTest(unittest.TestCase):
         self.assertEqual(dict(args[1]), {"X": 0, "Y": 0, "Z": 0})  # player position
         self.assertEqual(args[2], False)
 
+    def test_object_scans_are_cached_across_ticks(self):
+        self.lua.execute(r"""
+            scans = 0
+            local find_all_of = FindAllOf
+            function FindAllOf(class) scans = scans + 1 return find_all_of(class) end
+        """)
+        for _ in range(40):  # 10 s of ticks, all within the same os.time() second here
+            state = self.tick()
+        # One scan each for the player controller, officers and doors, not one per tick.
+        self.assertLessEqual(self.lua.globals().scans, 3)
+        self.assertEqual(len(state["officers"]), 2)
+        self.assertEqual(len(state["doors"]), 2)
+
     def test_test_order_hotkey(self):
         self.tick()
         self.lua.execute('keybinds["F10"]()')
