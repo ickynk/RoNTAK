@@ -54,6 +54,25 @@ If a floor switches at the wrong height (for example on a staircase), adjust its
 **Max height (Z)** in Calibrate. The **Your in-game position** box shows your current Z. Pressing **F6** in game
 writes the game's own floor heights per building to `Mods\RoNTAK\bridge\mapinfo.json`.
 
+## Cameras: helicopter, drone and CCTV
+
+The map shows what your support assets are looking at. Press **Cams** in the toolbar to hide or show them.
+
+| Asset | On the map | When |
+| --- | --- | --- |
+| Air unit (helicopter) | Yellow **H**, a dashed sight line, and a circle where its camera points on the ground | While it is in the level. Brighter while you watch its feed |
+| Suspects / civilians the air unit tracks | Their marker with a yellow ring and "air unit" | While the helicopter tracks them |
+| ...after it loses them | Hollow dashed marker with **?** and "last seen 2m" | At their last known position, until they surrender, are restrained or go down |
+| Drone | Green **X** with its view cone | While it is deployed |
+| CCTV | Blue camera pins with view cones | Only once the cameras are wired to your tablet |
+| The CCTV feed you are watching | Its pin is filled, ringed and labelled **LIVE** | While that feed is on your screen |
+
+Tapping a person the air unit spotted selects **their spot**, not the person: use Move To, Cover Area or Deploy
+Grenade there. Restrain and Report become available once they surrender.
+
+No video is copied out of the game: the cones are drawn from the cameras' positions and angles, so they cost
+no frame rate.
+
 ## Drawing rooms
 
 Name rooms once you have a floor plan image lined up:

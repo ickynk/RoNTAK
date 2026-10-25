@@ -62,6 +62,8 @@ To change your phone answer later, start with `Start RoNTAK.bat --lan` (allow) o
 
 - **The map:** your arrow, your officers (red and blue dots), doors (yellow closed, green open, orange locked,
   purple wedged), and surrendered, restrained or downed people.
+- **Cameras:** the air unit, drone and (once wired) CCTV, with the people the air unit tracks. Press **Cams** to
+  hide them. See [03-maps.md](03-maps.md#cameras-helicopter-drone-and-cctv).
 - **Orders:** pick a team, tap a door, room, person or spot, choose an order and press the big button. See
   [04-orders.md](04-orders.md).
 - **No floor plan yet:** until you add one, markers sit on a dark grid. See [03-maps.md](03-maps.md).
