@@ -1311,6 +1311,63 @@
   $("btn-center").onclick = centerOnPlayer;
   $("execute").onclick = execute;
 
+  // ---------------------------------------------------------------- phone
+
+  const QR_SCRIPT = "https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js";
+  let serverInfo = {};
+
+  async function loadInfo() {
+    try {
+      serverInfo = await api("GET", "/api/info");
+      if (serverInfo.version) $("level").title = `RoNTAK ${serverInfo.version}`;
+    } catch (e) {
+      serverInfo = {};
+    }
+  }
+
+  // The QR library is only fetched when this panel opens, so the ATAK screen
+  // never needs the internet; without it the address is still shown.
+  function loadQrLibrary() {
+    if (window.QRCode) return Promise.resolve(true);
+    return new Promise((resolve) => {
+      const script = document.createElement("script");
+      script.src = QR_SCRIPT;
+      script.onload = () => resolve(Boolean(window.QRCode));
+      script.onerror = () => resolve(false);
+      document.head.appendChild(script);
+    });
+  }
+
+  async function openPhone() {
+    await loadInfo();
+    const body = $("phone-body");
+    body.innerHTML = "";
+    $("phone-modal").hidden = false;
+    if (!serverInfo.lan_url) {
+      body.innerHTML = `<p class="steps">Phone access is off. Close the companion window and start it again with
+        <b>--lan</b> (for example <code>Start RoNTAK.bat --lan</code>); it's remembered from then on.</p>`;
+      return;
+    }
+    const intro = document.createElement("p");
+    intro.className = "steps";
+    intro.textContent = "Connect the phone to the same Wi-Fi as this PC, then scan the code or type the address:";
+    const url = document.createElement("div");
+    url.className = "phone-url";
+    url.textContent = serverInfo.lan_url;
+    const qr = document.createElement("div");
+    qr.className = "qr";
+    body.append(intro, qr, url);
+    if (await loadQrLibrary()) {
+      new window.QRCode(qr, { text: serverInfo.lan_url, width: 200, height: 200 });
+    } else {
+      qr.remove();
+    }
+  }
+
+  $("btn-phone").onclick = openPhone;
+  $("phone-close").onclick = () => { $("phone-modal").hidden = true; };
+  $("phone-modal").onclick = (e) => { if (e.target.id === "phone-modal") $("phone-modal").hidden = true; };
+
   $("hold-for-go").onchange = (e) => { app.holdForGo = e.target.checked; renderOrders(); };
 
   async function sendControl(action) {
@@ -1406,6 +1463,7 @@
   }
 
   window.addEventListener("resize", resizeCanvas);
+  loadInfo();
   resizeCanvas();
   renderOrders();
   renderFloorSelect();
