@@ -1,72 +1,92 @@
-# 1. Setup
+# 1. Install
 
-You'll install UE4SS (the mod loader), copy in the RoNTAK mod, and start the companion app.
+About 10 minutes, once. You need Ready or Not (Steam) on Windows.
 
-## Step 1: Find the game folder
+## Step 1: Install Python
+
+1. Go to <https://www.python.org/downloads/> and download Python 3.
+2. Run the installer. On the first screen, tick **"Add python.exe to PATH"**, then click **Install Now**.
+
+## Step 2: Download RoNTAK
+
+1. Open the RoNTAK repository on GitHub and click **Releases** (right-hand side).
+2. Under the newest release, download **RoNTAK-x.y.z.zip**.
+3. Right-click the ZIP → **Extract All…**, and pick a folder you'll keep, for example `Documents\RoNTAK`.
+
+## Step 3: Install UE4SS (the mod loader)
 
 1. In Steam, right-click **Ready or Not** → **Manage** → **Browse local files**.
-2. Open `ReadyOrNot` → `Binaries` → `Win64`.
-3. You should see `ReadyOrNot-Win64-Shipping.exe`. **This is the "Win64 folder"** used below.
-   Copy its path from the address bar, for example
-   `C:\Program Files (x86)\Steam\steamapps\common\Ready Or Not\ReadyOrNot\Binaries\Win64`.
-
-## Step 2: Install UE4SS
-
-1. Go to <https://github.com/UE4SS-RE/RE-UE4SS/releases>.
-2. Download the latest `UE4SS_v….zip`. Avoid the `zDEV` one for now.
-3. Extract **everything** in the zip into the Win64 folder.
-4. Check: next to `ReadyOrNot-Win64-Shipping.exe` you should now have `dwmapi.dll` and a `ue4ss` folder.
-   Older UE4SS versions put `UE4SS.dll`, `UE4SS-settings.ini`, and `Mods` directly in Win64. Either layout works.
-5. Open `UE4SS-settings.ini` (inside `ue4ss`, or in Win64) in Notepad and set:
-   ```ini
-   ConsoleEnabled = 1
-   GuiConsoleEnabled = 1
-   GuiConsoleVisible = 1
-   ```
-   This gives you a console window that shows `[RoNTAK]` messages.
-6. Start the game once. A UE4SS console window should open next to it. Quit the game.
+2. Open `ReadyOrNot` → `Binaries` → `Win64`. You should see `ReadyOrNot-Win64-Shipping.exe`.
+3. Download the latest `UE4SS_v….zip` from <https://github.com/UE4SS-RE/RE-UE4SS/releases> (not the
+   `zDEV` one).
+4. Extract **everything** in it into that `Win64` folder.
 
 > If the game crashes on start with UE4SS, check the UE4SS GitHub issues or the Ready or Not modding
 > community for a compatible build. The game's engine version changes with major updates.
 
-## Step 3: Install the RoNTAK mod
+## Step 4: Install the mod
 
-1. Find the `Mods` folder from step 2: `Win64\ue4ss\Mods` (or `Win64\Mods`).
-2. Copy this repository's `mod\RoNTAK` folder into it. You should have `...\Mods\RoNTAK\Scripts\main.lua`.
-3. `RoNTAK` already contains an `enabled.txt` file, which tells UE4SS to load it.
-4. Start the game and load into a mission. The UE4SS console should show:
-   ```
-   [RoNTAK] INFO  loaded, bridge folder: ...\Mods\RoNTAK\bridge
-   ```
-5. Copy that bridge folder path. You need it in the next step.
+Double-click **`Install RoNTAK.bat`** in the RoNTAK folder. It:
 
-## Step 4: Start the companion
+- finds Ready or Not through Steam (on any drive),
+- checks that UE4SS is installed,
+- copies the mod into UE4SS's `Mods` folder, and
+- remembers where it put it.
 
-1. Install Python 3 from <https://www.python.org/downloads/>, ticking **"Add python.exe to PATH"**.
-2. Open this repository's `companion` folder, click the address bar, type `cmd`, and press Enter.
-3. Run this, with your bridge path in quotes:
-   ```
-   python server.py --bridge "C:\...\Mods\RoNTAK\bridge"
-   ```
-4. Open <http://127.0.0.1:8080>. The dot at the top turns **green ("Live")** while you're in a mission.
+If it can't find the game, it asks you to paste the game's folder (from step 3.1).
 
-### Use a phone or tablet as your ATAK
+Run it again after downloading a newer RoNTAK to update. If you edited `config.lua`, your version is kept as
+`config.lua.bak`.
 
-1. Add `--lan`:
-   ```
-   python server.py --bridge "C:\...\Mods\RoNTAK\bridge" --lan
-   ```
-2. The server prints an address like `http://192.168.1.20:8080`. Open it on a phone on the same Wi-Fi.
-3. If it won't load, allow Python through Windows Firewall on **Private** networks when Windows asks.
+## Step 5: Play
+
+1. Start Ready or Not and load into a mission.
+2. Double-click **`Start RoNTAK.bat`**. The ATAK screen opens in your browser.
+3. The first time, it asks whether phones and tablets on your Wi-Fi may connect. Answer **y** to use a phone
+   as your ATAK. Anyone on your network could then give orders, so answer **n** on shared networks.
+4. The dot at the top turns **green ("Live")** while you're in a mission.
+
+Keep the `Start RoNTAK.bat` window open while you play; closing it stops the ATAK screen.
+
+### Use a phone or tablet
+
+1. On the PC's ATAK screen, press **Phone**.
+2. Connect the phone to the same Wi-Fi and scan the QR code, or type the address shown.
+3. If the phone can't connect, allow Python through Windows Firewall on **Private** networks when Windows asks,
+   or check that the phone isn't on a guest network.
+
+To change your phone answer later, start with `Start RoNTAK.bat --lan` (allow) or `Start RoNTAK.bat --local`
+(this PC only). The choice is remembered.
 
 ## What you'll see
 
-- **The map:** your arrow, your officers (red and blue dots), and the doors (yellow closed, green open,
-  orange known-locked) move live while you're in a mission.
-- **Orders:** pick a team, tap a door, room, or spot, choose an order, and press the big button. Options your
-  team has no gear for are greyed out.
+- **The map:** your arrow, your officers (red and blue dots), doors (yellow closed, green open, orange locked,
+  purple wedged), and surrendered, restrained or downed people.
+- **Orders:** pick a team, tap a door, room, person or spot, choose an order and press the big button. See
+  [04-orders.md](04-orders.md).
 - **No floor plan yet:** until you add one, markers sit on a dark grid. See [03-maps.md](03-maps.md).
 
 If something doesn't work after a game update, see [02-discovery.md](02-discovery.md).
 
-Next: [03-maps.md](03-maps.md)
+## Try it without the game
+
+`Start RoNTAK.bat --mock` opens the ATAK screen with a simulated house and team, so you can try every order
+without Ready or Not.
+
+## Troubleshooting
+
+| Problem | Fix |
+| --- | --- |
+| "Python 3 is not installed" | Step 1, then run the `.bat` again. Make sure "Add python.exe to PATH" was ticked |
+| Installer says UE4SS is not installed | Step 3: the UE4SS files must be in the same folder as `ReadyOrNot-Win64-Shipping.exe` |
+| ATAK screen stays "Waiting for game" | Load into a mission. Check the UE4SS console shows `[RoNTAK] INFO loaded` |
+| "Port 8080 is in use" | RoNTAK is already running: open <http://127.0.0.1:8080>, or close the other window |
+| Phone can't connect | Same Wi-Fi as the PC; allow Python in Windows Firewall (Private networks) |
+
+## Manual install (without the .bat files)
+
+1. Copy `mod\RoNTAK` into UE4SS's `Mods` folder: `Win64\ue4ss\Mods` (or `Win64\Mods` with older UE4SS).
+2. In the `companion` folder, run:
+   ```
+   python server.py --bridge "C:\...\Mods\RoNTAK\bridge"
+   ```

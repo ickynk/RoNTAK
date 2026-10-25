@@ -1,3 +1,5 @@
 __pycache__/
 mod/RoNTAK/bridge/*
 !mod/RoNTAK/bridge/.keep
+companion/settings.json
+dist/

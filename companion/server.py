@@ -3,9 +3,10 @@
 Serves the ATAK web interface and relays data between it and the game mod
 through the mod's bridge folder (state.json / commands.json).
 
-    python server.py --bridge "C:/.../Mods/RoNTAK/bridge"   # real game
-    python server.py --mock                                  # simulated game
-    python server.py --mock --lan                            # open from a phone/tablet on your Wi-Fi
+    python server.py                       # finds the installed mod ("Start RoNTAK.bat" does this)
+    python server.py --bridge "C:/.../Mods/RoNTAK/bridge"
+    python server.py --mock                # simulated game, no Ready or Not needed
+    python server.py --lan / --local       # allow / don't allow phones on your Wi-Fi (remembered)
 
 Only the Python standard library is used.
 """
@@ -20,14 +21,24 @@ import sys
 import tempfile
 import threading
 import time
+import webbrowser
 from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
+import gamefinder
+
 HERE = Path(__file__).resolve().parent
 WEB_DIR = HERE / "web"
 MAPS_DIR = HERE / "maps"
+
+
+def read_version() -> str:
+    try:
+        return (HERE.parent / "VERSION").read_text(encoding="utf-8").strip()
+    except OSError:
+        return "dev"
 
 STALE_SECONDS = 3
 MAX_KEPT_COMMANDS = 50
@@ -128,6 +139,7 @@ def validate_order(body: dict) -> dict:
 class Handler(SimpleHTTPRequestHandler):
     bridge: Path
     queue: CommandQueue
+    info: dict = {}
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(WEB_DIR), **kwargs)
@@ -164,6 +176,8 @@ class Handler(SimpleHTTPRequestHandler):
         try:
             if parts == ["api", "state"]:
                 return self.get_state()
+            if parts == ["api", "info"]:
+                return self.send_json(self.info)
             if parts == ["api", "rooms"]:
                 return self.send_json(read_json(self.bridge / "rooms.json") or {"level": None, "rooms": []})
             if len(parts) == 3 and parts[:2] == ["api", "maps"]:
@@ -251,40 +265,91 @@ def lan_address() -> str:
         return "your-pc-ip"
 
 
+def ask_yes_no(question: str) -> bool:
+    answer = input(f"{question} (y/n) > ").strip().lower()
+    return answer.startswith("y")
+
+
+def choose_bridge(parser) -> Path:
+    """The mod's bridge folder: from settings or the installed game, else asked."""
+    bridge = gamefinder.find_bridge()
+    while not bridge:
+        print("Couldn't find the RoNTAK mod. Run \"Install RoNTAK.bat\" first, or paste the mod's")
+        answer = gamefinder.ask_path("bridge folder (…\\Mods\\RoNTAK\\bridge). Leave empty to cancel:")
+        if not answer:
+            parser.exit(1, "Cancelled.\n")
+        if Path(answer).is_dir():
+            bridge = Path(answer)
+    gamefinder.save_settings(bridge=str(bridge))
+    return bridge
+
+
+def choose_lan(args) -> bool:
+    """Phone / tablet access: from --lan / --local, else asked once and remembered."""
+    if args.lan or args.local:
+        gamefinder.save_settings(lan=args.lan)
+        return args.lan
+    saved = gamefinder.load_settings().get("lan")
+    if saved is not None:
+        return saved
+    if not sys.stdin.isatty():
+        return False
+    lan = ask_yes_no("Allow phones and tablets on your Wi-Fi to open the ATAK screen?\n"
+                     "(Anyone on your network could then give orders. Change later with --lan / --local.)")
+    gamefinder.save_settings(lan=lan)
+    return lan
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--bridge", help="path to the mod's bridge folder (Mods/RoNTAK/bridge)")
     parser.add_argument("--mock", action="store_true", help="run a simulated game instead of connecting to Ready or Not")
     parser.add_argument("--port", type=int, default=8080)
-    parser.add_argument("--lan", action="store_true", help="allow other devices on your network to connect")
+    parser.add_argument("--lan", action="store_true", help="allow phones / tablets on your network (remembered)")
+    parser.add_argument("--local", action="store_true", help="only this PC (remembered)")
+    parser.add_argument("--no-browser", action="store_true", help="don't open the ATAK screen in your browser")
     args = parser.parse_args(argv)
 
     if args.mock:
         import mock
         bridge = Path(tempfile.mkdtemp(prefix="rontak-mock-"))
         threading.Thread(target=mock.run, args=(bridge,), daemon=True).start()
-    elif args.bridge:
-        bridge = Path(args.bridge).expanduser().resolve()
-        if not bridge.is_dir():
-            parser.error(f"bridge folder does not exist: {bridge}")
+        lan = args.lan
     else:
-        parser.error("pass --bridge <folder> or --mock")
+        if args.bridge:
+            bridge = Path(args.bridge).expanduser().resolve()
+            if not bridge.is_dir():
+                parser.error(f"bridge folder does not exist: {bridge}")
+        else:
+            bridge = choose_bridge(parser)
+        lan = choose_lan(args)
 
+    local_url = f"http://127.0.0.1:{args.port}"
+    lan_url = f"http://{lan_address()}:{args.port}" if lan else None
     Handler.bridge = bridge
     Handler.queue = CommandQueue(bridge)
+    Handler.info = {"version": read_version(), "lan": lan, "lan_url": lan_url}
 
-    host = "0.0.0.0" if args.lan else "127.0.0.1"
-    server = ThreadingHTTPServer((host, args.port), Handler)
-    print(f"RoNTAK companion running ({'mock game' if args.mock else 'bridge: ' + str(bridge)})")
-    print(f"  Open on this PC:   http://127.0.0.1:{args.port}")
-    if args.lan:
-        print(f"  Open on phone/tab: http://{lan_address()}:{args.port}")
+    try:
+        server = ThreadingHTTPServer(("0.0.0.0" if lan else "127.0.0.1", args.port), Handler)
+    except OSError:
+        print(f"Port {args.port} is in use. Is RoNTAK already running? Try opening {local_url}")
+        print(f"(Or start on another port: python server.py --port {args.port + 1})")
+        return 1
+
+    print(f"RoNTAK companion {read_version()} ({'mock game' if args.mock else 'bridge: ' + str(bridge)})")
+    print(f"  Open on this PC:   {local_url}")
+    if lan_url:
+        print(f"  Open on phone/tab: {lan_url}  (or press the Phone button on the ATAK screen)")
     print("  Press Ctrl+C to stop.")
+    if not args.no_browser:
+        threading.Timer(0.5, webbrowser.open, args=(local_url,)).start()
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         pass
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

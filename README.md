@@ -46,28 +46,33 @@ It ships filled in and tested. If a game update breaks something, the mod has to
 | Floors: automatic from door heights, auto-switching as you move | Working in the companion |
 | Officer names from the roster | Added (to be confirmed in game) |
 | Floor plan images (community maps) and named rooms | Add per level; line up by tapping two doors (docs/03) |
+| Install: `Install RoNTAK.bat`, `Start RoNTAK.bat`, phone QR code, release ZIP | Added (to be confirmed on a fresh PC) |
 
-## Try it now (no game needed)
+## Install
 
-1. Install Python 3 from <https://www.python.org/downloads/>. On the first installer screen, tick **"Add python.exe to PATH"**.
-2. Download this repository (green **Code** button → **Download ZIP**) and unzip it.
-3. Open the `companion` folder, click the address bar, type `cmd`, and press Enter.
-4. Run:
-   ```
-   python server.py --mock
-   ```
-5. Open <http://127.0.0.1:8080> in your browser. You'll see a test house with four simulated officers.
-   Tap a door, pick a team and an order, and press the big button.
+1. Install [Python 3](https://www.python.org/downloads/) (tick **"Add python.exe to PATH"**).
+2. Download **RoNTAK-x.y.z.zip** from this repository's **Releases** and extract it.
+3. Install [UE4SS](https://github.com/UE4SS-RE/RE-UE4SS/releases) into the game's `Binaries\Win64` folder.
+4. Double-click **`Install RoNTAK.bat`**.
+5. Start a mission, then double-click **`Start RoNTAK.bat`**. Press **Phone** on the ATAK screen to open it on
+   a phone or tablet.
 
-## Use it with the game
+Step by step, with where to find everything: [docs/01-setup.md](docs/01-setup.md).
+To try it without the game: `Start RoNTAK.bat --mock`.
 
-Follow the guides in order:
+## Guides
 
-1. [docs/01-setup.md](docs/01-setup.md): install UE4SS and the mod, start the companion
+1. [docs/01-setup.md](docs/01-setup.md): install, first start, phone, troubleshooting
 2. [docs/03-maps.md](docs/03-maps.md): floors, floor plan images and rooms
 3. [docs/04-orders.md](docs/04-orders.md): every order, when it's available, and Hold for GO
 
 If a game update breaks something: [docs/02-discovery.md](docs/02-discovery.md).
+
+## Making a release
+
+1. Update `VERSION`, then merge into `main`.
+2. On GitHub: **Releases** → **Draft a new release**, create a tag like `v0.2.0` on `main`, and publish.
+3. A GitHub Action runs the tests and attaches `RoNTAK-0.2.0.zip` to the release within a few minutes.
 
 ## Running the tests
 

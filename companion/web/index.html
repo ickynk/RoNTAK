@@ -15,6 +15,7 @@
     <div class="spacer"></div>
     <select id="floor" title="Floor"></select>
     <button id="btn-center" title="Center on me">◎</button>
+    <button id="btn-phone" title="Open on a phone or tablet">Phone</button>
     <button id="btn-calibrate" class="mode-btn" title="Calibrate floor plan">Calibrate</button>
     <button id="btn-rooms" class="mode-btn" title="Draw rooms">Rooms</button>
   </header>
@@ -106,6 +107,14 @@
       </section>
     </aside>
   </main>
+
+  <div class="modal" id="phone-modal" hidden>
+    <div class="modal-box">
+      <div class="section-title">Open on a phone or tablet</div>
+      <div id="phone-body"></div>
+      <button id="phone-close">Close</button>
+    </div>
+  </div>
 
   <script src="geo.js"></script>
   <script src="app.js"></script>
