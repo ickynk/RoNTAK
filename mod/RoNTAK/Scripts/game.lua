@@ -45,6 +45,14 @@ local function plain(value)
     return value
 end
 
+-- A property value as UE4SS returns it (object wrappers, FStrings...).
+local function read_raw(obj, name)
+    if not name then return nil end
+    local ok, value = pcall(function() return obj[name] end)
+    if ok then return value end
+    return nil
+end
+
 local function read_property(obj, name)
     if not name then return nil end
     local ok, value = pcall(function() return obj[name] end)
@@ -65,6 +73,22 @@ local function door_locked(door)
     local locked = read_property(door, config.doors.locked_property)
     if locked == nil then locked = call_bool(door, config.doors.locked_function) end
     return locked
+end
+
+-- Text of an FName / FString / FText value; nil for empty or "None".
+-- (FName is not a UObject, so ToString on it is safe.)
+local function name_text(value)
+    if value == nil then return nil end
+    local ok, s = pcall(function() return value:ToString() end)
+    if ok and type(s) == "string" and s ~= "" and s ~= "None" then return s end
+    return nil
+end
+
+-- Calls a no-argument function returning an FName on a valid object.
+local function call_name(obj, fn_name)
+    local ok, value = pcall(function() return obj[fn_name](obj) end)
+    if ok then return name_text(value) end
+    return nil
 end
 
 local function find_all(classes)
@@ -128,6 +152,20 @@ local function excluded(name)
     return false
 end
 
+-- "First Last" from the officer's roster entry, else its squad slot name.
+-- The roster object can be empty: check it before reading from it (UE4SS
+-- errors on empty objects are not caught by pcall).
+local function officer_display_name(actor, raw_squad)
+    local roster = read_raw(actor, config.officers.roster_property)
+    if valid(roster) then
+        local first = name_text(read_raw(roster, "FirstName"))
+        local last = name_text(read_raw(roster, "LastName"))
+        local full = table.concat({ first or "", last or "" }, " "):gsub("^%s+", ""):gsub("%s+$", "")
+        if full ~= "" then return full end
+    end
+    return (config.officers.squad_names or {})[raw_squad]
+end
+
 local officer_cache = { at = -math.huge, list = {} }
 
 -- The officer actors, rebuilt with FindAllOf every RESCAN_SECONDS or when
@@ -152,7 +190,10 @@ local function officer_list()
             local name = object_name(actor)
             if name ~= player_name and not excluded(name) then
                 local raw_team = read_property(actor, config.officers.team_property)
-                list[#list + 1] = { actor = actor, name = name, team = config.officers.team_values[raw_team] or "unknown" }
+                list[#list + 1] = {
+                    actor = actor, name = name, team = config.officers.team_values[raw_team] or "unknown",
+                    display_name = officer_display_name(actor, raw_team),
+                }
             end
         end
     end
@@ -171,7 +212,7 @@ function game.officer_actors()
         if valid(o.actor) then
             local pos = location(o.actor)
             if pos then
-                result[#result + 1] = { actor = o.actor, name = o.name, team = o.team, pos = pos }
+                result[#result + 1] = { actor = o.actor, name = o.name, team = o.team, pos = pos, display_name = o.display_name }
             end
         end
     end
@@ -315,7 +356,7 @@ function game.officers()
     for _, o in ipairs(game.officer_actors()) do
         result[#result + 1] = {
             id = o.name,
-            name = read_property(o.actor, config.officers.name_property) or o.name,
+            name = o.display_name or o.name,
             team = o.team,
             pos = o.pos,
             yaw = yaw(o.actor),
@@ -363,7 +404,12 @@ local function rescan_doors(level)
             if pos then
                 local id = object_name(actor)
                 by_id[id] = actor
-                list[#list + 1] = { id = id, pos = pos, yaw = yaw(actor), _actor = actor }
+                list[#list + 1] = {
+                    id = id, pos = pos, yaw = yaw(actor), _actor = actor,
+                    -- The game's rooms on each side of the door.
+                    front_room = call_name(actor, config.doors.front_room_function),
+                    back_room = call_name(actor, config.doors.back_room_function),
+                }
             end
         end
     end
@@ -379,6 +425,8 @@ local function refresh_door_states()
             door.locked = door_locked(actor)
             door.open = call_bool(actor, config.doors.open_function)
             door.broken = call_bool(actor, config.doors.broken_function)
+            door.wedged = call_bool(actor, config.doors.jammed_function)
+            door.trap = call_bool(actor, config.doors.trap_known_function)
         end
     end
     door_cache.state_at = os.time()
@@ -394,7 +442,11 @@ function game.doors(level)
     end
     local list = {}
     for i, door in ipairs(door_cache.list) do
-        list[i] = { id = door.id, pos = door.pos, yaw = door.yaw, locked = door.locked, open = door.open, broken = door.broken }
+        list[i] = {
+            id = door.id, pos = door.pos, yaw = door.yaw, locked = door.locked, open = door.open,
+            broken = door.broken, wedged = door.wedged, trap = door.trap,
+            front_room = door.front_room, back_room = door.back_room,
+        }
     end
     return list
 end
@@ -432,7 +484,75 @@ function game.resolve_target(target, door)
     return nil
 end
 
+-- People who can be restrained or reported ------------------------------
+
+local TARGET_STATE_SECONDS = 1
+local target_cache = { at = -math.huge, actors = {} }
+local target_state = { at = -math.huge, list = {}, by_id = {} }
+
+local function target_actors()
+    if os.time() - target_cache.at < RESCAN_SECONDS then return target_cache.actors end
+    local actors = {}
+    for _, actor in ipairs(find_all(config.targets.classes)) do
+        if valid(actor) then
+            local t = config.targets
+            local suspect = call_bool(actor, t.suspect_function) == true
+            if suspect or call_bool(actor, t.civilian_function) == true then
+                actors[#actors + 1] = { actor = actor, id = object_name(actor), kind = suspect and "suspect" or "civilian" }
+            end
+        end
+    end
+    target_cache = { at = os.time(), actors = actors }
+    return actors
+end
+
+-- Suspects and civilians that are surrendered, restrained or down, with
+-- position and whether they have been reported. Anyone else is left out, so
+-- the map never shows an active suspect.
+function game.targets()
+    if os.time() - target_state.at < TARGET_STATE_SECONDS then return target_state.list end
+    local list, by_id = {}, {}
+    local t = config.targets
+    for _, entry in ipairs(target_actors()) do
+        local actor = entry.actor
+        if valid(actor) then
+            local status = nil
+            if call_bool(actor, t.arrested_function) then
+                status = "arrested"
+            elseif call_bool(actor, t.down_function) then
+                status = "down"
+            elseif call_bool(actor, t.surrendered_function) then
+                status = "surrendered"
+            end
+            local pos = status and location(actor)
+            if pos then
+                by_id[entry.id] = actor
+                list[#list + 1] = {
+                    id = entry.id, kind = entry.kind, status = status, pos = pos,
+                    reported = call_bool(actor, t.reported_function) == true,
+                }
+            end
+        end
+    end
+    target_state = { at = os.time(), list = list, by_id = by_id }
+    return list
+end
+
+function game.target_by_id(id)
+    local actor = target_state.by_id[id]
+    if valid(actor) then return actor end
+    return nil
+end
+
+-- The cached door entries (with front_room / back_room), for rooms.lua.
+function game.door_entries()
+    return door_cache.list
+end
+
 game.valid = valid
 game.object_name = object_name
+game.name_text = name_text
+game.location = location
+game.find_all = find_all
 
 return game

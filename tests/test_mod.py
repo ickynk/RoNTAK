@@ -136,7 +136,7 @@ objects = {
 
 function FindAllOf(class) return objects[class] end
 function FindFirstOf(class) return objects[class] and objects[class][1] end
-Key = { F6 = "F6", F7 = "F7", F8 = "F8", F9 = "F9", F10 = "F10" }
+Key = { F5 = "F5", F6 = "F6", F7 = "F7", F8 = "F8", F9 = "F9", F10 = "F10" }
 keybinds = {}
 function RegisterKeyBind(key, fn) keybinds[key] = fn end
 function ExecuteInGameThread(fn) fn() end
@@ -186,13 +186,28 @@ class ModTest(unittest.TestCase):
                          [("Swat_C_1", "red"), ("Swat_C_2", "blue")])
         self.assertEqual({d["id"]: (d.get("locked"), d.get("open"), d.get("broken")) for d in state["doors"]},
                          {"Door_C_7": (True, False, False), "Door_C_8": (None, True, None)})
-        self.assertEqual(len(state["configured_actions"]), 10)
+        self.assertEqual(len(state["configured_actions"]), 21)
         items = {o["id"]: o["items"] for o in state["officers"]}
         self.assertEqual(items["Swat_C_1"]["c2"], 1)
         self.assertEqual(items["Swat_C_1"]["flashbang"], 1)  # one of two is used up
         self.assertEqual(items["Swat_C_1"]["stinger"], 0)
         self.assertEqual(items["Swat_C_2"]["stinger"], 1)
         self.assertEqual(items["Swat_C_2"]["ninebang"], 0)
+
+    def test_officer_names_from_roster_or_squad_slot(self):
+        self.lua.execute(r"""
+            local function fstr(s) return { ToString = function() return s end } end
+            objects.CyberneticsSwat_V2_C[1].RosterCharacter = {
+                IsValid = function() return true end, FirstName = fstr("Dennis"), LastName = fstr("Judge"),
+            }
+            -- An empty roster object: reading from it would be a UE4SS error in game.
+            objects.CyberneticsSwat_V2_C[2].RosterCharacter = setmetatable({ IsValid = function() return false end }, {
+                __index = function(_, k) error("read " .. k .. " from an empty object") end,
+            })
+        """)
+        state = self.tick()
+        names = {o["id"]: o["name"] for o in state["officers"]}
+        self.assertEqual(names, {"Swat_C_1": "Dennis Judge", "Swat_C_2": "Alpha"})
 
     def test_stale_orders_skipped_and_not_rerun(self):
         hold = self.order(1, "blue", "hold")
@@ -292,49 +307,58 @@ class ModTest(unittest.TestCase):
             state = self.tick()
         self.assertEqual(state["results"][0]["message"], "the team did not start the breach within 20 s")
 
-    def test_map_info_dump(self):
+    def test_map_info_dump_buildings(self):
         self.lua.execute(r"""
             local function txt(s) return { ToString = function() return s end } end
-            local function soft(path) return { ToString = function() return path end } end
-            objects.ReadyOrNotGameState = { {
-                IsValid = function() return true end,
-                LevelData = {
-                    FriendlyLevelName = txt("23 Megabytes A Second"),
-                    DefaultFloorIndex = 1,
-                    MapLayout = { MapOrigin = { X = -5000, Y = 2500 }, MapSize = 12000,
-                                  MapOverviewTexture = soft("/Game/Maps/T_Overview.T_Overview") },
-                    MapFloors = tarray({
-                        { FloorFullName = txt("Ground Floor"), FloorShortName = txt("1F"),
-                          FloorLayout = soft("/Game/Maps/T_Floor1.T_Floor1"), FloorplanMaterial = soft("") },
-                    }),
-                    Floors = tarray({ { Name = txt("Ground"), Number = 0, FloorMap = soft("/Game/Maps/T_F1.T_F1") } }),
-                },
-            } }
-            local building = actor("BuildingTrigger_1", 0, 0, 0, 0, {
+            objects.BuildingTrigger = { actor("BuildingTrigger_1", 0, 0, 0, 0, {
                 BuildingName = txt("House"), NumberOfFloors = 2,
                 GeneratedFloors = tarray({
                     { Number = 0, Height = 300, Name = txt("Ground"), Location = { X = 0, Y = 0, Z = 0 }, Extent = { X = 1000, Y = 800, Z = 150 } },
+                    { Number = 1, Height = 300, Name = txt("Upstairs"), Location = { X = 0, Y = 0, Z = 300 }, Extent = { X = 1000, Y = 800, Z = 150 } },
                 }),
-            })
-            objects.BuildingTrigger = { building }
+            }) }
         """)
         self.lua.execute('keybinds["F6"]()')
         info = json.loads((self.bridge / "mapinfo.json").read_text())
         self.assertEqual(info["errors"], [])
-        self.assertEqual(info["level"], "RiverwoodHouse")
-        self.assertEqual(info["map_layout"], {"origin": {"x": -5000, "y": 2500}, "size": 12000,
-                                              "overview_texture": "/Game/Maps/T_Overview.T_Overview"})
-        self.assertEqual(info["soft_path_method"], "ToString")
-        self.assertEqual(info["map_floors"][0]["short_name"], "1F")
-        self.assertEqual(info["map_floors"][0]["layout_texture"], "/Game/Maps/T_Floor1.T_Floor1")
-        self.assertIsNone(info["map_floors"][0].get("floorplan_material"))
-        self.assertEqual(info["floors"][0]["floor_map"], "/Game/Maps/T_F1.T_F1")
-        self.assertEqual(info["buildings"][0]["floors"][0]["extent"], {"x": 1000, "y": 800, "z": 150})
+        building = info["buildings"][0]
+        self.assertEqual(building["name"], "House")
+        self.assertEqual([f["name"] for f in building["floors"]], ["Ground", "Upstairs"])
+        self.assertEqual(building["floors"][1]["location"], {"x": 0, "y": 0, "z": 300})
 
-    def test_map_info_dump_without_game_state(self):
-        self.lua.execute('keybinds["F6"]()')
-        info = json.loads((self.bridge / "mapinfo.json").read_text())
-        self.assertIn("no ReadyOrNotGameState", info["errors"])
+    def test_rooms_from_threat_points_and_doors(self):
+        self.lua.execute(r"""
+            local function fname(s) return { ToString = function() return s end } end
+            local function point(n, x, y, room, outside)
+                return actor(n, x, y, 10, 0, { OwningRoom = fname(room), bIsOutside = outside or false })
+            end
+            objects.ThreatAwarenessActor = {
+                point("T1", 0, 0, "Kitchen"), point("T2", 400, 0, "Kitchen"), point("T3", 400, 300, "Kitchen"),
+                point("T4", 0, 300, "Kitchen"), point("T5", 200, 150, "Kitchen"),   -- inside: not on the outline
+                point("T6", 900, 900, "Yard", true),                               -- outside: ignored
+                point("T7", 500, 500, "None"),                                     -- no room: ignored
+            }
+            objects.Door[1].GetFrontThreatOwningRoom = function() return fname("Kitchen") end
+            objects.Door[1].GetBackThreatOwningRoom = function() return fname("Hallway") end
+        """)
+        state = self.tick()
+        self.assertTrue(state["rooms_version"].startswith("RiverwoodHouse#2#"))
+        door = next(d for d in state["doors"] if d["id"] == "Door_C_7")
+        self.assertEqual((door["front_room"], door["back_room"]), ("Kitchen", "Hallway"))
+        data = json.loads((self.bridge / "rooms.json").read_text())
+        rooms = {r["name"]: r for r in data["rooms"]}
+        self.assertEqual(set(rooms), {"Kitchen", "Hallway"})
+        self.assertEqual(sorted(map(tuple, rooms["Kitchen"]["hull"])), [(0, 0), (0, 300), (400, 0), (400, 300)])
+        self.assertEqual(rooms["Kitchen"]["points"], 5)
+        self.assertEqual(rooms["Kitchen"]["z"], 10)
+        self.assertEqual(rooms["Kitchen"]["doors"], ["Door_C_7"])
+        self.assertEqual(rooms["Hallway"]["hull"], [])
+        self.assertEqual(rooms["Hallway"]["doors"], ["Door_C_7"])
+
+        version = state["rooms_version"]
+        for _ in range(10):
+            state = self.tick()
+        self.assertEqual(state["rooms_version"], version)  # built once per level
 
     def test_activity_dump(self):
         self.lua.execute('objects.CyberneticsSwat_V2_C[1].Controller = controller_with_throw(objects.Door[1], "BP_Flashbang_C")')
@@ -372,10 +396,108 @@ class ModTest(unittest.TestCase):
         """)
         for _ in range(40):  # 10 s of ticks, all within the same os.time() second here
             state = self.tick()
-        # One scan each for the player controller, officers and doors, not one per tick.
-        self.assertLessEqual(self.lua.globals().scans, 3)
+        # One scan each for the player controller, officers, doors, room points and people, not one per tick.
+        self.assertLessEqual(self.lua.globals().scans, 5)
         self.assertEqual(len(state["officers"]), 2)
         self.assertEqual(len(state["doors"]), 2)
+
+    def add_people(self):
+        self.lua.execute(r"""
+            local function person(n, x, flags)
+                local p = actor(n, x, 0, 0, 0, {})
+                for _, f in ipairs({ "IsSuspect", "IsCivilian", "IsSurrendered", "IsArrested",
+                                     "IsDeadOrUnconscious", "HasBeenReported" }) do
+                    p[f] = function() return flags[f] == true end
+                end
+                return p
+            end
+            objects.CyberneticCharacter = {
+                person("Suspect_Surrendered", 100, { IsSuspect = true, IsSurrendered = true }),
+                person("Suspect_Active", 200, { IsSuspect = true }),                      -- a threat: never shown
+                person("Civilian_Down", 300, { IsCivilian = true, IsDeadOrUnconscious = true, HasBeenReported = true }),
+                person("Suspect_Cuffed", 400, { IsSuspect = true, IsSurrendered = true, IsArrested = true }),
+                person("Swat_Other", 500, {}),                                            -- neither: never shown
+            }
+        """)
+
+    def test_people_only_when_no_longer_a_threat(self):
+        self.add_people()
+        state = self.tick()
+        people = {t["id"]: (t["kind"], t["status"], t["reported"]) for t in state["targets"]}
+        self.assertEqual(people, {
+            "Suspect_Surrendered": ("suspect", "surrendered", False),
+            "Civilian_Down": ("civilian", "down", True),
+            "Suspect_Cuffed": ("suspect", "arrested", False),
+        })
+
+    def test_restrain_and_report(self):
+        self.add_people()
+        self.tick()
+        self.run_orders(self.order(1, "red", "restrain", {"character": "Suspect_Surrendered", "location": {"x": 100, "y": 0}}),
+                        self.order(2, "blue", "report", {"character": "Civilian_Down"}))
+        fn, args = self.call(1)
+        self.assertEqual((fn, args[0].GetFName().ToString(), args[1]), ("GiveRestrainCommand", "Suspect_Surrendered", 1))
+        self.assertEqual(dict(args[2]), {"X": 100, "Y": 0, "Z": 0})
+        fn, args = self.call(2)
+        self.assertEqual((fn, args[0].GetFName().ToString(), args[1]), ("GiveReportTargetCommand", "Civilian_Down", 2))
+
+    def test_new_door_and_spot_orders(self):
+        self.run_orders(self.order(1, "red", "pick_lock", {"door": "Door_C_7"}),
+                        self.order(2, "red", "scan_open", {"door": "Door_C_7"}, {"scan": "snap"}),
+                        self.order(3, "blue", "remove_wedge", {"door": "Door_C_7"}),
+                        self.order(4, "gold", "chemlight", {"location": {"x": 1, "y": 2, "z": 3}}))
+        self.assertEqual([self.call(i)[0] for i in range(1, 5)],
+                         ["GivePickLockCommand", "GiveScanDoorCommand", "GiveRemoveWedgeCommand", "GiveDropChemlightAtLocation"])
+        self.assertEqual(self.call(2)[1][3], 3)  # EDoorScanMethod Snap
+        self.assertEqual(len(self.call(3)[1]), 4)  # door, team, location, normal
+
+    def test_deploy_grenade_at_spot_writes_class_from_hook(self):
+        self.lua.execute("drop_class_args = true")
+        self.run_orders(self.order(1, "red", "deploy_grenade", {"location": {"x": 5, "y": 6}}, {"grenade": "flashbang"}))
+        fn, args = self.call(1)
+        self.assertEqual((fn, args[0], args[2]["name"]), ("GiveDeployGrenadeAtLocation", 1, "Flashbang"))
+
+    def test_door_wedge_and_trap_state(self):
+        self.lua.execute("objects.Door[1].IsJammed = function() return true end "
+                         "objects.Door[1].HasTrapAndSWATKnowsTrap = function() return true end")
+        state = self.tick()
+        door = next(d for d in state["doors"] if d["id"] == "Door_C_7")
+        self.assertEqual((door["wedged"], door["trap"]), (True, True))
+
+    def test_held_orders_start_together_on_go(self):
+        self.send("A", [])
+        self.tick()
+        hold_red = dict(self.order(1, "red", "hold"), hold=True)
+        hold_blue = dict(self.order(2, "blue", "fall_in"), hold=True)
+        self.send("A", [hold_red, hold_blue])
+        state = self.tick()
+        self.assertEqual(len(self.lua.globals().calls), 0)
+        self.assertEqual([h["team"] for h in state["held"]], ["red", "blue"])
+        self.assertEqual({r["id"]: r["status"] for r in state["results"]}, {1: "held", 2: "held"})
+
+        self.send("A", [hold_red, hold_blue, self.order(3, "gold", "go")])
+        state = self.tick()
+        self.assertEqual([self.call(i)[0] for i in (1, 2)], ["GiveHoldCommand", "GiveFallInCommand"])
+        self.assertEqual(state["held"], [])
+        results = {r["id"]: (r["status"], r.get("message")) for r in state["results"]}
+        self.assertEqual(results, {1: ("ok", None), 2: ("ok", None), 3: ("ok", "started 2 held orders")})
+
+    def test_gold_hold_replaces_team_holds_and_f5_starts(self):
+        self.send("A", [])
+        self.tick()
+        self.send("A", [dict(self.order(1, "red", "hold"), hold=True), dict(self.order(2, "gold", "fall_in"), hold=True)])
+        state = self.tick()
+        self.assertEqual([h["team"] for h in state["held"]], ["gold"])
+        self.lua.execute('keybinds["F5"]()')
+        self.assertEqual(self.call(1), ("GiveFallInCommand", [5, 0]))
+
+    def test_clear_held(self):
+        self.send("A", [])
+        self.tick()
+        self.send("A", [dict(self.order(1, "red", "hold"), hold=True), self.order(2, "red", "clear_held")])
+        state = self.tick()
+        self.assertEqual(state["held"], [])
+        self.assertEqual(next(r for r in state["results"] if r["id"] == 1)["status"], "cancelled")
 
     def test_test_order_hotkey(self):
         self.tick()

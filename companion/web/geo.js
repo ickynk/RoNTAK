@@ -92,7 +92,40 @@
     return [poly.reduce((s, p) => s + p[0], 0) / n, poly.reduce((s, p) => s + p[1], 0) / n];
   }
 
-  const api = { DEFAULT, fit, apply, invert, pointInPolygon, distToPolygonEdge, centroid };
+  // Finds floors in a list of heights (e.g. every door's Z). A floor is a
+  // height where at least `minCount` doors sit within `window` of each other;
+  // floors are at least `separation` apart. Doors in between (stairs,
+  // landings, split levels) don't make floors of their own: picking the
+  // densest heights first lets them be absorbed by a nearby floor.
+  // Returns [{ zMin, zMax, z }] lowest first; neighbouring floors meet halfway
+  // between their heights, and the lowest / highest bands are open-ended.
+  function floorBands(zs, separation = 200, minCount = 2, window = 60) {
+    const heights = zs.filter((z) => Number.isFinite(z)).sort((a, b) => a - b);
+    if (!heights.length) return [];
+    const near = (z) => heights.filter((h) => Math.abs(h - z) <= window);
+    let candidates = heights.slice();
+    const floors = [];
+    while (candidates.length) {
+      let best = null, bestCount = 0;
+      for (const z of candidates) {
+        const n = near(z).length;
+        if (n > bestCount) { best = z; bestCount = n; }
+      }
+      if (bestCount < minCount && floors.length) break;
+      const cluster = near(best);
+      floors.push(cluster.reduce((sum, h) => sum + h, 0) / cluster.length);
+      candidates = candidates.filter((z) => Math.abs(z - best) > separation);
+    }
+    floors.sort((a, b) => a - b);
+    const OPEN = 1e7;
+    return floors.map((z, i) => ({
+      z,
+      zMin: i === 0 ? -OPEN : (floors[i - 1] + z) / 2,
+      zMax: i === floors.length - 1 ? OPEN : (z + floors[i + 1]) / 2,
+    }));
+  }
+
+  const api = { DEFAULT, fit, apply, invert, pointInPolygon, distToPolygonEdge, centroid, floorBands };
   root.Geo = api;
   if (typeof module !== "undefined") module.exports = api;
 })(typeof window !== "undefined" ? window : globalThis);

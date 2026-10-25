@@ -47,6 +47,12 @@ class ServerTest(unittest.TestCase):
         self.assertTrue(body["connected"])
         self.assertEqual(body["level"], "X")
 
+    def test_rooms(self):
+        (self.bridge / "rooms.json").unlink(missing_ok=True)
+        self.assertEqual(self.call("GET", "/api/rooms")[1], {"level": None, "rooms": []})
+        (self.bridge / "rooms.json").write_text(json.dumps({"level": "X", "rooms": [{"name": "Kitchen"}]}))
+        self.assertEqual(self.call("GET", "/api/rooms")[1]["rooms"][0]["name"], "Kitchen")
+
     def test_command_written_for_mod(self):
         status, cmd = self.call("POST", "/api/command", {
             "team": "blue", "action": "breach_clear",
@@ -59,6 +65,18 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(last["id"], cmd["id"])
         self.assertEqual(last["options"], {"breach": "c2", "grenade": "flashbang"})
         self.assertEqual(last["target"]["location"], {"x": 1.0, "y": 2.0, "z": 0.0})
+
+    def test_hold_and_character_target(self):
+        status, cmd = self.call("POST", "/api/command", {
+            "team": "red", "action": "restrain", "hold": True,
+            "target": {"character": "Suspect_1"}, "options": {"scan": "snap"},
+        })
+        self.assertEqual(status, 200)
+        last = json.loads((self.bridge / "commands.json").read_text())["commands"][-1]
+        self.assertEqual((last["hold"], last["target"], last["options"]), (True, {"character": "Suspect_1"}, {"scan": "snap"}))
+        status, cmd = self.call("POST", "/api/command", {"team": "gold", "action": "go", "hold": True})
+        last = json.loads((self.bridge / "commands.json").read_text())["commands"][-1]
+        self.assertNotIn("hold", last)  # GO itself is never held
 
     def test_command_validation(self):
         self.assertEqual(self.call("POST", "/api/command", {"team": "green", "action": "hold"})[0], 400)

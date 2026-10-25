@@ -8,6 +8,7 @@ local game = require("game")
 local log = require("log")
 local mapinfo = require("mapinfo")
 local orders = require("orders")
+local rooms = require("rooms")
 
 local MAX_RESULTS = 30
 
@@ -33,9 +34,12 @@ local function tick()
     game.begin_tick()
     local level = game.level_name()
     for _, cmd in ipairs(bridge.new_commands()) do
-        remember(orders.execute(cmd))
+        remember(orders.dispatch(cmd))
     end
     orders.run_checks()
+
+    local doors = level and game.doors(level) or {}
+    local rooms_version = rooms.update(level)
 
     seq = seq + 1
     bridge.write_state({
@@ -45,7 +49,10 @@ local function tick()
         level = level,
         player = game.player(),
         officers = level and game.officers() or {},
-        doors = level and game.doors(level) or {},
+        doors = doors,
+        targets = level and game.targets() or {},
+        held = orders.held_list(),
+        rooms_version = rooms_version,
         results = results,
         configured_actions = configured_actions(),
     })
@@ -105,6 +112,7 @@ local function activity_dump()
     for _, line in ipairs(lines) do log.info(line) end
 end
 
+bind(config.keys.execute_held, orders.execute_held)
 bind(config.keys.map_info, mapinfo.dump)
 bind(config.keys.activity_dump, activity_dump)
 bind(config.keys.discovery_dump, discovery.dump)
