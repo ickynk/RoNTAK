@@ -66,6 +66,18 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(last["options"], {"breach": "c2", "grenade": "flashbang"})
         self.assertEqual(last["target"]["location"], {"x": 1.0, "y": 2.0, "z": 0.0})
 
+    def test_hold_and_character_target(self):
+        status, cmd = self.call("POST", "/api/command", {
+            "team": "red", "action": "restrain", "hold": True,
+            "target": {"character": "Suspect_1"}, "options": {"scan": "snap"},
+        })
+        self.assertEqual(status, 200)
+        last = json.loads((self.bridge / "commands.json").read_text())["commands"][-1]
+        self.assertEqual((last["hold"], last["target"], last["options"]), (True, {"character": "Suspect_1"}, {"scan": "snap"}))
+        status, cmd = self.call("POST", "/api/command", {"team": "gold", "action": "go", "hold": True})
+        last = json.loads((self.bridge / "commands.json").read_text())["commands"][-1]
+        self.assertNotIn("hold", last)  # GO itself is never held
+
     def test_command_validation(self):
         self.assertEqual(self.call("POST", "/api/command", {"team": "green", "action": "hold"})[0], 400)
         self.assertEqual(self.call("POST", "/api/command", {"team": "red", "action": "dance"})[0], 400)

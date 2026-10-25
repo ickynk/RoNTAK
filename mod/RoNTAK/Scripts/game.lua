@@ -425,6 +425,8 @@ local function refresh_door_states()
             door.locked = door_locked(actor)
             door.open = call_bool(actor, config.doors.open_function)
             door.broken = call_bool(actor, config.doors.broken_function)
+            door.wedged = call_bool(actor, config.doors.jammed_function)
+            door.trap = call_bool(actor, config.doors.trap_known_function)
         end
     end
     door_cache.state_at = os.time()
@@ -442,7 +444,8 @@ function game.doors(level)
     for i, door in ipairs(door_cache.list) do
         list[i] = {
             id = door.id, pos = door.pos, yaw = door.yaw, locked = door.locked, open = door.open,
-            broken = door.broken, front_room = door.front_room, back_room = door.back_room,
+            broken = door.broken, wedged = door.wedged, trap = door.trap,
+            front_room = door.front_room, back_room = door.back_room,
         }
     end
     return list
@@ -478,6 +481,66 @@ function game.resolve_target(target, door)
         target_cache[target] = obj
         return obj
     end
+    return nil
+end
+
+-- People who can be restrained or reported ------------------------------
+
+local TARGET_STATE_SECONDS = 1
+local target_cache = { at = -math.huge, actors = {} }
+local target_state = { at = -math.huge, list = {}, by_id = {} }
+
+local function target_actors()
+    if os.time() - target_cache.at < RESCAN_SECONDS then return target_cache.actors end
+    local actors = {}
+    for _, actor in ipairs(find_all(config.targets.classes)) do
+        if valid(actor) then
+            local t = config.targets
+            local suspect = call_bool(actor, t.suspect_function) == true
+            if suspect or call_bool(actor, t.civilian_function) == true then
+                actors[#actors + 1] = { actor = actor, id = object_name(actor), kind = suspect and "suspect" or "civilian" }
+            end
+        end
+    end
+    target_cache = { at = os.time(), actors = actors }
+    return actors
+end
+
+-- Suspects and civilians that are surrendered, restrained or down, with
+-- position and whether they have been reported. Anyone else is left out, so
+-- the map never shows an active suspect.
+function game.targets()
+    if os.time() - target_state.at < TARGET_STATE_SECONDS then return target_state.list end
+    local list, by_id = {}, {}
+    local t = config.targets
+    for _, entry in ipairs(target_actors()) do
+        local actor = entry.actor
+        if valid(actor) then
+            local status = nil
+            if call_bool(actor, t.arrested_function) then
+                status = "arrested"
+            elseif call_bool(actor, t.down_function) then
+                status = "down"
+            elseif call_bool(actor, t.surrendered_function) then
+                status = "surrendered"
+            end
+            local pos = status and location(actor)
+            if pos then
+                by_id[entry.id] = actor
+                list[#list + 1] = {
+                    id = entry.id, kind = entry.kind, status = status, pos = pos,
+                    reported = call_bool(actor, t.reported_function) == true,
+                }
+            end
+        end
+    end
+    target_state = { at = os.time(), list = list, by_id = by_id }
+    return list
+end
+
+function game.target_by_id(id)
+    local actor = target_state.by_id[id]
+    if valid(actor) then return actor end
     return nil
 end
 

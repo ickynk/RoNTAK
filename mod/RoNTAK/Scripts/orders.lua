@@ -136,6 +136,12 @@ local function build_args(spec, cmd, door)
             value = breach == "leader"
         elseif arg == "$fall_in" then
             value = config.fall_in_pattern
+        elseif arg == "$scan" then
+            value = lookup("scan_args", options.scan or "slice")
+        elseif arg == "$character" then
+            local id = cmd.target and cmd.target.character
+            value = id and game.target_by_id(id)
+            if not value then error("that person is no longer on the map") end
         end
         args[i] = value
     end
@@ -189,6 +195,82 @@ function orders.execute(cmd)
         log.error(string.format("order %d failed: %s", cmd.id, tostring(err)))
     end
     return result
+end
+
+-- Held orders ("Hold for GO") ---------------------------------------------
+
+-- team -> { cmd = order, result = its result table }. GOLD means both teams,
+-- so holding GOLD replaces held RED / BLUE orders and the other way round.
+local held = {}
+local HELD_ORDER = { "gold", "red", "blue" }
+
+function orders.hold(cmd)
+    if cmd.team == "gold" then
+        held.red, held.blue = nil, nil
+    else
+        held.gold = nil
+    end
+    local result = { id = cmd.id, team = cmd.team, action = cmd.action, status = "held" }
+    held[cmd.team] = { cmd = cmd, result = result }
+    log.info(string.format("order %d: %s %s held for GO", cmd.id, cmd.team, cmd.action))
+    return result
+end
+
+-- Starts every held order at once. Each held order's result is updated in place.
+function orders.execute_held()
+    local count = 0
+    for _, team in ipairs(HELD_ORDER) do
+        local entry = held[team]
+        if entry then
+            held[team] = nil
+            local result = orders.execute(entry.cmd)
+            for k, v in pairs(result) do entry.result[k] = v end
+            if result.status == "ok" then
+                -- Breach checks report on the result table the screen shows.
+                for _, check in ipairs(pending_checks) do
+                    if check.result == result then check.result = entry.result end
+                end
+            end
+            count = count + 1
+        end
+    end
+    log.info(string.format("GO: started %d held orders", count))
+    return count
+end
+
+function orders.clear_held()
+    for team, entry in pairs(held) do
+        entry.result.status, entry.result.message = "cancelled", "cleared before GO"
+        held[team] = nil
+    end
+end
+
+-- Held orders for state.json.
+function orders.held_list()
+    local list = {}
+    for _, team in ipairs(HELD_ORDER) do
+        local entry = held[team]
+        if entry then
+            list[#list + 1] = { id = entry.cmd.id, team = team, action = entry.cmd.action }
+        end
+    end
+    return list
+end
+
+-- Handles one command from the companion: an order to run now, an order to
+-- hold, or a GO / clear for the held orders. Returns a result table.
+function orders.dispatch(cmd)
+    if cmd.action == "go" then
+        local count = orders.execute_held()
+        return { id = cmd.id, team = cmd.team, action = "go", status = "ok",
+                 message = string.format("started %d held orders", count) }
+    elseif cmd.action == "clear_held" then
+        orders.clear_held()
+        return { id = cmd.id, team = cmd.team, action = "clear_held", status = "ok" }
+    elseif cmd.hold then
+        return orders.hold(cmd)
+    end
+    return orders.execute(cmd)
 end
 
 -- Called every tick: reports which officer got the door job of recent breach

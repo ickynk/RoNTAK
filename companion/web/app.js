@@ -14,27 +14,44 @@
     grenade: [["none", "None"], ["flashbang", "Flash"], ["stinger", "Stinger"], ["cs", "CS Gas"],
       ["ninebang", "9-Bang"], ["launcher", "Launcher"]],
     side: [["auto", "Auto"], ["split", "Split"], ["left", "Left"], ["right", "Right"]],
+    scan: [["slice", "Slice"], ["slide", "Slide"], ["snap", "Snap"], ["center", "Center"]],
   };
-  const OPTION_LABEL = { breach: "Breach", grenade: "Grenade", side: "Stack" };
+  const OPTION_LABEL = { breach: "Breach", grenade: "Grenade", side: "Stack", scan: "Scan" };
   // Option values that use up an item. The mod reports item counts per officer.
   const OPTION_ITEMS = {
     breach: { c2: "c2", shotgun: "shotgun", ram: "ram" },
     grenade: { flashbang: "flashbang", stinger: "stinger", cs: "cs", ninebang: "ninebang", launcher: "launcher" },
   };
-  const OPTION_FALLBACK = { breach: "kick", grenade: "none" };
-  const ACTION_ITEMS = { wedge_door: "wedge", scan_door: "mirror" };
-  // Orders the game allows on a door that is already open or broken.
-  const OPEN_DOOR_ACTIONS = new Set(["move_clear", "stack_up"]);
+  // Items an order needs (any one of them).
+  const ACTION_ITEMS = {
+    wedge_door: ["wedge"], scan_door: ["mirror"], pick_lock: ["multitool", "lockpick_gun"],
+    disarm_trap: ["multitool"], chemlight: ["chemlight"],
+  };
+  const ITEM_LABEL = { lockpick_gun: "lockpick", multitool: "multitool" };
 
-  // needs: "door" (door or room target), "location" (any target), null (team-wide)
+  // needs: "door" (a door, or a room through one of its doors), "spot" (a point on
+  // the map), "person" (a surrendered / restrained / downed person), null (team-wide).
+  // door: "closed" / "open" = only on a door in that state. values: allowed option values.
   const ACTIONS = [
     { id: "stack_up", label: "Stack Up", needs: "door", options: ["side"] },
-    { id: "breach_clear", label: "Breach & Clear", needs: "door", options: ["breach", "grenade"] },
-    { id: "open_clear", label: "Open & Clear", needs: "door", options: ["grenade"] },
-    { id: "move_clear", label: "Move & Clear", needs: "door", options: ["grenade"] },
-    { id: "scan_door", label: "Mirror Door", needs: "door", options: [] },
-    { id: "wedge_door", label: "Wedge Door", needs: "door", options: [] },
-    { id: "move_to", label: "Move To", needs: "location", options: [] },
+    { id: "breach_clear", label: "Breach & Clear", needs: "door", door: "closed", options: ["breach", "grenade", "side"] },
+    { id: "open_clear", label: "Open & Clear", needs: "door", door: "closed", options: ["grenade", "side"] },
+    { id: "move_clear", label: "Move & Clear", needs: "door", door: "open", options: ["grenade", "side"] },
+    { id: "scan_open", label: "Scan Room", needs: "door", door: "open", options: ["scan"] },
+    { id: "scan_door", label: "Mirror Door", needs: "door", door: "closed", options: [] },
+    { id: "pick_lock", label: "Pick Lock", needs: "door", door: "closed", options: [] },
+    { id: "check_traps", label: "Check for Traps", needs: "door", door: "closed", options: [] },
+    { id: "disarm_trap", label: "Disarm Trap", needs: "door", door: "closed", options: [] },
+    { id: "wedge_door", label: "Wedge Door", needs: "door", door: "closed", options: [] },
+    { id: "remove_wedge", label: "Remove Wedge", needs: "door", door: "closed", options: [] },
+    { id: "close_door", label: "Close Door", needs: "door", door: "open", options: [] },
+    { id: "restrain", label: "Restrain", needs: "person", options: [] },
+    { id: "report", label: "Report", needs: "person", options: [] },
+    { id: "move_to", label: "Move To", needs: "spot", options: [] },
+    { id: "cover_area", label: "Cover Area", needs: "spot", options: [] },
+    { id: "deploy_grenade", label: "Deploy Grenade", needs: "spot", options: ["grenade"],
+      values: { grenade: ["flashbang", "stinger", "cs", "ninebang"] } },
+    { id: "chemlight", label: "Drop Chemlight", needs: "spot", options: [] },
     { id: "fall_in", label: "Fall In", needs: null, options: [] },
     { id: "hold", label: "Hold", needs: null, options: [] },
     { id: "search_secure", label: "Search & Secure", needs: null, options: [] },
@@ -72,6 +89,7 @@
     mapLoaded: false, // map.json of app.level has been read
     roomsVersion: null,
     pendingAnchor: null, // calibration: world position of the door tapped first
+    holdForGo: false, // send orders as "held" until GO
     draft: [],
     dirty: true,
   };
@@ -176,9 +194,13 @@
     const room = sides.length ? null : allRooms().find((r) => (r.doors || []).includes(id));
     const base = sides.length ? `${sides.join(" / ")} door` : room ? `${room.name} door` : `Door ${id.replace(/^.*_/, "#")}`;
     if (!door) return base;
-    if (door.broken) return `${base} (broken)`;
-    if (door.open) return `${base} (open)`;
-    return door.locked ? `${base} (locked)` : base;
+    const notes = [];
+    if (door.broken) notes.push("broken");
+    else if (door.open) notes.push("open");
+    if (door.wedged) notes.push("wedged");
+    if (door.locked && !door.open) notes.push("locked");
+    if (door.trap) notes.push("trapped");
+    return notes.length ? `${base} (${notes.join(", ")})` : base;
   }
 
   function teamMembers(team) {
@@ -385,6 +407,7 @@
 
     drawRooms();
     drawDoors();
+    drawPeople();
     drawOfficers();
     drawPlayer();
     drawTargetLocation();
@@ -467,12 +490,19 @@
       const [bx, by] = worldToScreen(d.pos.x - Math.cos(rad) * 45, d.pos.y - Math.sin(rad) * 45);
       const sel = d.id === selectedId;
       ctx.lineCap = "round";
-      ctx.strokeStyle = sel ? "#00bcd4" : d.broken ? "#9e9e9e" : d.open ? "#66bb6a" : d.locked ? "#ff7043" : "#ffd54f";
+      ctx.strokeStyle = sel ? "#00bcd4" : d.broken ? "#9e9e9e" : d.open ? "#66bb6a" : d.wedged ? "#ab47bc"
+        : d.locked ? "#ff7043" : "#ffd54f";
       ctx.lineWidth = sel ? 7 : 5;
       ctx.beginPath();
       ctx.moveTo(bx, by);
       ctx.lineTo(ex, ey);
       ctx.stroke();
+      if (d.trap) {
+        ctx.fillStyle = "#e53935";
+        ctx.font = "800 14px system-ui, sans-serif";
+        ctx.textAlign = "center";
+        ctx.fillText("!", sx, sy - 10);
+      }
       if (sel) {
         ctx.beginPath();
         ctx.arc(sx, sy, 14, 0, Math.PI * 2);
@@ -480,6 +510,46 @@
         ctx.lineWidth = 2;
         ctx.stroke();
       }
+    }
+  }
+
+  const PERSON_COLORS = { suspect: "#ff7043", civilian: "#81c784" };
+  const PERSON_LETTER = { surrendered: "S", arrested: "R", down: "✕" };
+
+  // Surrendered / restrained / downed people: suspects as diamonds, civilians
+  // as circles, with a letter for their state. Reported people are faded.
+  function drawPeople() {
+    const f = floor();
+    const selected = app.target && app.target.type === "person" ? app.target.character : null;
+    for (const t of (app.state && app.state.targets) || []) {
+      const [sx, sy] = worldToScreen(t.pos.x, t.pos.y);
+      ctx.globalAlpha = (onFloor(t.pos.z, f) ? 1 : 0.3) * (t.reported ? 0.5 : 1);
+      ctx.fillStyle = PERSON_COLORS[t.kind] || "#bdbdbd";
+      ctx.strokeStyle = "#101316";
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      if (t.kind === "suspect") {
+        ctx.moveTo(sx, sy - 10); ctx.lineTo(sx + 10, sy); ctx.lineTo(sx, sy + 10); ctx.lineTo(sx - 10, sy);
+        ctx.closePath();
+      } else {
+        ctx.arc(sx, sy, 8, 0, Math.PI * 2);
+      }
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillStyle = "#101316";
+      ctx.font = "700 10px system-ui, sans-serif";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(PERSON_LETTER[t.status] || "?", sx, sy + 0.5);
+      ctx.textBaseline = "alphabetic";
+      if (t.id === selected) {
+        ctx.strokeStyle = "#00bcd4";
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(sx, sy, 15, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+      ctx.globalAlpha = 1;
     }
   }
 
@@ -678,10 +748,28 @@
     return best;
   }
 
+  const PERSON_HIT_PX = 16;
+
+  // The person marker under a screen point (on the current floor), or null.
+  function personAt(sx, sy) {
+    const f = floor();
+    let best = null, bestD = PERSON_HIT_PX;
+    for (const t of (app.state && app.state.targets) || []) {
+      if (!onFloor(t.pos.z, f)) continue;
+      const [px, py] = worldToScreen(t.pos.x, t.pos.y);
+      const dist = Math.hypot(px - sx, py - sy);
+      if (dist < bestD) { best = t; bestD = dist; }
+    }
+    return best;
+  }
+
   function selectAt(sx, sy) {
-    const best = doorAt(sx, sy);
+    const person = personAt(sx, sy);
+    const best = person ? null : doorAt(sx, sy);
     const [wx, wy] = screenToWorld(sx, sy);
-    if (best) {
+    if (person) {
+      app.target = { type: "person", character: person.id };
+    } else if (best) {
       const room = allRooms().find((r) => (r.doors || []).includes(best.id));
       app.target = { type: "door", door: best.id, room: room && room.name };
     } else {
@@ -713,11 +801,18 @@
     });
   }
 
+  // The order picked when a target is tapped: the first one that can be given.
   function defaultAction() {
-    if (!app.target) return null;
-    if (app.target.type === "location") return "move_to";
-    if (!app.target.door) return "move_to";
-    return doorIsOpen(doorById(app.target.door)) ? "move_clear" : "stack_up";
+    const t = app.target;
+    if (!t) return null;
+    let preferred = ["move_to"];
+    if (t.type === "person") preferred = ["restrain", "report"];
+    else if (t.door) {
+      const door = doorById(t.door);
+      preferred = door && door.wedged ? ["remove_wedge", "stack_up"]
+        : doorIsOpen(door) ? ["move_clear", "stack_up"] : ["stack_up"];
+    }
+    return preferred.find((id) => actionAllowed(ACTION_BY_ID[id])) || preferred[0];
   }
 
   // ---------------------------------------------------------------- orders
@@ -734,22 +829,80 @@
     return members.reduce((sum, o) => sum + (o.items[item] || 0), 0);
   }
 
-  function itemMissing(item) {
-    return item && teamItemCount(item) === 0;
+  // True when the team has none of the items (any one of them would do).
+  function itemsMissing(items) {
+    if (!items || !items.length) return false;
+    return items.every((item) => teamItemCount(item) === 0);
+  }
+
+  function personById(id) {
+    return ((app.state && app.state.targets) || []).find((t) => t.id === id) || null;
+  }
+
+  // Whether an order belongs on the panel for the current target at all.
+  function actionVisible(action) {
+    const t = app.target;
+    if (!action.needs) return true;
+    if (!t) return false;
+    if (action.needs === "person") return t.type === "person";
+    if (action.needs === "door") return Boolean(t.door) && (t.type === "door" || t.type === "room");
+    // Spot orders: on a map point or a room; on a door only Move To.
+    if (t.type === "location" || t.type === "room") return true;
+    return t.type === "door" && action.id === "move_to";
+  }
+
+  // Option values offered for an order (e.g. no "None" for Deploy Grenade).
+  function optionValues(action, key) {
+    const allowed = action.values && action.values[key];
+    return OPTION_CHOICES[key].filter(([value]) => !allowed || allowed.includes(value));
+  }
+
+  function optionAvailable(key, value) {
+    const item = (OPTION_ITEMS[key] || {})[value];
+    return !item || teamItemCount(item) !== 0;
+  }
+
+  // Why an order on a door can't be given in the door's current state, or null.
+  function doorReason(action, door) {
+    if (!door) return null;
+    const open = doorIsOpen(door);
+    if (action.door === "closed" && open) return "door is open";
+    if (action.door === "open" && !open) return "door is closed";
+    if (action.id === "close_door" && door.broken) return "door is broken";
+    if (door.wedged && !["remove_wedge", "stack_up"].includes(action.id)) return "door is wedged";
+    if (action.id === "remove_wedge" && !door.wedged) return "not wedged";
+    if (action.id === "disarm_trap" && !door.trap) return "no known trap";
+    if (action.id === "open_clear" && door.locked) return "door is locked";
+    if (action.id === "pick_lock" && door.locked === false) return "not locked";
+    return null;
+  }
+
+  function personReason(action, person) {
+    if (!person) return "no longer on the map";
+    if (action.id === "restrain" && person.status === "arrested") return "already restrained";
+    if (action.id === "report" && person.reported) return "already reported";
+    if (action.id === "report" && person.status === "surrendered") return "restrain first";
+    return null;
   }
 
   // Why an order cannot be given right now, or null if it can.
   function blockedReason(action) {
-    if (!action.needs) return null;
-    if (!app.target) return "pick a target";
-    if (action.needs !== "door") return null;
-    if (!app.target.door) return "needs a door";
-    const door = doorById(app.target.door);
-    if (doorIsOpen(door) && !OPEN_DOOR_ACTIONS.has(action.id)) return "door is open";
-    if (door && !doorIsOpen(door) && action.id === "move_clear") return "door is closed";
-    if (door && door.locked && action.id === "open_clear") return "door is locked";
-    const item = ACTION_ITEMS[action.id];
-    if (itemMissing(item)) return `no ${item} on ${TEAM_LABEL[app.team]}`;
+    if (!actionVisible(action)) return "pick a target";
+    if (action.needs === "door") {
+      const reason = doorReason(action, doorById(app.target.door));
+      if (reason) return reason;
+    }
+    if (action.needs === "person") {
+      const reason = personReason(action, personById(app.target.character));
+      if (reason) return reason;
+    }
+    const items = ACTION_ITEMS[action.id];
+    if (itemsMissing(items)) return `no ${ITEM_LABEL[items[0]] || items[0]} on ${TEAM_LABEL[app.team]}`;
+    for (const key of action.options) {
+      if (!optionValues(action, key).some(([value]) => optionAvailable(key, value))) {
+        return `no ${OPTION_LABEL[key].toLowerCase()} gear on ${TEAM_LABEL[app.team]}`;
+      }
+    }
     return null;
   }
 
@@ -757,16 +910,32 @@
     return blockedReason(action) === null;
   }
 
-  // Switches options the team has no item for back to one that needs none.
+  // Orders blocked for these reasons are left off the panel (they don't fit
+  // the door at all); other blocked orders are shown greyed with the reason.
+  const HIDDEN_REASONS = new Set(["door is open", "door is closed", "door is wedged", "not wedged", "no known trap", "not locked"]);
+
+  // Moves the options of the selected order to values it offers and the team
+  // has gear for (e.g. back to Kick when the C2 is used up).
   function fixOptions() {
-    for (const [key, items] of Object.entries(OPTION_ITEMS)) {
-      if (itemMissing(items[app.options[key]])) app.options[key] = OPTION_FALLBACK[key];
+    const action = ACTION_BY_ID[app.action];
+    if (!action) return;
+    for (const key of action.options) {
+      const values = optionValues(action, key);
+      const current = values.find(([value]) => value === app.options[key]);
+      if (!current || !optionAvailable(key, current[0])) {
+        const first = values.find(([value]) => optionAvailable(key, value));
+        if (first) app.options[key] = first[0];
+      }
     }
   }
 
   function targetLocation() {
     const t = app.target;
     if (!t) return null;
+    if (t.type === "person") {
+      const person = personById(t.character);
+      return person ? person.pos : null;
+    }
     if (t.type === "location") return t.location;
     if (t.type === "room") {
       const room = findRoom(t.room);
@@ -780,9 +949,18 @@
     return door ? door.pos : null;
   }
 
+  const PERSON_STATUS = { surrendered: "Surrendered", arrested: "Restrained", down: "Downed" };
+
+  function describePerson(person) {
+    if (!person) return "Person (gone)";
+    const text = `${PERSON_STATUS[person.status] || person.status} ${person.kind}`;
+    return person.reported ? `${text} (reported)` : text;
+  }
+
   function describeTarget() {
     const t = app.target;
-    if (!t) return "Tap a door, room or spot on the map";
+    if (!t) return "Tap a door, room, person or spot on the map";
+    if (t.type === "person") return describePerson(personById(t.character));
     if (t.type === "location") return `Map point (${Math.round(t.location.x)}, ${Math.round(t.location.y)})`;
     if (t.type === "room") return t.door ? `${t.room} — via ${doorLabel(t.door)}` : `${t.room} (no linked door)`;
     return doorLabel(t.door);
@@ -801,15 +979,16 @@
     const target = {};
     if (app.target && app.target.door) target.door = app.target.door;
     if (app.target && app.target.room) target.room = app.target.room;
+    if (app.target && app.target.character) target.character = app.target.character;
     const loc = targetLocation();
     if (loc) target.location = { x: loc.x, y: loc.y, z: loc.z || 0 };
     const options = {};
     for (const k of action.options) options[k] = app.options[k];
 
-    const order = { team: app.team, action: action.id, target, options };
+    const order = { team: app.team, action: action.id, target, options, hold: app.holdForGo };
     try {
       const sent = await api("POST", "/api/command", order);
-      app.sent.unshift({ ...order, id: sent.id, where: app.target ? describeTarget() : "" });
+      app.sent.unshift({ ...order, id: sent.id, where: app.target && action.needs ? describeTarget() : "" });
       app.sent.length = Math.min(app.sent.length, 30);
       renderTasks();
     } catch (e) {
@@ -843,7 +1022,7 @@
     const configured = new Set((app.state && app.state.configured_actions) || []);
     const actions = $("actions");
     actions.innerHTML = "";
-    for (const a of ACTIONS) {
+    for (const a of ACTIONS.filter((x) => actionVisible(x) && !HIDDEN_REASONS.has(blockedReason(x)))) {
       const b = document.createElement("button");
       b.textContent = a.label;
       const reason = blockedReason(a);
@@ -870,12 +1049,12 @@
       wrap.innerHTML = `<div class="label">${OPTION_LABEL[key]}</div>`;
       const chips = document.createElement("div");
       chips.className = "chips";
-      for (const [value, label] of OPTION_CHOICES[key]) {
+      for (const [value, label] of optionValues(action, key)) {
         const b = document.createElement("button");
         const item = (OPTION_ITEMS[key] || {})[value];
         const count = item ? teamItemCount(item) : null;
         b.textContent = count === null ? label : `${label} ×${count}`;
-        b.disabled = count === 0;
+        b.disabled = !optionAvailable(key, value);
         b.className = app.options[key] === value ? "active" : "";
         b.onclick = () => { app.options[key] = value; renderOrders(); };
         chips.appendChild(b);
@@ -886,7 +1065,9 @@
 
     const exec = $("execute");
     exec.disabled = !action || !actionAllowed(action);
-    exec.textContent = action ? `${TEAM_LABEL[app.team]} — ${action.label.toUpperCase()}` : "SELECT AN ORDER";
+    exec.textContent = action
+      ? `${app.holdForGo ? "HOLD: " : ""}${TEAM_LABEL[app.team]} — ${action.label.toUpperCase()}` : "SELECT AN ORDER";
+    renderHeld();
   }
 
   function renderRoster() {
@@ -1130,6 +1311,33 @@
   $("btn-center").onclick = centerOnPlayer;
   $("execute").onclick = execute;
 
+  $("hold-for-go").onchange = (e) => { app.holdForGo = e.target.checked; renderOrders(); };
+
+  async function sendControl(action) {
+    try {
+      await api("POST", "/api/command", { team: "gold", action });
+    } catch (e) {
+      alert("Could not send: " + e.message);
+    }
+  }
+  $("go").onclick = () => sendControl("go");
+  $("clear-held").onclick = () => sendControl("clear_held");
+
+  // Orders the mod is holding for GO (from state.json).
+  function renderHeld() {
+    const held = (app.state && app.state.held) || [];
+    $("held").hidden = !held.length;
+    const list = $("held-list");
+    list.innerHTML = "";
+    for (const h of held) {
+      const sent = app.sent.find((o) => o.id === h.id);
+      const li = document.createElement("li");
+      li.innerHTML = `<span style="color:${TEAM_COLORS[h.team]};font-weight:800">${TEAM_LABEL[h.team]}</span><span></span>`;
+      li.children[1].textContent = sent ? describeOrder(sent) : (ACTION_BY_ID[h.action] || { label: h.action }).label;
+      list.appendChild(li);
+    }
+  }
+
   $("floor").onchange = (e) => {
     app.autoFloor = e.target.value === "auto";
     if (!app.autoFloor) app.floorIndex = Number(e.target.value);
@@ -1186,8 +1394,11 @@
       // Re-render when anything the order panel depends on changes.
       const s = app.state || {};
       const door = app.target && app.target.door ? doorById(app.target.door) : null;
+      const person = app.target && app.target.character ? personById(app.target.character) : null;
       const configuredKey = JSON.stringify([s.configured_actions || [], s.connected,
-        teamMembers(app.team).map((o) => o.items || null), door && [door.open, door.broken, door.locked]]);
+        teamMembers(app.team).map((o) => o.items || null),
+        door && [door.open, door.broken, door.locked, door.wedged, door.trap],
+        person && [person.status, person.reported], s.held || []]);
       if (configuredKey !== app.lastConfiguredKey) { app.lastConfiguredKey = configuredKey; renderOrders(); }
     }
     redraw();

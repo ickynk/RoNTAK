@@ -43,6 +43,16 @@
         <div class="actions" id="actions"></div>
         <div class="options" id="options"></div>
         <button class="execute" id="execute" disabled>SELECT AN ORDER</button>
+        <label class="check"><input type="checkbox" id="hold-for-go">
+          Hold for GO: set up orders for each team, then start them together (or press F5 in game)</label>
+        <div class="card held-box" id="held" hidden>
+          <div class="label">Held for GO</div>
+          <ul class="tasks" id="held-list"></ul>
+          <div class="row">
+            <button class="go" id="go">GO</button>
+            <button id="clear-held">Clear</button>
+          </div>
+        </div>
 
         <div class="section-title">Roster</div>
         <ul class="roster" id="roster"></ul>

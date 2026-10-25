@@ -37,7 +37,11 @@ TEAMS = {"red", "blue", "gold"}
 ACTIONS = {
     "stack_up", "open_clear", "breach_clear", "move_clear", "scan_door", "wedge_door",
     "move_to", "fall_in", "hold", "search_secure",
+    "pick_lock", "close_door", "remove_wedge", "check_traps", "disarm_trap", "scan_open",
+    "cover_area", "chemlight", "deploy_grenade", "restrain", "report",
+    "go", "clear_held",  # start / clear the orders held for GO
 }
+OPTION_KEYS = ("breach", "grenade", "side", "scan")
 IMAGE_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp", ".svg": "image/svg+xml"}
 SAFE_NAME = re.compile(r"^[A-Za-z0-9_.\- ]{1,80}$")
 
@@ -110,10 +114,14 @@ def validate_order(body: dict) -> dict:
         clean_target["location"] = {k: float(loc.get(k, 0)) for k in ("x", "y", "z")}
     if "room" in target:
         clean_target["room"] = str(target["room"])
+    if "character" in target:
+        clean_target["character"] = str(target["character"])
     order["target"] = clean_target
 
     options = body.get("options") or {}
-    order["options"] = {k: str(v) for k, v in options.items() if k in ("breach", "grenade", "side")}
+    order["options"] = {k: str(v) for k, v in options.items() if k in OPTION_KEYS}
+    if body.get("hold") and action not in ("go", "clear_held"):
+        order["hold"] = True
     return order
 
 

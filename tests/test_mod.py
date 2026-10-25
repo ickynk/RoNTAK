@@ -136,7 +136,7 @@ objects = {
 
 function FindAllOf(class) return objects[class] end
 function FindFirstOf(class) return objects[class] and objects[class][1] end
-Key = { F6 = "F6", F7 = "F7", F8 = "F8", F9 = "F9", F10 = "F10" }
+Key = { F5 = "F5", F6 = "F6", F7 = "F7", F8 = "F8", F9 = "F9", F10 = "F10" }
 keybinds = {}
 function RegisterKeyBind(key, fn) keybinds[key] = fn end
 function ExecuteInGameThread(fn) fn() end
@@ -186,7 +186,7 @@ class ModTest(unittest.TestCase):
                          [("Swat_C_1", "red"), ("Swat_C_2", "blue")])
         self.assertEqual({d["id"]: (d.get("locked"), d.get("open"), d.get("broken")) for d in state["doors"]},
                          {"Door_C_7": (True, False, False), "Door_C_8": (None, True, None)})
-        self.assertEqual(len(state["configured_actions"]), 10)
+        self.assertEqual(len(state["configured_actions"]), 21)
         items = {o["id"]: o["items"] for o in state["officers"]}
         self.assertEqual(items["Swat_C_1"]["c2"], 1)
         self.assertEqual(items["Swat_C_1"]["flashbang"], 1)  # one of two is used up
@@ -396,10 +396,108 @@ class ModTest(unittest.TestCase):
         """)
         for _ in range(40):  # 10 s of ticks, all within the same os.time() second here
             state = self.tick()
-        # One scan each for the player controller, officers, doors and room points, not one per tick.
-        self.assertLessEqual(self.lua.globals().scans, 4)
+        # One scan each for the player controller, officers, doors, room points and people, not one per tick.
+        self.assertLessEqual(self.lua.globals().scans, 5)
         self.assertEqual(len(state["officers"]), 2)
         self.assertEqual(len(state["doors"]), 2)
+
+    def add_people(self):
+        self.lua.execute(r"""
+            local function person(n, x, flags)
+                local p = actor(n, x, 0, 0, 0, {})
+                for _, f in ipairs({ "IsSuspect", "IsCivilian", "IsSurrendered", "IsArrested",
+                                     "IsDeadOrUnconscious", "HasBeenReported" }) do
+                    p[f] = function() return flags[f] == true end
+                end
+                return p
+            end
+            objects.CyberneticCharacter = {
+                person("Suspect_Surrendered", 100, { IsSuspect = true, IsSurrendered = true }),
+                person("Suspect_Active", 200, { IsSuspect = true }),                      -- a threat: never shown
+                person("Civilian_Down", 300, { IsCivilian = true, IsDeadOrUnconscious = true, HasBeenReported = true }),
+                person("Suspect_Cuffed", 400, { IsSuspect = true, IsSurrendered = true, IsArrested = true }),
+                person("Swat_Other", 500, {}),                                            -- neither: never shown
+            }
+        """)
+
+    def test_people_only_when_no_longer_a_threat(self):
+        self.add_people()
+        state = self.tick()
+        people = {t["id"]: (t["kind"], t["status"], t["reported"]) for t in state["targets"]}
+        self.assertEqual(people, {
+            "Suspect_Surrendered": ("suspect", "surrendered", False),
+            "Civilian_Down": ("civilian", "down", True),
+            "Suspect_Cuffed": ("suspect", "arrested", False),
+        })
+
+    def test_restrain_and_report(self):
+        self.add_people()
+        self.tick()
+        self.run_orders(self.order(1, "red", "restrain", {"character": "Suspect_Surrendered", "location": {"x": 100, "y": 0}}),
+                        self.order(2, "blue", "report", {"character": "Civilian_Down"}))
+        fn, args = self.call(1)
+        self.assertEqual((fn, args[0].GetFName().ToString(), args[1]), ("GiveRestrainCommand", "Suspect_Surrendered", 1))
+        self.assertEqual(dict(args[2]), {"X": 100, "Y": 0, "Z": 0})
+        fn, args = self.call(2)
+        self.assertEqual((fn, args[0].GetFName().ToString(), args[1]), ("GiveReportTargetCommand", "Civilian_Down", 2))
+
+    def test_new_door_and_spot_orders(self):
+        self.run_orders(self.order(1, "red", "pick_lock", {"door": "Door_C_7"}),
+                        self.order(2, "red", "scan_open", {"door": "Door_C_7"}, {"scan": "snap"}),
+                        self.order(3, "blue", "remove_wedge", {"door": "Door_C_7"}),
+                        self.order(4, "gold", "chemlight", {"location": {"x": 1, "y": 2, "z": 3}}))
+        self.assertEqual([self.call(i)[0] for i in range(1, 5)],
+                         ["GivePickLockCommand", "GiveScanDoorCommand", "GiveRemoveWedgeCommand", "GiveDropChemlightAtLocation"])
+        self.assertEqual(self.call(2)[1][3], 3)  # EDoorScanMethod Snap
+        self.assertEqual(len(self.call(3)[1]), 4)  # door, team, location, normal
+
+    def test_deploy_grenade_at_spot_writes_class_from_hook(self):
+        self.lua.execute("drop_class_args = true")
+        self.run_orders(self.order(1, "red", "deploy_grenade", {"location": {"x": 5, "y": 6}}, {"grenade": "flashbang"}))
+        fn, args = self.call(1)
+        self.assertEqual((fn, args[0], args[2]["name"]), ("GiveDeployGrenadeAtLocation", 1, "Flashbang"))
+
+    def test_door_wedge_and_trap_state(self):
+        self.lua.execute("objects.Door[1].IsJammed = function() return true end "
+                         "objects.Door[1].HasTrapAndSWATKnowsTrap = function() return true end")
+        state = self.tick()
+        door = next(d for d in state["doors"] if d["id"] == "Door_C_7")
+        self.assertEqual((door["wedged"], door["trap"]), (True, True))
+
+    def test_held_orders_start_together_on_go(self):
+        self.send("A", [])
+        self.tick()
+        hold_red = dict(self.order(1, "red", "hold"), hold=True)
+        hold_blue = dict(self.order(2, "blue", "fall_in"), hold=True)
+        self.send("A", [hold_red, hold_blue])
+        state = self.tick()
+        self.assertEqual(len(self.lua.globals().calls), 0)
+        self.assertEqual([h["team"] for h in state["held"]], ["red", "blue"])
+        self.assertEqual({r["id"]: r["status"] for r in state["results"]}, {1: "held", 2: "held"})
+
+        self.send("A", [hold_red, hold_blue, self.order(3, "gold", "go")])
+        state = self.tick()
+        self.assertEqual([self.call(i)[0] for i in (1, 2)], ["GiveHoldCommand", "GiveFallInCommand"])
+        self.assertEqual(state["held"], [])
+        results = {r["id"]: (r["status"], r.get("message")) for r in state["results"]}
+        self.assertEqual(results, {1: ("ok", None), 2: ("ok", None), 3: ("ok", "started 2 held orders")})
+
+    def test_gold_hold_replaces_team_holds_and_f5_starts(self):
+        self.send("A", [])
+        self.tick()
+        self.send("A", [dict(self.order(1, "red", "hold"), hold=True), dict(self.order(2, "gold", "fall_in"), hold=True)])
+        state = self.tick()
+        self.assertEqual([h["team"] for h in state["held"]], ["gold"])
+        self.lua.execute('keybinds["F5"]()')
+        self.assertEqual(self.call(1), ("GiveFallInCommand", [5, 0]))
+
+    def test_clear_held(self):
+        self.send("A", [])
+        self.tick()
+        self.send("A", [dict(self.order(1, "red", "hold"), hold=True), self.order(2, "red", "clear_held")])
+        state = self.tick()
+        self.assertEqual(state["held"], [])
+        self.assertEqual(next(r for r in state["results"] if r["id"] == 1)["status"], "cancelled")
 
     def test_test_order_hotkey(self):
         self.tick()

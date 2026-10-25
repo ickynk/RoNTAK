@@ -123,6 +123,10 @@ button.danger { color: var(--err); }
 .tasks .state.ok { color: var(--ok); }
 .tasks .state.pending { color: var(--muted); }
 .tasks .state.error, .tasks .state.not_configured { color: var(--err); }
+.tasks .state.held { color: var(--gold); }
+.tasks .state.cancelled { color: var(--muted); }
+.held-box { border: 1px solid var(--gold); }
+button.go { background: var(--gold); color: #111; border: none; font-weight: 800; letter-spacing: 1px; }
 .tasks .msg { width: 100%; color: var(--muted); font-size: 12px; }
 .anchors li button, .rooms li button { margin-left: auto; padding: 2px 8px; }
 

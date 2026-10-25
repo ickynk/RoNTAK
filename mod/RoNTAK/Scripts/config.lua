@@ -20,6 +20,7 @@ config.verbose = false
 
 -- Hotkeys (UE4SS Key names). Set any to nil to disable it.
 config.keys = {
+    execute_held   = "F5",   -- start the orders held on the ATAK screen ("Hold for GO")
     map_info       = "F6",   -- write the level's building floors to bridge/mapinfo.json
     activity_dump  = "F7",   -- write every officer's door jobs to bridge/activities.txt
     discovery_dump = "F8",   -- write candidate classes/functions to bridge/discovery.txt
@@ -66,6 +67,9 @@ config.doors = {
     -- Optional functions returning whether the door is open / broken.
     open_function = "IsOpen",
     broken_function = "IsDoorBroken",
+    -- Optional functions: is the door wedged? Is there a trap your team knows of?
+    jammed_function = "IsJammed",
+    trap_known_function = "HasTrapAndSWATKnowsTrap",
     -- Functions returning the name of the game's room on each side of the door.
     front_room_function = "GetFrontThreatOwningRoom",
     back_room_function = "GetBackThreatOwningRoom",
@@ -106,7 +110,23 @@ config.grenade_items = { flashbang = 30, stinger = 33, cs = 32, ninebang = 31, l
 config.inventory = {
     c2 = 38, shotgun = 42, ram = 41,
     flashbang = 30, stinger = 33, cs = 32, ninebang = 31, launcher = 47,
-    wedge = 40, mirror = 34,
+    wedge = 40, mirror = 34, multitool = 25, lockpick_gun = 49, chemlight = 28,
+}
+
+-- EDoorScanMethod, passed as "$scan" (scanning through an open door).
+config.scan_args = { slide = 1, slice = 2, snap = 3, center = 4 }
+
+-- People shown on the map so they can be restrained or reported. Only people
+-- who are no threat are listed (surrendered, restrained, or down), so the map
+-- never shows suspects your team hasn't dealt with.
+config.targets = {
+    classes = { "CyberneticCharacter" },
+    suspect_function = "IsSuspect",
+    civilian_function = "IsCivilian",
+    surrendered_function = "IsSurrendered",
+    arrested_function = "IsArrested",
+    down_function = "IsDeadOrUnconscious",
+    reported_function = "HasBeenReported",
 }
 
 -- EStackUpStyle, passed as "$side".
@@ -121,6 +141,7 @@ config.fall_in_pattern = 0
 -- the call's parameters directly before the game runs it.
 config.class_arg_hooks = {
     "/Script/ReadyOrNot.SWATManager:GiveBreachAndClearCommand",
+    "/Script/ReadyOrNot.SWATManager:GiveDeployGrenadeAtLocation",
 }
 
 -- How each ATAK action is carried out in the game.
@@ -140,6 +161,7 @@ config.class_arg_hooks = {
 --               $grenade_item  class of the grenade (nil for none)
 --               $with_leader   true when the breach type is "leader"
 --               $fall_in       config.fall_in_pattern
+--               $scan          EDoorScanMethod      $character  the tapped person
 --             Anything else (true, false, numbers) is passed as-is.
 --   options = fixed options that override the ATAK ones (e.g. breach = "open").
 --
@@ -154,6 +176,13 @@ config.class_arg_hooks = {
 --   GiveFallInCommand(TeamType, FallInPattern)
 --   GiveHoldCommand(TeamType)
 --   GiveSearchAndSecureCommand(TeamType, CommandLocation, bOnlyCurrentRoom)
+--   GivePickLockCommand / GiveCloseDoorCommand / GiveDisarmTrapOnDoorCommand(Target, TeamType, CommandLocation)
+--   GiveRemoveWedgeCommand / GiveCheckForTrapsCommand(Target, TeamType, CommandLocation, CommandNormal)
+--   GiveScanDoorCommand(Target, TeamType, CommandLocation, ScanMethod)
+--   GiveCoverAreaCommand / GiveDropChemlightAtLocation(TeamType, CommandLocation)
+--   GiveDeployGrenadeAtLocation(TeamType, CommandLocation, Grenade)
+--   GiveRestrainCommand(Target, TeamType, CommandLocation)
+--   GiveReportTargetCommand(Target, TeamType)
 --
 -- Note: arguments 5 and 6 are used the other way round from their names in the
 -- header dump. Tested in game: the class in argument 5 is what an officer
@@ -180,6 +209,23 @@ config.actions = {
     hold          = { target = "SWATManager", fn = "GiveHoldCommand", args = { "$team" } },
     search_secure = { target = "SWATManager", fn = "GiveSearchAndSecureCommand",
                       args = { "$team", "$location", false } },
+    -- Door
+    pick_lock     = { target = "SWATManager", fn = "GivePickLockCommand", args = { "$door", "$team", "$location" } },
+    close_door    = { target = "SWATManager", fn = "GiveCloseDoorCommand", args = { "$door", "$team", "$location" } },
+    remove_wedge  = { target = "SWATManager", fn = "GiveRemoveWedgeCommand",
+                      args = { "$door", "$team", "$location", "$normal" } },
+    check_traps   = { target = "SWATManager", fn = "GiveCheckForTrapsCommand",
+                      args = { "$door", "$team", "$location", "$normal" } },
+    disarm_trap   = { target = "SWATManager", fn = "GiveDisarmTrapOnDoorCommand", args = { "$door", "$team", "$location" } },
+    scan_open     = { target = "SWATManager", fn = "GiveScanDoorCommand", args = { "$door", "$team", "$location", "$scan" } },
+    -- Map point
+    cover_area    = { target = "SWATManager", fn = "GiveCoverAreaCommand", args = { "$team", "$location" } },
+    chemlight     = { target = "SWATManager", fn = "GiveDropChemlightAtLocation", args = { "$team", "$location" } },
+    deploy_grenade = { target = "SWATManager", fn = "GiveDeployGrenadeAtLocation",
+                       args = { "$team", "$location", "$grenade_item" } },
+    -- People
+    restrain      = { target = "SWATManager", fn = "GiveRestrainCommand", args = { "$character", "$team", "$location" } },
+    report        = { target = "SWATManager", fn = "GiveReportTargetCommand", args = { "$character", "$team" } },
 }
 
 -- Order sent by the test hotkey. Door orders use the door nearest the player.

@@ -3,11 +3,16 @@
 An ATAK-style tactical map and team orders mod for **Ready or Not**.
 
 - Live map with floor plans, your position, and every SWAT officer, colored by team
-- Tap a **door**, a **room**, or a **spot** on the map, pick **RED / BLUE / GOLD**, and give an order:
-  Stack Up, Breach & Clear (Kick / Shotgun / C2 / Ram / Leader + Flash / Stinger / CS / 9-Bang / Launcher),
-  Open & Clear, Move & Clear (open doors), Mirror Door, Wedge Door, Move To, Fall In, Hold, Search & Secure
+- Tap a **door**, a **room**, a **person** or a **spot** on the map, pick **RED / BLUE / GOLD**, and give an order:
+  - Doors: Stack Up, Breach & Clear (Kick / Shotgun / C2 / Ram / Leader + Flash / Stinger / CS / 9-Bang /
+    Launcher, any stack side), Open & Clear, Move & Clear, Scan Room, Mirror, Pick Lock, Check for Traps,
+    Disarm Trap, Wedge, Remove Wedge, Close Door
+  - Spots: Move To, Cover Area, Deploy Grenade, Drop Chemlight
+  - People (only once surrendered, restrained or down): Restrain, Report
+  - Team-wide: Fall In, Hold, Search & Secure
+- **Hold for GO**: set up orders for both teams and start them together (GO on screen, or F5 in game)
 - Options the selected team has no gear for are greyed out, with counts (e.g. "C2 ×1")
-- Doors show their state (closed, open, broken, known locked) and only allow orders that fit it
+- Doors show their state (closed, open, broken, wedged, known locked, known trap) and only offer orders that fit
 - Each order shows whether the game accepted it
 - Works on a second monitor, or on a phone or tablet on your Wi-Fi, like real ATAK
 
@@ -36,6 +41,7 @@ It ships filled in and tested. If a game update breaks something, the mod has to
 | --- | --- |
 | Live map: player, officers by team, doors with open / locked state | Working in game |
 | Orders: stack up, breach / open / move & clear with breaching tools and grenades, mirror, wedge, move, fall in, hold, search & secure | Working in game |
+| More orders: pick lock, traps, remove wedge, close door, scan room, cover area, chemlight, grenade at a spot, restrain / report, Hold for GO | Added (to be confirmed in game) |
 | Gear-aware options (counts, greyed-out options) | Working in game |
 | Floors: automatic from door heights, auto-switching as you move | Working in the companion |
 | Officer names from the roster | Added (to be confirmed in game) |
@@ -58,7 +64,8 @@ It ships filled in and tested. If a game update breaks something, the mod has to
 Follow the guides in order:
 
 1. [docs/01-setup.md](docs/01-setup.md): install UE4SS and the mod, start the companion
-2. [docs/03-maps.md](docs/03-maps.md): game rooms, and adding floor plan images
+2. [docs/03-maps.md](docs/03-maps.md): floors, floor plan images and rooms
+3. [docs/04-orders.md](docs/04-orders.md): every order, when it's available, and Hold for GO
 
 If a game update breaks something: [docs/02-discovery.md](docs/02-discovery.md).
 

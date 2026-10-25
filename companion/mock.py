@@ -41,6 +41,13 @@ ROOMS_PX = {
 
 # id: (u, v, wall orientation, room, stack direction in px, locked)
 OPEN_DOORS = {"BP_Door_C_2"}
+WEDGED_DOORS = {"BP_Door_C_3"}
+TRAPPED_DOORS = {"BP_Door_C_4"}
+
+DOOR_ACTIONS = ("stack_up", "open_clear", "breach_clear", "move_clear", "scan_door", "wedge_door", "pick_lock",
+                "close_door", "remove_wedge", "check_traps", "disarm_trap", "scan_open")
+SPOT_ACTIONS = ("move_to", "cover_area", "chemlight", "deploy_grenade")
+ALL_ACTIONS = DOOR_ACTIONS + SPOT_ACTIONS + ("fall_in", "hold", "search_secure", "restrain", "report")
 DOORS_PX = {
     "BP_Door_C_1": (200, 300, "h", "Kitchen", (0, 1), False),
     "BP_Door_C_2": (700, 300, "h", "Living Room", (0, 1), False),
@@ -103,10 +110,10 @@ class Officer:
 class MockGame:
     def __init__(self):
         self.officers = [
-            Officer("SWATCharacter_C_1", "Judge", "red", 1050, 340, {"c2": 1, "flashbang": 2, "mirror": 1}),
-            Officer("SWATCharacter_C_2", "Hayes", "red", 1050, 370, {"ram": 1, "stinger": 1, "wedge": 2}),
-            Officer("SWATCharacter_C_3", "Kona", "blue", 1050, 400, {"shotgun": 1, "cs": 1}),
-            Officer("SWATCharacter_C_4", "Sierra", "blue", 1050, 430, {"launcher": 1, "ninebang": 1}),
+            Officer("SWATCharacter_C_1", "Judge", "red", 1050, 340, {"c2": 1, "flashbang": 2, "mirror": 1, "multitool": 1}),
+            Officer("SWATCharacter_C_2", "Hayes", "red", 1050, 370, {"ram": 1, "stinger": 1, "wedge": 2, "chemlight": 3}),
+            Officer("SWATCharacter_C_3", "Kona", "blue", 1050, 400, {"shotgun": 1, "cs": 1, "lockpick_gun": 1}),
+            Officer("SWATCharacter_C_4", "Sierra", "blue", 1050, 430, {"launcher": 1, "ninebang": 1, "chemlight": 2}),
         ]
         self.player_route = [px_to_world(u, v) for u, v in ((1060, 375), (1075, 330), (1075, 420))]
         self.player = {"pos": {"x": 0, "y": 0, "z": 0}, "yaw": 180.0}
@@ -118,6 +125,7 @@ class MockGame:
                 "id": did, "pos": {"x": x, "y": y, "z": 0.0},
                 "yaw": 90.0 if wall == "h" else 0.0, "locked": locked,
                 "open": did in OPEN_DOORS, "broken": False,
+                "wedged": did in WEDGED_DOORS, "trap": did in TRAPPED_DOORS,
                 "_room": room, "_stack": px_dir_to_world(*stack),
             }
         # The game's rooms: on each side of a door, and outlined by threat points.
@@ -125,6 +133,14 @@ class MockGame:
             d["front_room"] = d["_room"]
             d["back_room"] = "Hallway" if d["_room"] != "Hallway" else None
         self.rooms_written = False
+        # People who are no threat any more: shown so they can be restrained or reported.
+        self.targets = []
+        for tid, kind, status, (u, v) in (("Suspect_C_1", "suspect", "surrendered", (520, 160)),
+                                          ("Civilian_C_1", "civilian", "down", (180, 620))):
+            x, y = px_to_world(u, v)
+            self.targets.append({"id": tid, "kind": kind, "status": status, "reported": False,
+                                 "pos": {"x": x, "y": y, "z": 0.0}})
+        self.held = {}
         self.results = []
         self.session = None
         self.last_id = 0
@@ -171,7 +187,7 @@ class MockGame:
         for o in members:
             o.follow = None
 
-        if action in ("stack_up", "open_clear", "breach_clear", "move_clear", "scan_door", "wedge_door"):
+        if action in DOOR_ACTIONS:
             if not door:
                 return dict(result, status="error", message="this order needs a door")
             if action == "open_clear" and door["locked"]:
@@ -181,6 +197,8 @@ class MockGame:
             if action == "breach_clear" and options.get("breach") in BREACH_ITEMS:
                 needed.append(options["breach"])
             needed += {"wedge_door": ["wedge"], "scan_door": ["mirror"]}.get(action, [])
+            if action == "pick_lock":
+                needed.append("multitool" if any(o.items.get("multitool", 0) for o in members) else "lockpick_gun")
             for item in needed:
                 carrier = next((o for o in members if o.items.get(item, 0) > 0), None)
                 if not carrier:
@@ -197,6 +215,18 @@ class MockGame:
             if action in ("open_clear", "breach_clear", "move_clear"):
                 door["locked"] = False
                 door["open"] = True
+            door.update({"pick_lock": {"locked": False}, "close_door": {"open": False},
+                         "remove_wedge": {"wedged": False}, "disarm_trap": {"trap": False}}.get(action, {}))
+        elif action in ("restrain", "report"):
+            person = next((t for t in self.targets if t["id"] == target.get("character")), None)
+            if not person:
+                return dict(result, status="error", message="that person is no longer on the map")
+            if action == "restrain":
+                person["status"] = "arrested"
+            else:
+                person["reported"] = True
+        elif action in ("cover_area", "chemlight", "deploy_grenade"):
+            pass
         elif action == "move_to":
             loc = target.get("location")
             if not loc:
@@ -211,6 +241,29 @@ class MockGame:
             for o in members:
                 o.path = []
         return dict(result, status="ok")
+
+    def dispatch(self, cmd):
+        """Like the mod: run now, hold for GO, or start / clear the held orders."""
+        result = {"id": cmd["id"], "team": cmd["team"], "action": cmd["action"]}
+        if cmd["action"] == "go":
+            held, self.held = self.held, {}
+            for entry in held.values():
+                entry["result"].update(self.execute(entry["cmd"]))
+            return dict(result, status="ok", message=f"started {len(held)} held orders")
+        if cmd["action"] == "clear_held":
+            for entry in self.held.values():
+                entry["result"].update(status="cancelled", message="cleared before GO")
+            self.held = {}
+            return dict(result, status="ok")
+        if cmd.get("hold"):
+            if cmd["team"] == "gold":
+                self.held = {}
+            else:
+                self.held.pop("gold", None)
+            result["status"] = "held"
+            self.held[cmd["team"]] = {"cmd": cmd, "result": result}
+            return result
+        return self.execute(cmd)
 
     def read_commands(self, bridge):
         try:
@@ -241,7 +294,7 @@ class MockGame:
 
     def tick(self, bridge, dt):
         for cmd in self.read_commands(bridge):
-            self.results.insert(0, self.execute(cmd))
+            self.results.insert(0, self.dispatch(cmd))
             del self.results[30:]
         self.update_player(dt)
         for o in self.officers:
@@ -256,8 +309,9 @@ class MockGame:
             "doors": [{k: v for k, v in d.items() if not k.startswith("_")} for d in self.doors.values()],
             "rooms_version": f"{LEVEL}#{len(ROOMS_PX)}",
             "results": self.results,
-            "configured_actions": sorted({"stack_up", "open_clear", "breach_clear", "move_clear", "scan_door", "wedge_door",
-                                          "move_to", "fall_in", "hold", "search_secure"} - UNCONFIGURED),
+            "targets": self.targets,
+            "held": [{"id": e["cmd"]["id"], "team": t, "action": e["cmd"]["action"]} for t, e in self.held.items()],
+            "configured_actions": sorted(set(ALL_ACTIONS) - UNCONFIGURED),
         }
         tmp = bridge / "state.json.tmp"
         tmp.write_text(json.dumps(state), encoding="utf-8")
