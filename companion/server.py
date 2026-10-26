@@ -148,6 +148,13 @@ class Handler(SimpleHTTPRequestHandler):
         if "/api/state" not in (self.path or ""):
             sys.stderr.write("%s %s\n" % (self.log_date_time_string(), fmt % args))
 
+    def end_headers(self):
+        # The page and scripts: always check for a newer version, so an update
+        # shows up without clearing the browser cache.
+        if not (self.path or "").startswith("/api/"):
+            self.send_header("Cache-Control", "no-cache")
+        super().end_headers()
+
     # Helpers -------------------------------------------------------------
 
     def send_json(self, data, status=HTTPStatus.OK):

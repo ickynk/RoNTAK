@@ -267,6 +267,7 @@ config.test_order = { team = "gold", action = "fall_in", options = {} }
 config.discovery_keywords = {
     "swat", "officer", "squad", "team", "order", "command", "breach",
     "stack", "door", "clear", "element", "tablet", "atak", "map",
+    "helicopter", "drone", "unmanned", "cctv",
 }
 
 -- Full function paths to hook with the F9 sniffer, copied from discovery.txt.

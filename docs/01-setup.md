@@ -16,7 +16,8 @@ About 10 minutes, once. You need Ready or Not (Steam) on Windows.
 ## Step 3: Install UE4SS (the mod loader)
 
 1. In Steam, right-click **Ready or Not** → **Manage** → **Browse local files**.
-2. Open `ReadyOrNot` → `Binaries` → `Win64`. You should see `ReadyOrNot-Win64-Shipping.exe`.
+2. Open `ReadyOrNot` → `Binaries` → `Win64`. You should see a program named like
+   `ReadyOrNot…-Win64-Shipping.exe`.
 3. Download the latest `UE4SS_v….zip` from <https://github.com/UE4SS-RE/RE-UE4SS/releases> (not the
    `zDEV` one).
 4. Extract **everything** in it into that `Win64` folder.
@@ -80,8 +81,10 @@ without Ready or Not.
 | Problem | Fix |
 | --- | --- |
 | "Python 3 is not installed" | Step 1, then run the `.bat` again. Make sure "Add python.exe to PATH" was ticked |
-| Installer says UE4SS is not installed | Step 3: the UE4SS files must be in the same folder as `ReadyOrNot-Win64-Shipping.exe` |
+| Installer says UE4SS is not installed | Step 3: the UE4SS files must be in the same folder as the game's `…-Win64-Shipping.exe` |
 | ATAK screen stays "Waiting for game" | Load into a mission. Check the UE4SS console shows `[RoNTAK] INFO loaded` |
+| Installer can't find the game | Paste the folder Steam's **Browse local files** opens. If it still fails, it prints the program names it found: send them to the RoNTAK developer |
+| No **Phone** button | It's hidden on screens narrower than a phone; widen the window. After an update, refresh the page |
 | "Port 8080 is in use" | RoNTAK is already running: open <http://127.0.0.1:8080>, or close the other window |
 | Phone can't connect | Same Wi-Fi as the PC; allow Python in Windows Firewall (Private networks) |
 

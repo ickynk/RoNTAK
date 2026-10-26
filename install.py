@@ -64,7 +64,14 @@ def main(argv=None) -> int:
             return 1
         win64 = gamefinder.win64_from(answer)
         if not win64:
-            print("  That folder doesn't contain Ready or Not.\n")
+            print(f"  No Ready or Not program (ReadyOrNot...-Win64-Shipping.exe) found in: {answer}")
+            exes = gamefinder.shipping_exes(answer)
+            if exes:
+                print("  Found instead: " + ", ".join(exes))
+                print("  Please tell the RoNTAK developer this name.")
+            else:
+                print("  Paste the folder that holds ReadyOrNot.exe (the one Steam's Browse local files opens).")
+            print()
     print(f"Ready or Not: {win64}")
 
     if not gamefinder.ue4ss_installed(win64):
