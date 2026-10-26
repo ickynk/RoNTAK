@@ -65,6 +65,17 @@ What we learned getting this working:
   the officer throws. `activities.txt` shows the item the game uses (for example
   `ThrowGrenadeThroughDoor door=BP_Door_New15 item=Grenade_Flashbang_V2_C`).
 
+## Cameras missing from the map
+
+The helicopter, drone and CCTV names are in `config.cameras`.
+
+- **No helicopter, drone or CCTV:** press **F8** and search `discovery.txt` for `Helicopter`, `Drone`,
+  `UnmannedVehicle` or `CCTV` to find the new class names.
+- **The air unit never marks anyone:** the UE4SS console prints `helicopter is tracking suspect ...` when it
+  picks someone up. If that never appears while the helicopter follows someone, check that
+  `target_found_hook` / `target_lost_hook` still exist (search the header dump for `OnTargetFound`).
+- **CCTV never appears:** it only shows once the cameras are wired to your tablet, or while you watch a feed.
+
 ## Watching functions (F9)
 
 Put full function paths from `discovery.txt` or the header dump into `config.sniff`, without the leading

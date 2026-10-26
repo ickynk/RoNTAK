@@ -140,6 +140,8 @@ class MockGame:
             x, y = px_to_world(u, v)
             self.targets.append({"id": tid, "kind": kind, "status": status, "reported": False,
                                  "pos": {"x": x, "y": y, "z": 0.0}})
+        self.clock = 0.0
+        self.spotted = None
         self.held = {}
         self.results = []
         self.session = None
@@ -292,11 +294,52 @@ class MockGame:
         (bridge / "rooms.json").write_text(json.dumps({"level": LEVEL, "rooms": rooms}), encoding="utf-8")
         self.rooms_written = True
 
+    def cameras(self):
+        """Helicopter circling the house tracking a suspect in the yard (20 s tracked, then
+        10 s lost), a drone turning in the hallway, and CCTV that gets wired after 10 s and
+        whose feeds the player flips through."""
+        t = self.clock
+        hx, hy = px_to_world(500 + 650 * math.cos(t / 12), 375 + 550 * math.sin(t / 12))
+        heli = {"id": "Helicopter_C_1", "pos": {"x": hx, "y": hy, "z": 4000.0},
+                "yaw": math.degrees(t / 12) + 90, "camera_active": True, "viewing": False}
+        sx, sy = px_to_world(1050, 375 + 300 * math.sin(t / 6))
+        tracked = t % 30 < 20
+        if tracked or self.spotted is None:
+            self.spotted = {"id": "Suspect_C_2", "kind": "suspect", "source": "helicopter",
+                            "pos": {"x": sx, "y": sy, "z": 0.0}, "seen_at": int(time.time())}
+        self.spotted["status"] = "tracked" if tracked else "last_seen"
+        aim = self.spotted["pos"]
+        dx, dy = aim["x"] - hx, aim["y"] - hy
+        heli["tracking"] = tracked
+        heli["view"] = {"pos": dict(heli["pos"]), "fov": 15.0,
+                        "yaw": math.degrees(math.atan2(dy, dx)),
+                        "pitch": -math.degrees(math.atan2(4000.0, math.hypot(dx, dy)))}
+        dx_, dy_ = px_to_world(500, 375)
+        drone_yaw = (t * 20) % 360
+        drone = {"id": "Drone_C_1", "name": "Drone", "pos": {"x": dx_, "y": dy_, "z": 120.0}, "yaw": drone_yaw,
+                 "view": {"pos": {"x": dx_, "y": dy_, "z": 120.0}, "yaw": drone_yaw, "pitch": -5.0, "fov": 90.0}}
+        cams = []
+        # Ceiling corners, looking into the room.
+        for cid, name, (u, v), yaw in (("CCTV_C_1", "Living Room", (990, 10), -135.0),
+                                       ("CCTV_C_2", "Kitchen", (10, 10), 135.0)):
+            x, y = px_to_world(u, v)
+            pos = {"x": x, "y": y, "z": 250.0}
+            cams.append({"id": cid, "name": name, "floor": 0, "number": len(cams) + 1, "pos": pos,
+                         "view": {"pos": pos, "yaw": yaw, "pitch": -25.0, "fov": 80.0}})
+        wired = t >= 10
+        viewing = [None, "CCTV_C_1", "CCTV_C_2"][int(t / 8) % 3] if wired else None
+        cctv = {"wired": wired, "cameras": cams if wired else []}
+        if viewing:
+            cctv["viewing"] = viewing
+        return {"helicopters": [heli], "drones": [drone], "cctv": cctv, "hook_fired": True}
+
     def tick(self, bridge, dt):
         for cmd in self.read_commands(bridge):
             self.results.insert(0, self.dispatch(cmd))
             del self.results[30:]
+        self.clock += dt
         self.update_player(dt)
+        cameras = self.cameras()
         for o in self.officers:
             o.step(dt, self.player)
         if not self.rooms_written:
@@ -309,7 +352,8 @@ class MockGame:
             "doors": [{k: v for k, v in d.items() if not k.startswith("_")} for d in self.doors.values()],
             "rooms_version": f"{LEVEL}#{len(ROOMS_PX)}",
             "results": self.results,
-            "targets": self.targets,
+            "targets": self.targets + [self.spotted],
+            "cameras": cameras,
             "held": [{"id": e["cmd"]["id"], "team": t, "action": e["cmd"]["action"]} for t, e in self.held.items()],
             "configured_actions": sorted(set(ALL_ACTIONS) - UNCONFIGURED),
         }

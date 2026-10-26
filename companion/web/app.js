@@ -86,6 +86,7 @@
     sent: [],
     gameRooms: [], // rooms read from the game (rooms.json), see loadGameRooms()
     showGameRooms: loadSetting("showGameRooms") === "1", // off: their names are just "Room 5"
+    showCameras: loadSetting("showCameras") !== "0", // helicopter, drone and CCTV view cones
     mapLoaded: false, // map.json of app.level has been read
     roomsVersion: null,
     pendingAnchor: null, // calibration: world position of the door tapped first
@@ -406,6 +407,7 @@
     }
 
     drawRooms();
+    drawCameras();
     drawDoors();
     drawPeople();
     drawOfficers();
@@ -513,8 +515,158 @@
     }
   }
 
+  // ---------------------------------------------------------------- cameras
+
+  const CAMERA_COLORS = { cctv: "#4dd0e1", drone: "#aed581", helicopter: "#ffd54f" };
+  const CCTV_RANGE = 800; // cm drawn for a CCTV cone
+  const DRONE_RANGE = 1000;
+
+  // World points of a view cone from pos along yaw, fov degrees wide.
+  function conePoints(pos, yaw, fov, range) {
+    const half = ((fov || 90) / 2) * Math.PI / 180;
+    const center = ((yaw || 0) * Math.PI) / 180;
+    const pts = [[pos.x, pos.y]];
+    for (let i = 0; i <= 12; i++) {
+      const a = center - half + (2 * half * i) / 12;
+      pts.push([pos.x + Math.cos(a) * range, pos.y + Math.sin(a) * range]);
+    }
+    return pts;
+  }
+
+  function drawCone(pts, color, strong, fill = strong ? 0.35 : 0.15) {
+    polygonPath(pts);
+    ctx.save();
+    ctx.globalAlpha *= fill;
+    ctx.fillStyle = color;
+    ctx.fill();
+    ctx.restore();
+    ctx.strokeStyle = color;
+    ctx.lineWidth = strong ? 2.5 : 1;
+    ctx.stroke();
+  }
+
+  function cameraLabel(text, sx, sy, color) {
+    ctx.font = "700 10px system-ui, sans-serif";
+    ctx.textAlign = "center";
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = "#101316";
+    ctx.strokeText(text, sx, sy);
+    ctx.fillStyle = color;
+    ctx.fillText(text, sx, sy);
+  }
+
+  // Where the helicopter's camera meets the ground, and the radius it covers there.
+  function helicopterFootprint(heli) {
+    const v = heli.view;
+    if (!v || v.pitch === undefined) return null;
+    const p = app.state.player;
+    const groundZ = p && p.pos ? p.pos.z : 0;
+    const height = Math.max(100, v.pos.z - groundZ);
+    const down = Math.max(5, -v.pitch) * Math.PI / 180;
+    const slant = Math.min(height / Math.sin(down), 20000);
+    const ahead = slant * Math.cos(down);
+    const yaw = ((v.yaw || 0) * Math.PI) / 180;
+    const radius = slant * Math.tan(((v.fov || 30) / 2) * Math.PI / 180);
+    return { x: v.pos.x + Math.cos(yaw) * ahead, y: v.pos.y + Math.sin(yaw) * ahead, radius };
+  }
+
+  function drawCameras() {
+    const cams = app.showCameras && app.state && app.state.cameras;
+    if (!cams) return;
+    const f = floor();
+    const cctv = cams.cctv;
+    if (cctv && cctv.wired) {
+      const color = CAMERA_COLORS.cctv;
+      for (const cam of cctv.cameras || []) {
+        const live = cam.id === cctv.viewing;
+        ctx.globalAlpha = onFloor(cam.pos.z, f) ? 1 : 0.25;
+        drawCone(conePoints(cam.pos, cam.view && cam.view.yaw, cam.view && cam.view.fov, CCTV_RANGE), color, live);
+        const [sx, sy] = worldToScreen(cam.pos.x, cam.pos.y);
+        ctx.fillStyle = live ? color : "#101316";
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 2;
+        ctx.fillRect(sx - 6, sy - 5, 12, 10);
+        ctx.strokeRect(sx - 6, sy - 5, 12, 10);
+        if (live) {
+          ctx.beginPath();
+          ctx.arc(sx, sy, 14, 0, Math.PI * 2);
+          ctx.stroke();
+          cameraLabel(`LIVE · ${cam.name || "CCTV"}`, sx, sy - 18, color);
+        } else if (cam.name) {
+          cameraLabel(cam.name, sx, sy - 10, color);
+        }
+      }
+    }
+    for (const drone of cams.drones || []) {
+      const color = CAMERA_COLORS.drone;
+      ctx.globalAlpha = onFloor(drone.pos.z, f) ? 1 : 0.25;
+      const v = drone.view || { yaw: drone.yaw };
+      drawCone(conePoints(v.pos || drone.pos, v.yaw, v.fov, DRONE_RANGE), color, false);
+      const [sx, sy] = worldToScreen(drone.pos.x, drone.pos.y);
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(sx - 7, sy - 7); ctx.lineTo(sx + 7, sy + 7);
+      ctx.moveTo(sx + 7, sy - 7); ctx.lineTo(sx - 7, sy + 7);
+      ctx.stroke();
+      for (const [dx, dy] of [[-7, -7], [7, 7], [7, -7], [-7, 7]]) {
+        ctx.beginPath();
+        ctx.arc(sx + dx, sy + dy, 3.5, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+      cameraLabel(drone.name || "Drone", sx, sy - 14, color);
+    }
+    ctx.globalAlpha = 1;
+    for (const heli of cams.helicopters || []) {
+      const color = CAMERA_COLORS.helicopter;
+      const [sx, sy] = worldToScreen(heli.pos.x, heli.pos.y);
+      const spot = heli.camera_active !== false ? helicopterFootprint(heli) : null;
+      if (spot) {
+        const [fx, fy] = worldToScreen(spot.x, spot.y);
+        const ring = [];
+        for (let i = 0; i < 24; i++) {
+          const a = (i / 24) * Math.PI * 2;
+          ring.push([spot.x + Math.cos(a) * spot.radius, spot.y + Math.sin(a) * spot.radius]);
+        }
+        // Dashed sight line and ground circle, lightly filled: it can cover much of the map.
+        ctx.setLineDash([6, 4]);
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.moveTo(sx, sy); ctx.lineTo(fx, fy);
+        ctx.stroke();
+        drawCone(ring, color, false, heli.viewing ? 0.15 : 0.06);
+        ctx.setLineDash([]);
+      }
+      ctx.fillStyle = heli.viewing ? color : "#101316";
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(sx, sy, 10, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillStyle = heli.viewing ? "#101316" : color;
+      ctx.font = "800 11px system-ui, sans-serif";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText("H", sx, sy + 0.5);
+      ctx.textBaseline = "alphabetic";
+      const label = heli.viewing ? "LIVE · Air unit" : heli.tracking ? "Air unit · tracking" : "Air unit";
+      cameraLabel(label, sx, sy - 15, color);
+    }
+  }
+
+  // ---------------------------------------------------------------- people
+
   const PERSON_COLORS = { suspect: "#ff7043", civilian: "#81c784" };
-  const PERSON_LETTER = { surrendered: "S", arrested: "R", down: "✕" };
+  const PERSON_LETTER = { surrendered: "S", arrested: "R", down: "✕", tracked: "H", last_seen: "?" };
+
+  // "3m" since a helicopter last saw someone.
+  function seenAgo(t) {
+    const now = (app.state && app.state.time) || Date.now() / 1000;
+    const s = Math.max(0, Math.round(now - (t.seen_at || now)));
+    return s < 60 ? `${s}s` : `${Math.round(s / 60)}m`;
+  }
 
   // Surrendered / restrained / downed people: suspects as diamonds, civilians
   // as circles, with a letter for their state. Reported people are faded.
@@ -534,14 +686,34 @@
       } else {
         ctx.arc(sx, sy, 8, 0, Math.PI * 2);
       }
-      ctx.fill();
-      ctx.stroke();
-      ctx.fillStyle = "#101316";
+      const lastSeen = t.status === "last_seen";
+      if (lastSeen) {
+        // Last known position: hollow, dashed.
+        ctx.setLineDash([3, 3]);
+        ctx.strokeStyle = ctx.fillStyle;
+        ctx.lineWidth = 2;
+        ctx.stroke();
+        ctx.setLineDash([]);
+      } else {
+        ctx.fill();
+        ctx.stroke();
+      }
+      ctx.fillStyle = lastSeen ? PERSON_COLORS[t.kind] || "#bdbdbd" : "#101316";
       ctx.font = "700 10px system-ui, sans-serif";
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
       ctx.fillText(PERSON_LETTER[t.status] || "?", sx, sy + 0.5);
       ctx.textBaseline = "alphabetic";
+      if (t.source === "helicopter") {
+        if (t.status === "tracked") {
+          ctx.strokeStyle = CAMERA_COLORS.helicopter;
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          ctx.arc(sx, sy, 14, 0, Math.PI * 2);
+          ctx.stroke();
+        }
+        cameraLabel(lastSeen ? `last seen ${seenAgo(t)}` : "air unit", sx, sy + 24, CAMERA_COLORS.helicopter);
+      }
       if (t.id === selected) {
         ctx.strokeStyle = "#00bcd4";
         ctx.lineWidth = 2;
@@ -767,7 +939,10 @@
     const person = personAt(sx, sy);
     const best = person ? null : doorAt(sx, sy);
     const [wx, wy] = screenToWorld(sx, sy);
-    if (person) {
+    if (person && person.source === "helicopter") {
+      // Still a threat (or unknown): orders go to the spot, not the person.
+      app.target = { type: "location", location: { ...person.pos }, spotted: person.id };
+    } else if (person) {
       app.target = { type: "person", character: person.id };
     } else if (best) {
       const room = allRooms().find((r) => (r.doors || []).includes(best.id));
@@ -961,6 +1136,11 @@
     const t = app.target;
     if (!t) return "Tap a door, room, person or spot on the map";
     if (t.type === "person") return describePerson(personById(t.character));
+    if (t.type === "location" && t.spotted) {
+      const p = personById(t.spotted);
+      const what = p ? `${p.kind === "suspect" ? "Suspect" : "Civilian"} ${p.status === "tracked" ? "tracked" : "last seen " + seenAgo(p)}` : "Spotted person";
+      return `${what} by air unit — orders go to this spot`;
+    }
     if (t.type === "location") return `Map point (${Math.round(t.location.x)}, ${Math.round(t.location.y)})`;
     if (t.type === "room") return t.door ? `${t.room} — via ${doorLabel(t.door)}` : `${t.room} (no linked door)`;
     return doorLabel(t.door);
@@ -1268,6 +1448,17 @@
     renderOrders();
     redraw();
   };
+
+  function renderCamerasButton() {
+    $("btn-cameras").classList.toggle("active", app.showCameras);
+  }
+  $("btn-cameras").onclick = () => {
+    app.showCameras = !app.showCameras;
+    saveSetting("showCameras", app.showCameras ? "1" : "0");
+    renderCamerasButton();
+    redraw();
+  };
+  renderCamerasButton();
 
   $("room-undo").onclick = () => { app.draft.pop(); redraw(); };
 

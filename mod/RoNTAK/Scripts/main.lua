@@ -2,6 +2,7 @@
 -- Entry point loaded by UE4SS.
 
 local bridge = require("bridge")
+local cameras = require("cameras")
 local config = require("config")
 local discovery = require("discovery")
 local game = require("game")
@@ -40,6 +41,12 @@ local function tick()
 
     local doors = level and game.doors(level) or {}
     local rooms_version = rooms.update(level)
+    local targets = level and game.targets() or {}
+    local sensors = cameras.state(level)
+    -- People the helicopter tracked are added after the no-threat ones.
+    local people = {}
+    for _, t in ipairs(targets) do people[#people + 1] = t end
+    for _, t in ipairs(level and cameras.spotted(targets) or {}) do people[#people + 1] = t end
 
     seq = seq + 1
     bridge.write_state({
@@ -50,7 +57,8 @@ local function tick()
         player = game.player(),
         officers = level and game.officers() or {},
         doors = doors,
-        targets = level and game.targets() or {},
+        targets = people,
+        cameras = sensors,
         held = orders.held_list(),
         rooms_version = rooms_version,
         results = results,
@@ -120,6 +128,7 @@ bind(config.keys.sniff_toggle, discovery.toggle_sniff)
 bind(config.keys.test_order, test_order)
 
 orders.install_class_hooks()
+cameras.install_hooks()
 
 LoopAsync(config.tick_ms, function()
     ExecuteInGameThread(safe_tick)

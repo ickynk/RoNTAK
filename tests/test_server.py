@@ -98,3 +98,18 @@ class ServerTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class MockCamerasTest(unittest.TestCase):
+    def test_cctv_wired_after_ten_seconds_and_helicopter_marks_suspect(self):
+        import mock
+        game = mock.MockGame()
+        cams = game.cameras()
+        self.assertEqual(cams["cctv"], {"wired": False, "cameras": []})
+        self.assertEqual((game.spotted["source"], game.spotted["status"]), ("helicopter", "tracked"))
+        game.clock = 25  # 20 s tracked, then lost
+        cams = game.cameras()
+        self.assertTrue(cams["cctv"]["wired"])
+        self.assertEqual(len(cams["cctv"]["cameras"]), 2)
+        self.assertEqual(game.spotted["status"], "last_seen")
+        self.assertEqual(cams["drones"][0]["view"]["fov"], 90.0)

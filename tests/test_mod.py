@@ -2,6 +2,7 @@
 
 import json
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -152,7 +153,7 @@ class ModTest(unittest.TestCase):
         lua = self.lua
         lua.execute(f'package.path = [[{SCRIPTS}/?.lua;]] .. package.path')
         lua.execute(FAKE_UE4SS)
-        lua.execute("print = function() end")
+        lua.execute("print = function(...) if DEBUG_PRINT then io.stderr:write(table.concat({...}, \" \") .. \"\\n\") end end")
         config = lua.eval('(require("config"))')
         config.bridge_dir = str(self.bridge)
         lua.execute('require("main")')
@@ -390,14 +391,15 @@ class ModTest(unittest.TestCase):
 
     def test_object_scans_are_cached_across_ticks(self):
         self.lua.execute(r"""
-            scans = 0
+            scans = {}
             local find_all_of = FindAllOf
-            function FindAllOf(class) scans = scans + 1 return find_all_of(class) end
+            function FindAllOf(class) scans[class] = (scans[class] or 0) + 1 return find_all_of(class) end
         """)
         for _ in range(40):  # 10 s of ticks, all within the same os.time() second here
             state = self.tick()
-        # One scan each for the player controller, officers, doors, room points and people, not one per tick.
-        self.assertLessEqual(self.lua.globals().scans, 5)
+        # One scan per class (player controller, officers, doors, room points, people, cameras), not one per tick.
+        scans = dict(self.lua.globals().scans)
+        self.assertEqual(set(scans.values()), {1}, scans)
         self.assertEqual(len(state["officers"]), 2)
         self.assertEqual(len(state["doors"]), 2)
 
@@ -429,6 +431,110 @@ class ModTest(unittest.TestCase):
             "Civilian_Down": ("civilian", "down", True),
             "Suspect_Cuffed": ("suspect", "arrested", False),
         })
+
+    def add_cameras(self):
+        self.lua.execute(r"""
+            local function component(x, y, z, yaw, pitch, props)
+                local comp = props or {}
+                comp.IsValid = function() return true end
+                comp.K2_GetComponentLocation = function() return { X = x, Y = y, Z = z } end
+                comp.K2_GetComponentRotation = function() return { Yaw = yaw, Pitch = pitch } end
+                return comp
+            end
+            local function fstr(s) return { ToString = function() return s end } end
+            tracking = { IsValid = function() return true end, bHasTarget = false }
+            objects.Helicopter = { actor("Helicopter_C_1", 0, 0, 3000, 10, {
+                RadialTrackingComponent = tracking,
+                TrackingCameraComponent = { IsValid = function() return true end,
+                    IsCameraActive = function() return true end,
+                    CaptureComponent = component(0, 0, 2900, 30, -60, { FOVAngle = 40 }) },
+            }) }
+            objects.UnmannedVehicle = { actor("Drone_C_1", 50, 60, 100, 180, {
+                IsAlive = function() return true end,
+                GetTabletNameText = function() return fstr("Drone") end,
+                GetTabletViewComponent = function() return component(50, 60, 110, 170, -10) end,
+                FirstPersonCamera = { IsValid = function() return true end, FieldOfView = 90 },
+            }) }
+            objects.CCTVCameraPoint = {
+                actor("CCTV_C_1", 0, 0, 0, 0, { CameraName = fstr("Lobby"), FloorNumber = 0, CameraNumber = 1,
+                    CaptureComponent = component(10, 20, 250, 45, -20, { FOVAngle = 80 }) }),
+                actor("CCTV_C_2", 0, 0, 0, 0, { CameraName = fstr("Office"), FloorNumber = 1, CameraNumber = 1,
+                    CaptureComponent = component(30, 40, 550, 90, -20, { FOVAngle = 80 }) }),
+            }
+            wired = false
+            objects.CCTVSystem = { { IsValid = function() return true end, IsWired = function() return wired end } }
+        """)
+
+    def hook(self, name, *args):
+        self.lua.globals().fire_hook(name, *args)
+
+    def test_cctv_only_once_wired_and_viewed_camera_marked(self):
+        self.add_cameras()
+        self.lua.execute(r"""
+            function fire_hook(name, value)
+                for _, fn in ipairs(hooks[name] or {}) do fn({}, { get = function() return value end }) end
+            end
+        """)
+        state = self.tick()
+        self.assertEqual(state["cameras"]["cctv"], {"wired": False, "cameras": []})
+        self.lua.execute("wired = true")
+        time.sleep(1.1)  # wired state is re-read once a second
+        state = self.tick()
+        cctv = state["cameras"]["cctv"]
+        self.assertTrue(cctv["wired"])
+        self.assertNotIn("viewing", cctv)
+        self.assertEqual([(c["name"], c["floor"], c["view"]["fov"], c["view"]["yaw"]) for c in cctv["cameras"]],
+                         [("Lobby", 0, 80, 45), ("Office", 1, 80, 90)])
+        self.lua.execute("objects.PlayerController[1].Pawn.CurrentViewCamera = objects.CCTVCameraPoint[2]")
+        state = self.tick()
+        self.assertEqual(state["cameras"]["cctv"]["viewing"], "CCTV_C_2")
+
+    def test_watching_a_feed_counts_as_wired(self):
+        self.add_cameras()
+        self.lua.execute("objects.PlayerController[1].Pawn.CurrentViewCamera = objects.CCTVCameraPoint[1]")
+        cctv = self.tick()["cameras"]["cctv"]
+        self.assertEqual((cctv["wired"], cctv["viewing"], len(cctv["cameras"])), (True, "CCTV_C_1", 2))
+
+    def test_helicopter_and_drone_views(self):
+        self.add_cameras()
+        cams = self.tick()["cameras"]
+        heli = cams["helicopters"][0]
+        self.assertEqual((heli["id"], heli["pos"]["z"], heli["tracking"], heli["camera_active"], heli["viewing"]),
+                         ("Helicopter_C_1", 3000, False, True, False))
+        self.assertEqual((heli["view"]["yaw"], heli["view"]["pitch"], heli["view"]["fov"]), (30, -60, 40))
+        drone = cams["drones"][0]
+        self.assertEqual((drone["name"], drone["view"]["yaw"], drone["view"]["fov"]), ("Drone", 170, 90))
+        self.lua.execute("objects.PlayerController[1].Pawn.CurrentViewHelicopter = objects.Helicopter[1]")
+        self.assertTrue(self.tick()["cameras"]["helicopters"][0]["viewing"])
+
+    def test_helicopter_tracked_people_are_marked(self):
+        self.add_people()
+        self.add_cameras()
+        self.lua.execute(r"""
+            function fire_hook(name, value)
+                for _, fn in ipairs(hooks[name] or {}) do fn({}, { get = function() return value end }) end
+            end
+        """)
+        found = "/Script/ReadyOrNot.Helicopter:OnTargetFound"
+        lost = "/Script/ReadyOrNot.Helicopter:OnTargetLost"
+        self.tick()
+        self.lua.execute(f'fire_hook("{found}", objects.CyberneticCharacter[2])')  # Suspect_Active
+        people = {t["id"]: t for t in self.tick()["targets"]}
+        self.assertEqual((people["Suspect_Active"]["kind"], people["Suspect_Active"]["status"],
+                          people["Suspect_Active"]["source"]), ("suspect", "tracked", "helicopter"))
+        self.assertEqual(people["Suspect_Active"]["pos"]["x"], 200)
+        # Lost: stays on the map at its last known position.
+        self.lua.execute(f'fire_hook("{lost}", 1)')
+        self.lua.execute("objects.CyberneticCharacter[2].K2_GetActorLocation = function() return { X = 999, Y = 0, Z = 0 } end")
+        people = {t["id"]: t for t in self.tick()["targets"]}
+        self.assertEqual((people["Suspect_Active"]["status"], people["Suspect_Active"]["pos"]["x"]), ("last_seen", 200))
+        # Tracking someone already shown (surrendered) does not add a second marker.
+        self.lua.execute(f'fire_hook("{found}", objects.CyberneticCharacter[1])')
+        ids = [t["id"] for t in self.tick()["targets"]]
+        self.assertEqual(ids.count("Suspect_Surrendered"), 1)
+        # Officers or other characters are never marked.
+        self.lua.execute(f'fire_hook("{found}", objects.CyberneticCharacter[5])')
+        self.assertNotIn("Swat_Other", [t["id"] for t in self.tick()["targets"]])
 
     def test_restrain_and_report(self):
         self.add_people()
@@ -539,7 +645,7 @@ class SnifferTest(unittest.TestCase):
         lua = LuaRuntime(unpack_returned_tuples=True)
         lua.execute(f'package.path = [[{SCRIPTS}/?.lua;]] .. package.path')
         lua.execute(FAKE_UE4SS)
-        lua.execute("print = function() end")
+        lua.execute("print = function(...) if DEBUG_PRINT then io.stderr:write(table.concat({...}, \" \") .. \"\\n\") end end")
         lua.execute(r"""
             hooks = {}
             function RegisterHook(path, fn) hooks[path] = fn return 1, 2 end

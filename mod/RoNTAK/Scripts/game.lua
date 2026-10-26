@@ -554,5 +554,10 @@ game.object_name = object_name
 game.name_text = name_text
 game.location = location
 game.find_all = find_all
+game.read_raw = read_raw
+game.read_property = read_property
+game.call_bool = call_bool
+game.call_name = call_name
+game.yaw = yaw
 
 return game

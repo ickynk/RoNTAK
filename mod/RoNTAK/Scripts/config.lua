@@ -129,6 +129,33 @@ config.targets = {
     reported_function = "HasBeenReported",
 }
 
+-- Helicopter, drone and CCTV cameras, drawn on the map as view cones
+-- (names from the header dump; to be confirmed in game).
+config.cameras = {
+    -- Police helicopter. Its tracking camera follows one suspect or civilian;
+    -- the game calls OnTargetFound / OnTargetLost when it picks one up or
+    -- loses it. Those people are marked on the map.
+    helicopter_classes = { "Helicopter" },
+    tracking_property = "RadialTrackingComponent",     -- .bHasTarget
+    camera_property = "TrackingCameraComponent",       -- .CaptureComponent, IsCameraActive()
+    target_found_hook = "/Script/ReadyOrNot.Helicopter:OnTargetFound",
+    target_lost_hook = "/Script/ReadyOrNot.Helicopter:OnTargetLost",
+    -- Drones (ADrone, ADroneVehicle and other UnmannedVehicle pawns).
+    drone_classes = { "UnmannedVehicle", "QuadrotorPawn" },
+    drone_view_function = "GetTabletViewComponent",    -- the component the tablet view uses
+    drone_camera_property = "FirstPersonCamera",       -- .FieldOfView
+    drone_name_function = "GetTabletNameText",
+    drone_alive_function = "IsAlive",
+    -- CCTV. Shown only once the cameras are wired to the tablet.
+    cctv_point_classes = { "CCTVCameraPoint" },        -- CaptureComponent, CameraName, FloorNumber
+    cctv_system_classes = { "CCTVSystem" },
+    cctv_wired_function = "IsWired",
+    cctv_wired_property = "bWiredToTablet",
+    -- On the player pawn: the CCTV camera / helicopter whose feed is on screen.
+    view_camera_property = "CurrentViewCamera",
+    view_helicopter_property = "CurrentViewHelicopter",
+}
+
 -- EStackUpStyle, passed as "$side".
 config.side_args = { auto = 0, split = 1, left = 2, right = 3 }
 
