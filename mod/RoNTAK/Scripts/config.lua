@@ -26,6 +26,7 @@ config.keys = {
     discovery_dump = "F8",   -- write candidate classes/functions to bridge/discovery.txt
     sniff_toggle   = "F9",   -- start/stop logging calls to config.sniff functions
     test_order     = "F10",  -- send config.test_order through the normal order path
+    floorplan_test = "F11",  -- TEST: save top-down pictures around you to bridge/floorplan_test_*.png
 }
 
 ---------------------------------------------------------------------------

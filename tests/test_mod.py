@@ -29,7 +29,7 @@ local pawn = actor("PlayerPawn_C_0", 0, 0, 0, 90)
 local controller = actor("PlayerController_C_0", 0, 0, 0, 0, {
     Pawn = pawn,
     Player = { IsValid = function() return true end },
-    GetWorld = function() return { GetFName = function() return name("RiverwoodHouse") end } end,
+    GetWorld = function() return { IsValid = function() return true end, GetFName = function() return name("RiverwoodHouse") end } end,
 })
 
 -- Records every Give...Command call as { fn = name, n = arg count, ... }.
@@ -137,7 +137,7 @@ objects = {
 
 function FindAllOf(class) return objects[class] end
 function FindFirstOf(class) return objects[class] and objects[class][1] end
-Key = { F5 = "F5", F6 = "F6", F7 = "F7", F8 = "F8", F9 = "F9", F10 = "F10" }
+Key = { F5 = "F5", F6 = "F6", F7 = "F7", F8 = "F8", F9 = "F9", F10 = "F10", F11 = "F11" }
 keybinds = {}
 function RegisterKeyBind(key, fn) keybinds[key] = fn end
 function ExecuteInGameThread(fn) fn() end
@@ -430,6 +430,72 @@ class ModTest(unittest.TestCase):
             g.clock = g.clock + 0.25
         self.assertLessEqual(worst_scans, 1)
         self.assertLessEqual(worst_doors, 1)  # 2 doors here, one per tick
+
+    def test_floorplan_capture_test(self):
+        self.lua.execute(r"""
+            local function obj(n, t)
+                t = t or {}
+                t.IsValid = function() return true end
+                t.GetFName = function() return { ToString = function() return n end } end
+                return t
+            end
+            spawned, exports = {}, {}
+            local capture_class = obj("SceneCapture2D")
+            local statics = obj("GameplayStatics", {
+                BeginDeferredActorSpawnFromClass = function(self, world, class, transform, ...)
+                    -- Like UE4SS in this game: the class argument arrives empty unless a pre-hook writes it.
+                    local args = { world, "stale", transform }
+                    local params = {}
+                    for i = 1, 3 do
+                        local index = i
+                        params[i] = { get = function() return args[index] end, set = function(_, v) args[index] = v end }
+                    end
+                    for _, hook in ipairs(hooks["/Script/Engine.GameplayStatics:BeginDeferredActorSpawnFromClass"] or {}) do
+                        hook({}, table.unpack(params))
+                    end
+                    local comp = obj("Capture", { CaptureScene = function(c) c.captured = true end })
+                    local a = obj("Cam", { CaptureComponent2D = comp, K2_DestroyActor = function(a) a.destroyed = true end,
+                        K2_SetActorRotation = function() end })
+                    spawned[#spawned + 1] = { class = args[2], z = transform.Translation.Z, actor = a, comp = comp }
+                    return a
+                end,
+                FinishSpawningActor = function() end,
+            })
+            local rendering = obj("KismetRenderingLibrary", {
+                CreateRenderTarget2D = function(self, world, w, h, fmt) return obj("RT", { w = w, fmt = fmt }) end,
+                ExportRenderTarget = function(self, world, rt, dir, file) exports[#exports + 1] = file end,
+            })
+            local found = {
+                ["/Script/Engine.SceneCapture2D"] = capture_class,
+                ["/Script/Engine.Default__GameplayStatics"] = statics,
+                ["/Script/Engine.Default__KismetRenderingLibrary"] = rendering,
+            }
+            function StaticFindObject(path) return found[path] end
+            capture_class_ref = capture_class
+            objects.PlayerController[1].Pawn.K2_GetActorLocation = function() return { X = 1000, Y = 2000, Z = 90 } end
+        """)
+        self.tick()
+        self.lua.globals().keybinds["F11"]()
+        g = self.lua.globals()
+        self.assertEqual(list(g.exports.values()), ["floorplan_test_A.png", "floorplan_test_B.png", "floorplan_test_C.png"])
+        shots = [g.spawned[i] for i in range(1, 4)]
+        for shot in shots:
+            self.assertEqual(shot["class"].GetFName().ToString(), "SceneCapture2D")  # written by the pre-hook
+            self.assertEqual((shot["comp"]["ProjectionType"], shot["comp"]["OrthoWidth"], shot["comp"]["CaptureSource"]),
+                             (1, 6000, 7))
+            self.assertTrue(shot["comp"]["captured"] and shot["actor"]["destroyed"])
+        self.assertEqual([s["z"] for s in shots], [170, 5170, 5170])  # A at the cut, B and C high
+        self.assertEqual(shots[0]["comp"]["OrthoNearClipPlane"], 0)
+        self.assertEqual(shots[1]["comp"]["bEnableClipPlane"], True)
+        self.assertEqual(dict(shots[1]["comp"]["ClipPlaneNormal"]), {"X": 0, "Y": 0, "Z": -1})
+        self.assertIsNone(shots[2]["comp"]["bEnableClipPlane"])
+        info = json.loads((self.bridge / "floorplan_test.json").read_text())
+        self.assertEqual(info["cut_z"], 170)
+        # Top-left pixel = +X / -Y corner; top-right = +Y; bottom-left = -X.
+        self.assertEqual(info["anchors"][0], {"world": [4000, -1000], "px": [0, 0]})
+        self.assertEqual(info["anchors"][1], {"world": [4000, 5000], "px": [2048, 0]})
+        self.assertEqual(info["anchors"][2], {"world": [-2000, -1000], "px": [0, 2048]})
+        self.assertFalse(any("FAILED" in line for line in info["report"]), info["report"])
 
     def add_people(self):
         self.lua.execute(r"""
