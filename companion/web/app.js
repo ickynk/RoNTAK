@@ -90,6 +90,7 @@
     mapLoaded: false, // map.json of app.level has been read
     roomsVersion: null,
     pendingAnchor: null, // calibration: world position of the door tapped first
+    adjustDrag: false, // calibration: dragging moves the floor plan image instead of the map
     holdForGo: false, // send orders as "held" until GO
     draft: [],
     dirty: true,
@@ -401,7 +402,7 @@
     const f = floor();
     const img = f && app.images[f.image];
     if (img && img.complete && img.naturalWidth) {
-      ctx.drawImage(img, app.view.panX, app.view.panY, img.naturalWidth * app.view.zoom, img.naturalHeight * app.view.zoom);
+      drawFloorImage(f, img);
     } else {
       drawGrid(r);
     }
@@ -415,6 +416,42 @@
     drawTargetLocation();
     if (app.mode === "calibrate") drawAnchors();
     if (app.mode === "rooms") drawDraft();
+  }
+
+  // ---------------------------------------------------------------- image adjustment
+
+  // How a floor plan image is laid over the map: moved (map px), rotated
+  // (degrees), scaled and stretched around its centre, cropped (fraction of
+  // each side) and made see-through. Markers don't move; the image does.
+  const ADJUST_DEFAULT = { x: 0, y: 0, rotate: 0, scale: 1, stretchX: 1, stretchY: 1,
+    cropLeft: 0, cropRight: 0, cropTop: 0, cropBottom: 0, opacity: 1 };
+
+  function adjustOf(f) {
+    return { ...ADJUST_DEFAULT, ...((f && f.adjust) || {}) };
+  }
+
+  function drawFloorImage(f, img) {
+    const a = adjustOf(f);
+    const w = img.naturalWidth, h = img.naturalHeight;
+    const sx = a.cropLeft * w, sy = a.cropTop * h;
+    const sw = Math.max(1, w * (1 - a.cropLeft - a.cropRight)), sh = Math.max(1, h * (1 - a.cropTop - a.cropBottom));
+    ctx.save();
+    ctx.translate(app.view.panX, app.view.panY);
+    ctx.scale(app.view.zoom, app.view.zoom);
+    ctx.translate(w / 2 + a.x, h / 2 + a.y);
+    ctx.rotate((a.rotate * Math.PI) / 180);
+    ctx.scale(a.scale * a.stretchX, a.scale * a.stretchY);
+    ctx.translate(-w / 2, -h / 2);
+    ctx.globalAlpha = a.opacity;
+    ctx.drawImage(img, sx, sy, sw, sh, sx, sy, sw, sh);
+    if (app.mode === "calibrate" && app.adjustDrag) {
+      ctx.globalAlpha = 1;
+      ctx.strokeStyle = "#00bcd4";
+      ctx.lineWidth = 2 / (app.view.zoom * a.scale * Math.max(a.stretchX, a.stretchY));
+      ctx.setLineDash([8 / app.view.zoom, 6 / app.view.zoom]);
+      ctx.strokeRect(sx, sy, sw, sh);
+    }
+    ctx.restore();
   }
 
   function drawGrid(r) {
@@ -902,6 +939,13 @@
       app.view.panX += now.cx - gesture.pinch.cx;
       app.view.panY += now.cy - gesture.pinch.cy;
       gesture.pinch = now;
+    } else if (pointers.size === 1 && gesture.moved && app.mode === "calibrate" && app.adjustDrag && floor()) {
+      const f = floor();
+      f.adjust = adjustOf(f);
+      f.adjust.x += (e.offsetX - prev.x) / app.view.zoom;
+      f.adjust.y += (e.offsetY - prev.y) / app.view.zoom;
+      renderAdjust();
+      redraw();
     } else if (pointers.size === 1 && gesture.moved) {
       app.view.panX += e.offsetX - prev.x;
       app.view.panY += e.offsetY - prev.y;
@@ -929,7 +973,7 @@
   }, { passive: false });
 
   function onTap(sx, sy) {
-    if (app.mode === "calibrate") return addAnchor(sx, sy);
+    if (app.mode === "calibrate") return app.adjustDrag ? null : addAnchor(sx, sy);
     if (app.mode === "rooms") {
       app.draft.push(screenToWorld(sx, sy));
       return redraw();
@@ -1395,6 +1439,7 @@
       list.appendChild(li);
     });
     if (!f || !(f.anchors || []).length) list.innerHTML = "<li>No anchors yet</li>";
+    renderAdjust();
   }
 
   $("cal-name").onchange = (e) => {
@@ -1418,6 +1463,7 @@
       delete app.images[safe];
       app.view.fitted = false;
       loadImage(f);
+      renderAdjust();
       setHint("Image loaded. Now tap anchor points, then Save map.");
     } catch (err) {
       alert("Upload failed: " + err.message);
@@ -1446,6 +1492,73 @@
   };
 
   $("cal-save").onclick = () => saveMap().catch((e) => alert("Save failed: " + e.message));
+
+  // Sliders for the image adjustment: [key, label, min, max, step, shown as ×100 (%)].
+  const ADJUST_CONTROLS = [
+    ["rotate", "Rotate (°)", -180, 180, 0.5, false],
+    ["scale", "Scale (%)", 10, 400, 1, true],
+    ["stretchX", "Stretch width (%)", 25, 400, 1, true],
+    ["stretchY", "Stretch height (%)", 25, 400, 1, true],
+    ["x", "Move right (px)", -3000, 3000, 1, false],
+    ["y", "Move down (px)", -3000, 3000, 1, false],
+    ["cropLeft", "Crop left (%)", 0, 45, 0.5, true],
+    ["cropRight", "Crop right (%)", 0, 45, 0.5, true],
+    ["cropTop", "Crop top (%)", 0, 45, 0.5, true],
+    ["cropBottom", "Crop bottom (%)", 0, 45, 0.5, true],
+    ["opacity", "See-through (%)", 10, 100, 1, true],
+  ];
+
+  function buildAdjustControls() {
+    const box = $("adjust-controls");
+    for (const [key, label, min, max, step, percent] of ADJUST_CONTROLS) {
+      const row = document.createElement("div");
+      row.className = "adjust-row";
+      row.innerHTML = `<span>${label}</span><input type="range" min="${min}" max="${max}" step="${step}">` +
+        `<input type="number" min="${min}" max="${max}" step="${step}">`;
+      const [range, number] = row.querySelectorAll("input");
+      const set = (value) => {
+        const f = floor();
+        if (!f || !Number.isFinite(value)) return;
+        f.adjust = adjustOf(f);
+        // See-through is stored as opacity: 100 % = solid.
+        f.adjust[key] = percent ? value / 100 : value;
+        renderAdjust();
+        redraw();
+      };
+      range.oninput = () => set(Number(range.value));
+      number.onchange = () => set(Number(number.value));
+      row.dataset.key = key;
+      box.appendChild(row);
+    }
+  }
+
+  function renderAdjust() {
+    const f = floor();
+    const a = adjustOf(f);
+    $("adjust-box").hidden = !(f && f.image);
+    $("adjust-drag").checked = app.adjustDrag;
+    for (const row of $("adjust-controls").children) {
+      const [, , , , , percent] = ADJUST_CONTROLS.find((c) => c[0] === row.dataset.key);
+      const value = percent ? Math.round(a[row.dataset.key] * 1000) / 10 : Math.round(a[row.dataset.key] * 10) / 10;
+      for (const input of row.querySelectorAll("input")) {
+        if (document.activeElement !== input) input.value = value;
+      }
+    }
+  }
+
+  $("adjust-drag").onchange = (e) => {
+    app.adjustDrag = e.target.checked;
+    setHint(app.adjustDrag ? "Drag to move the floor plan under the markers." : "");
+    redraw();
+  };
+  $("adjust-reset").onclick = () => {
+    const f = floor();
+    if (!f) return;
+    delete f.adjust;
+    renderAdjust();
+    redraw();
+  };
+  buildAdjustControls();
 
   // ---------------------------------------------------------------- rooms
 

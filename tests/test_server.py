@@ -38,6 +38,15 @@ class ServerTest(unittest.TestCase):
         except urllib.error.HTTPError as e:
             return e.code, json.loads(e.read())
 
+    def test_page_asks_for_fresh_scripts(self):
+        with urllib.request.urlopen(self.base + "/") as res:
+            html = res.read().decode()
+            self.assertEqual(res.headers["Cache-Control"], "no-cache")
+        for name in ("style.css", "geo.js", "app.js"):
+            self.assertRegex(html, rf'"{name}\?v=\d+"')
+        with urllib.request.urlopen(self.base + "/app.js?v=1") as res:
+            self.assertIn(b"drawFloorImage", res.read())
+
     def test_state_missing_then_present(self):
         (self.bridge / "state.json").unlink(missing_ok=True)
         status, body = self.call("GET", "/api/state")

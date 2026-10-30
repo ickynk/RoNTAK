@@ -137,6 +137,11 @@ label.file input { padding: 5px; }
 label.check { display: flex; align-items: center; gap: 8px; margin: 8px 0; color: var(--text); font-size: 13px; }
 label.check input { width: auto; margin: 0; }
 .row { display: flex; gap: 8px; margin-top: 8px; }
+.adjust-row { display: grid; grid-template-columns: 1fr 70px; gap: 2px 8px; margin-top: 6px; font-size: 12px; color: var(--muted); }
+.adjust-row span { grid-column: 1 / -1; }
+.adjust-row input[type=range] { width: 100%; padding: 0; }
+.adjust-row input[type=number] { padding: 3px 6px; }
+#adjust-reset { width: 100%; margin-top: 10px; }
 .row > * { flex: 1; }
 
 /* Phones and portrait tablets: map on top, panel below. */
