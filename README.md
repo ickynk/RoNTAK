@@ -10,8 +10,10 @@ An ATAK-style tactical map and team orders mod for **Ready or Not**.
   - Spots: Move To, Cover Area, Deploy Grenade, Drop Chemlight
   - People (only once surrendered, restrained or down): Restrain, Report
   - Team-wide: Fall In, Hold, Search & Secure
-- **Cameras**: the air unit's sight line and the people it tracks (last-seen markers once lost), drone view cone,
-  and CCTV cones once the cameras are wired, with the feed you are watching highlighted
+- **Cameras**: the air unit's sight line and the people it tracks, drone view cone, and CCTV cones once the
+  cameras are wired (the feed you are watching highlighted), with suspects and civilians in a camera's view marked,
+  then shown at their last known position
+- **Roster health**: OK / injured (with %) / down / KIA for each officer
 - **Hold for GO**: set up orders for both teams and start them together (GO on screen, or F5 in game)
 - Options the selected team has no gear for are greyed out, with counts (e.g. "C2 ×1")
 - Doors show their state (closed, open, broken, wedged, known locked, known trap) and only offer orders that fit

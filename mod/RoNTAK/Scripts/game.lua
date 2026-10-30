@@ -350,6 +350,29 @@ function game.activity_report()
     return lines
 end
 
+-- Calls a no-argument function that returns a number; nil if it is missing or fails.
+local function call_number(obj, fn_name)
+    if not fn_name then return nil end
+    local ok, value = pcall(function() return obj[fn_name](obj) end)
+    if ok and type(value) == "number" then return value end
+    return nil
+end
+
+-- "healthy", "injured", "downed", "incapacitated", "dead" or "arrested"; nil if unknown.
+local function health_status(actor)
+    local value = call_number(actor, config.officers.health_status_function)
+    return value and (config.officers.health_status_values or {})[value] or nil
+end
+
+-- Health in percent (0-100), or nil.
+local function health_percent(actor)
+    local current = call_number(actor, config.officers.health_function)
+    local max = call_number(actor, config.officers.max_health_function)
+    if not current then return nil end
+    if max and max > 0 then return math.floor(current / max * 100 + 0.5) end
+    return current
+end
+
 function game.officers()
     local result = {}
     local items = inventories()
@@ -360,7 +383,8 @@ function game.officers()
             team = o.team,
             pos = o.pos,
             yaw = yaw(o.actor),
-            health = read_property(o.actor, config.officers.health_property),
+            status = health_status(o.actor),
+            health = health_percent(o.actor),
             items = items[o.name],
         }
     end
@@ -559,5 +583,6 @@ game.read_property = read_property
 game.call_bool = call_bool
 game.call_name = call_name
 game.yaw = yaw
+game.target_actors = target_actors
 
 return game

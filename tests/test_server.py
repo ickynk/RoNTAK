@@ -122,3 +122,10 @@ class MockCamerasTest(unittest.TestCase):
         self.assertEqual(len(cams["cctv"]["cameras"]), 2)
         self.assertEqual(game.spotted["status"], "last_seen")
         self.assertEqual(cams["drones"][0]["view"]["fov"], 90.0)
+        self.assertEqual(game.officers[1].state()["status"], "injured")
+        for clock in range(10, 60):  # the civilian walks into the Living Room camera's view
+            game.clock = clock
+            game.cameras()
+            if game.cctv_spotted and game.cctv_spotted["status"] == "tracked":
+                break
+        self.assertEqual((game.cctv_spotted["source"], game.cctv_spotted["camera"]), ("cctv", "Living Room"))
