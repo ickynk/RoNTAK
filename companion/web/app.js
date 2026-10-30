@@ -620,7 +620,9 @@
     for (const heli of cams.helicopters || []) {
       const color = CAMERA_COLORS.helicopter;
       const [sx, sy] = worldToScreen(heli.pos.x, heli.pos.y);
-      const spot = heli.camera_active !== false ? helicopterFootprint(heli) : null;
+      // camera_active is only true while someone watches the feed; the camera
+      // points (and tracks) either way, so the footprint is always drawn.
+      const spot = helicopterFootprint(heli);
       if (spot) {
         const [fx, fy] = worldToScreen(spot.x, spot.y);
         const ring = [];
@@ -653,7 +655,35 @@
       ctx.textBaseline = "alphabetic";
       const label = heli.viewing ? "LIVE · Air unit" : heli.tracking ? "Air unit · tracking" : "Air unit";
       cameraLabel(label, sx, sy - 15, color);
+      drawOffscreenPointer(heli.pos, sx, sy, color, "H");
     }
+  }
+
+  // An arrow at the map's edge pointing to a marker that is off-screen, with its distance from the player.
+  function drawOffscreenPointer(pos, sx, sy, color, letter) {
+    const r = canvas.getBoundingClientRect();
+    const margin = 22;
+    if (sx >= 0 && sy >= 0 && sx <= r.width && sy <= r.height) return;
+    const cx = r.width / 2, cy = r.height / 2;
+    const dx = sx - cx, dy = sy - cy;
+    const k = Math.min((cx - margin) / Math.abs(dx || 1e-9), (cy - margin) / Math.abs(dy || 1e-9));
+    const ex = cx + dx * k, ey = cy + dy * k;
+    const ang = Math.atan2(dy, dx);
+    ctx.fillStyle = color;
+    ctx.strokeStyle = "#101316";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(ex + Math.cos(ang) * 14, ey + Math.sin(ang) * 14);
+    ctx.lineTo(ex + Math.cos(ang + 2.5) * 12, ey + Math.sin(ang + 2.5) * 12);
+    ctx.lineTo(ex + Math.cos(ang - 2.5) * 12, ey + Math.sin(ang - 2.5) * 12);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    const p = app.state && app.state.player;
+    const meters = p && p.pos ? Math.round(Math.hypot(pos.x - p.pos.x, pos.y - p.pos.y) / 100) : null;
+    const tx = Math.min(Math.max(ex - Math.cos(ang) * 22, 30), r.width - 30);
+    const ty = Math.min(Math.max(ey - Math.sin(ang) * 22, 14), r.height - 8);
+    cameraLabel(meters === null ? letter : `${letter} ${meters} m`, tx, ty + 4, color);
   }
 
   // ---------------------------------------------------------------- people
