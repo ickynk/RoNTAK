@@ -147,7 +147,7 @@ config.cameras = {
     target_found_hook = "/Script/ReadyOrNot.Helicopter:OnTargetFound",
     target_lost_hook = "/Script/ReadyOrNot.Helicopter:OnTargetLost",
     -- Drones (ADrone, ADroneVehicle and other UnmannedVehicle pawns).
-    drone_classes = { "UnmannedVehicle", "QuadrotorPawn" },
+    drone_classes = { "UnmannedVehicle" },
     drone_view_function = "GetTabletViewComponent",    -- the component the tablet view uses
     drone_camera_property = "FirstPersonCamera",       -- .FieldOfView
     drone_name_function = "GetTabletNameText",

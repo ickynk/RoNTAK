@@ -5,24 +5,58 @@ local log = require("log")
 
 local game = {}
 
--- FindAllOf walks every loaded object (hundreds of thousands in a level) on
--- the game thread, so it is only used to rebuild cached actor lists:
-local RESCAN_SECONDS = 5          -- officers / player controller
-local DOOR_RESCAN_SECONDS = 15    -- door list
+-- FindAllOf walks every loaded object on the game thread, and a level keeps
+-- gaining objects (decals, debris, dropped items) the longer it runs. So it
+-- only rebuilds cached actor lists, rarely, and at most one rescan runs per
+-- tick (see game.scan_slot). Officers, doors and people don't appear mid
+-- mission; a list is also rebuilt when one of its actors disappears.
+local OFFICER_RESCAN_SECONDS = 30
+local TARGET_RESCAN_SECONDS = 20
+local DOOR_RESCAN_SECONDS = 60
 local SEARCH_RETRY_SECONDS = 2    -- after a search found nothing (e.g. in menus)
--- Cheaper per-object reads, still not needed every tick:
-local DOOR_STATE_SECONDS = 2
-local INVENTORY_REFRESH_SECONDS = 2
+-- Per-object reads are spread over ticks: each tick refreshes a slice, so
+-- every door / person / officer is refreshed once per this many ticks
+-- (4 ticks = 1 s at the default tick_ms of 250).
+local DOOR_STATE_TICKS = 8
+local TARGET_STATE_TICKS = 4
 
-local door_cache = { level = nil, at = -math.huge, state_at = -math.huge, list = {}, by_id = {} }
+local door_cache = { level = nil, at = -math.huge, list = {}, by_id = {}, cursor = 0 }
 
 local tick_id = 0
+local scans_left = 0
 
 -- Called once at the start of every mod tick; per-tick reads are reused
 -- within a tick.
 function game.begin_tick()
     tick_id = tick_id + 1
+    scans_left = 1
 end
+
+-- Whether a FindAllOf rescan may run now: at most one per tick, so rescans
+-- that fall due together run on consecutive ticks instead of stacking up into
+-- one long frame. The first scan of a level passes first = true and always
+-- runs (the level is loading anyway, and the map needs its data).
+function game.scan_slot(first)
+    if first then return true end
+    if scans_left > 0 then
+        scans_left = scans_left - 1
+        return true
+    end
+    return false
+end
+
+-- The next items of list in turn, count at a time; cursor is the position
+-- reached so far. Returns the slice and the new cursor.
+local function next_slice(list, cursor, count)
+    local n = #list
+    if n == 0 then return {}, 0 end
+    local slice = {}
+    for i = 1, math.min(count, n) do
+        slice[i] = list[(cursor + i - 1) % n + 1]
+    end
+    return slice, (cursor + #slice) % n
+end
+game.next_slice = next_slice
 
 local function valid(obj)
     if obj == nil then return false end
@@ -117,6 +151,7 @@ function game.player_controller()
     local pc = controller_cache.pc
     if valid(pc) and valid(pc.Pawn) then return pc end
     if os.time() - controller_cache.searched_at < SEARCH_RETRY_SECONDS then return nil end
+    game.scan_slot(true) -- needed to find the level at all, so it always runs, but takes this tick's slot
     controller_cache = { pc = nil, searched_at = os.time() }
     for _, candidate in ipairs(FindAllOf("PlayerController") or {}) do
         if valid(candidate) and valid(candidate.Pawn) and valid(candidate.Player) then
@@ -168,18 +203,18 @@ end
 
 local officer_cache = { at = -math.huge, list = {} }
 
--- The officer actors, rebuilt with FindAllOf every RESCAN_SECONDS or when
--- one of them is gone (at most once per SEARCH_RETRY_SECONDS).
+-- The officer actors, rebuilt with FindAllOf every OFFICER_RESCAN_SECONDS or
+-- when one of them is gone (at most once per SEARCH_RETRY_SECONDS).
 local function officer_list()
     local age = os.time() - officer_cache.at
-    local stale = age >= RESCAN_SECONDS
+    local stale = age >= OFFICER_RESCAN_SECONDS
     if not stale and age >= SEARCH_RETRY_SECONDS then
         if #officer_cache.list == 0 then stale = true end
         for _, o in ipairs(officer_cache.list) do
             if not valid(o.actor) then stale = true break end
         end
     end
-    if not stale then return officer_cache.list end
+    if not stale or not game.scan_slot(officer_cache.at == -math.huge) then return officer_cache.list end
 
     local list = {}
     local player_pawn = game.player_pawn()
@@ -246,26 +281,33 @@ local function usable_items(actor)
     return nil
 end
 
-local inventory_cache = { at = -1, by_name = {} }
+local inventory_cache = { by_name = {}, cursor = 0 }
 
--- Counts of config.inventory items per officer name, refreshed once a second.
-local function inventories()
-    if os.time() - inventory_cache.at >= INVENTORY_REFRESH_SECONDS then
-        local by_name = {}
-        for _, o in ipairs(game.officer_actors()) do
-            local items = usable_items(o.actor)
-            if items then
-                local counts = {}
-                for name, category in pairs(config.inventory or {}) do
-                    counts[name] = 0
-                    for _, entry in ipairs(items) do
-                        if entry.categories[category] then counts[name] = counts[name] + 1 end
-                    end
-                end
-                by_name[o.name] = counts
-            end
+local function item_counts(actor)
+    local items = usable_items(actor)
+    if not items then return nil end
+    local counts = {}
+    for name, category in pairs(config.inventory or {}) do
+        counts[name] = 0
+        for _, entry in ipairs(items) do
+            if entry.categories[category] then counts[name] = counts[name] + 1 end
         end
-        inventory_cache = { at = os.time(), by_name = by_name }
+    end
+    return counts
+end
+
+-- Counts of config.inventory items per officer name. One officer is
+-- re-counted per tick (each once a second with four officers); an officer not
+-- counted yet is counted straight away.
+local function inventories()
+    local officers = game.officer_actors()
+    local slice
+    slice, inventory_cache.cursor = next_slice(officers, inventory_cache.cursor, 1)
+    for _, o in ipairs(officers) do
+        if inventory_cache.by_name[o.name] == nil then slice[#slice + 1] = o end
+    end
+    for _, o in ipairs(slice) do
+        inventory_cache.by_name[o.name] = item_counts(o.actor) or inventory_cache.by_name[o.name]
     end
     return inventory_cache.by_name
 end
@@ -420,30 +462,50 @@ end
 
 -- Rebuilds the door list with FindAllOf. Doors do not move, so their
 -- position is read here only.
+-- Doors already known in the same level keep what was read about them, so a
+-- periodic rescan only reads new doors. Returns true if every door is new.
 local function rescan_doors(level)
+    local old = door_cache.level == level and door_cache.list or {}
+    local known = {}
+    for _, door in ipairs(old) do known[door.id] = door end
     local list, by_id = {}, {}
     for _, actor in ipairs(find_all(config.doors.classes)) do
         if valid(actor) then
-            local pos = location(actor)
-            if pos then
-                local id = object_name(actor)
-                by_id[id] = actor
-                list[#list + 1] = {
+            local id = object_name(actor)
+            local door = known[id]
+            if door then
+                door._actor = actor
+            else
+                local pos = location(actor)
+                door = pos and {
                     id = id, pos = pos, yaw = yaw(actor), _actor = actor,
                     -- The game's rooms on each side of the door.
                     front_room = call_name(actor, config.doors.front_room_function),
                     back_room = call_name(actor, config.doors.back_room_function),
+                    fresh = true,
                 }
+            end
+            if door then
+                by_id[id] = actor
+                list[#list + 1] = door
             end
         end
     end
-    door_cache = { level = level, at = os.time(), state_at = -math.huge, list = list, by_id = by_id }
+    door_cache = { level = level, at = os.time(), list = list, by_id = by_id, cursor = 0 }
     log.debug(string.format("found %d doors", #list))
 end
 
--- Re-reads lock / open / broken state of the cached doors.
+-- Re-reads lock / open / broken state of the next slice of doors, and of
+-- doors not read yet.
 local function refresh_door_states()
+    local doors
+    doors, door_cache.cursor = next_slice(door_cache.list, door_cache.cursor,
+        math.ceil(#door_cache.list / DOOR_STATE_TICKS))
     for _, door in ipairs(door_cache.list) do
+        if door.fresh then doors[#doors + 1] = door end
+    end
+    for _, door in ipairs(doors) do
+        door.fresh = nil
         local actor = door._actor
         if valid(actor) then
             door.locked = door_locked(actor)
@@ -453,17 +515,15 @@ local function refresh_door_states()
             door.trap = call_bool(actor, config.doors.trap_known_function)
         end
     end
-    door_cache.state_at = os.time()
 end
 
 -- Door data for state.json (without the actor objects).
 function game.doors(level)
-    if door_cache.level ~= level or os.time() - door_cache.at >= DOOR_RESCAN_SECONDS then
-        rescan_doors(level)
-    end
-    if os.time() - door_cache.state_at >= DOOR_STATE_SECONDS then
-        refresh_door_states()
-    end
+    local new_level = door_cache.level ~= level
+    local due = new_level or os.time() - door_cache.at >= DOOR_RESCAN_SECONDS
+        or (#door_cache.list == 0 and os.time() - door_cache.at >= SEARCH_RETRY_SECONDS)
+    if due and game.scan_slot(new_level) then rescan_doors(level) end
+    refresh_door_states()
     local list = {}
     for i, door in ipairs(door_cache.list) do
         list[i] = {
@@ -510,55 +570,87 @@ end
 
 -- People who can be restrained or reported ------------------------------
 
-local TARGET_STATE_SECONDS = 1
-local target_cache = { at = -math.huge, actors = {} }
-local target_state = { at = -math.huge, list = {}, by_id = {} }
+-- All suspects and civilians: { actor, id, kind } plus status / pos /
+-- reported once read. Rebuilt every TARGET_RESCAN_SECONDS; what was already
+-- read about each person is kept across rebuilds.
+local target_cache = { at = -math.huge, actors = {}, cursor = 0 }
+local target_state = { tick = nil, list = {}, by_id = {} }
 
 local function target_actors()
-    if os.time() - target_cache.at < RESCAN_SECONDS then return target_cache.actors end
-    local actors = {}
+    local first = target_cache.at == -math.huge
+    local age = os.time() - target_cache.at
+    local actors = target_cache.actors
+    -- Also rescan soon when the list is empty or gone (menus, a new level).
+    local due = age >= TARGET_RESCAN_SECONDS
+        or (age >= SEARCH_RETRY_SECONDS and (#actors == 0 or not valid(actors[1].actor)))
+    if not due or not game.scan_slot(first) then return actors end
+    local old = {}
+    for _, entry in ipairs(target_cache.actors) do old[entry.id] = entry end
+    actors = {}
     for _, actor in ipairs(find_all(config.targets.classes)) do
         if valid(actor) then
-            local t = config.targets
-            local suspect = call_bool(actor, t.suspect_function) == true
-            if suspect or call_bool(actor, t.civilian_function) == true then
-                actors[#actors + 1] = { actor = actor, id = object_name(actor), kind = suspect and "suspect" or "civilian" }
+            local id = object_name(actor)
+            local entry = old[id]
+            if entry then
+                entry.actor = actor
+            else
+                local t = config.targets
+                local suspect = call_bool(actor, t.suspect_function) == true
+                if suspect or call_bool(actor, t.civilian_function) == true then
+                    entry = { actor = actor, id = id, kind = suspect and "suspect" or "civilian", fresh = true }
+                end
             end
+            if entry then actors[#actors + 1] = entry end
         end
     end
-    target_cache = { at = os.time(), actors = actors }
+    target_cache = { at = os.time(), actors = actors, cursor = 0 }
     return actors
+end
+
+local function read_target(entry)
+    local actor, t = entry.actor, config.targets
+    entry.fresh = nil
+    if not valid(actor) then
+        entry.status = nil
+        return
+    end
+    local status = nil
+    if call_bool(actor, t.arrested_function) then
+        status = "arrested"
+    elseif call_bool(actor, t.down_function) then
+        status = "down"
+    elseif call_bool(actor, t.surrendered_function) then
+        status = "surrendered"
+    end
+    entry.status = status
+    entry.pos = status and location(actor) or nil
+    entry.reported = status and call_bool(actor, t.reported_function) == true or nil
 end
 
 -- Suspects and civilians that are surrendered, restrained or down, with
 -- position and whether they have been reported. Anyone else is left out, so
--- the map never shows an active suspect.
+-- the map never shows an active suspect. A quarter of the people are re-read
+-- per tick (everyone once a second); people not read yet are read at once.
 function game.targets()
-    if os.time() - target_state.at < TARGET_STATE_SECONDS then return target_state.list end
+    if target_state.tick == tick_id then return target_state.list end
+    local actors = target_actors()
+    local slice
+    slice, target_cache.cursor = next_slice(actors, target_cache.cursor, math.ceil(#actors / TARGET_STATE_TICKS))
+    for _, entry in ipairs(actors) do
+        if entry.fresh then slice[#slice + 1] = entry end
+    end
+    for _, entry in ipairs(slice) do read_target(entry) end
     local list, by_id = {}, {}
-    local t = config.targets
-    for _, entry in ipairs(target_actors()) do
-        local actor = entry.actor
-        if valid(actor) then
-            local status = nil
-            if call_bool(actor, t.arrested_function) then
-                status = "arrested"
-            elseif call_bool(actor, t.down_function) then
-                status = "down"
-            elseif call_bool(actor, t.surrendered_function) then
-                status = "surrendered"
-            end
-            local pos = status and location(actor)
-            if pos then
-                by_id[entry.id] = actor
-                list[#list + 1] = {
-                    id = entry.id, kind = entry.kind, status = status, pos = pos,
-                    reported = call_bool(actor, t.reported_function) == true,
-                }
-            end
+    for _, entry in ipairs(actors) do
+        if entry.status and entry.pos then
+            by_id[entry.id] = entry.actor
+            list[#list + 1] = {
+                id = entry.id, kind = entry.kind, status = entry.status, pos = entry.pos,
+                reported = entry.reported == true,
+            }
         end
     end
-    target_state = { at = os.time(), list = list, by_id = by_id }
+    target_state = { tick = tick_id, list = list, by_id = by_id }
     return list
 end
 

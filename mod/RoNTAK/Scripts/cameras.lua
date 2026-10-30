@@ -13,11 +13,14 @@ local cameras = {}
 local valid, location = game.valid, game.location
 local read_raw, read_property, call_bool = game.read_raw, game.read_property, game.call_bool
 
-local HELICOPTER_RESCAN_SECONDS = 10
-local DRONE_RESCAN_SECONDS = 5     -- drones appear when deployed
-local CCTV_RESCAN_SECONDS = 15     -- until a level's cameras are found
+-- Rescans (FindAllOf) are rare and go through game.scan_slot; a list is also
+-- rescanned when one of its actors is gone (a new level, a destroyed drone).
+local HELICOPTER_RESCAN_SECONDS = 30
+local DRONE_RESCAN_SECONDS = 15    -- drones appear when deployed
+local CCTV_RESCAN_SECONDS = 60     -- until a level's cameras are found
+local GONE_RETRY_SECONDS = 2
 local CCTV_WIRED_SECONDS = 1
-local CCTV_SIGHT_SECONDS = 1       -- who the CCTV cameras see
+local CCTV_SIGHT_TICKS = 4         -- who the CCTV cameras see: everyone checked once per 4 ticks
 local CCTV_DEFAULT_ASPECT = 9 / 16 -- picture height / width when the camera doesn't say
 
 local helicopters = { at = -math.huge, actors = {} }
@@ -31,7 +34,7 @@ local spotted = { level = nil, by_id = {} }
 local tracked_actor = nil
 local hook_fired = false
 -- People the CCTV cameras currently see: { actor, kind, camera name }.
-local cctv_sight = { at = -math.huge, seen = {}, los_failed = false }
+local cctv_sight = { by_id = {}, cursor = 0, los_failed = false }
 
 local function c() return config.cameras or {} end
 
@@ -44,7 +47,14 @@ local function component_view(component)
 end
 
 local function cached(cache, classes, seconds)
-    if os.time() - cache.at >= seconds then
+    local age = os.time() - cache.at
+    local due = age >= seconds
+    if not due and age >= GONE_RETRY_SECONDS then
+        for _, actor in ipairs(cache.actors) do
+            if not valid(actor) then due = true break end
+        end
+    end
+    if due and game.scan_slot(cache.at == -math.huge) then
         cache.actors = {}
         for _, actor in ipairs(game.find_all(classes or {})) do
             if valid(actor) then cache.actors[#cache.actors + 1] = actor end
@@ -107,10 +117,10 @@ local function update_spotted(level)
     if spotted.level ~= level then
         spotted = { level = level, by_id = {} }
         tracked_actor = nil
-        cctv_sight = { at = -math.huge, seen = {}, los_failed = false }
+        cctv_sight = { by_id = {}, cursor = 0, los_failed = false }
     end
     local seen = {}
-    for _, s in ipairs(cctv_sight.seen) do
+    for _, s in pairs(cctv_sight.by_id) do
         local id = mark_seen(s.actor, "cctv", s.camera, s.kind)
         if id then seen[id] = true end
     end
@@ -190,17 +200,23 @@ local function rescan_cctv(level)
             end
         end
     end
-    local systems = game.find_all(c().cctv_system_classes or {})
-    cctv = { level = level, at = os.time(), list = list, by_actor = by_actor, system = systems[1],
-        wired = false, wired_at = -math.huge }
+    cctv = { level = level, at = os.time(), list = list, by_actor = by_actor, system = nil,
+        system_at = -math.huge, wired = false, wired_at = -math.huge }
     if #list > 0 then log.debug(string.format("found %d CCTV cameras", #list)) end
 end
 
 local function cctv_state(level, viewing)
-    if cctv.level ~= level or (#cctv.list == 0 and os.time() - cctv.at >= CCTV_RESCAN_SECONDS) then
+    local new_level = cctv.level ~= level
+    if (new_level or (#cctv.list == 0 and os.time() - cctv.at >= CCTV_RESCAN_SECONDS)) and game.scan_slot(new_level) then
         rescan_cctv(level)
     end
     if #cctv.list == 0 then return nil end
+    -- The CCTV system (wired or not) is found on a later tick than the cameras: one scan per tick.
+    if not valid(cctv.system) and os.time() - cctv.system_at >= GONE_RETRY_SECONDS and game.scan_slot() then
+        cctv.system = game.find_all(c().cctv_system_classes or {})[1]
+        cctv.system_at = os.time()
+        cctv.wired_at = -math.huge
+    end
     if os.time() - cctv.wired_at >= CCTV_WIRED_SECONDS then
         local wired = false
         if valid(cctv.system) then
@@ -252,18 +268,24 @@ local function line_of_sight(actor, cam)
     return false
 end
 
--- Suspects and civilians inside a wired camera's view with a clear line of sight.
+-- Suspects and civilians inside a wired camera's view with a clear line of
+-- sight. A quarter of the people are checked per tick, so everyone is checked
+-- once a second without one heavy tick.
 local function update_cctv_sight(cctv_info)
-    if os.time() - cctv_sight.at < CCTV_SIGHT_SECONDS then return end
-    cctv_sight.at = os.time()
-    cctv_sight.seen = {}
-    if not (cctv_info and cctv_info.wired and c().cctv_spots_people ~= false) then return end
-    for _, person in ipairs(game.target_actors()) do
+    if not (cctv_info and cctv_info.wired and c().cctv_spots_people ~= false) then
+        cctv_sight.by_id = {}
+        return
+    end
+    local people = game.target_actors()
+    local slice
+    slice, cctv_sight.cursor = game.next_slice(people, cctv_sight.cursor, math.ceil(#people / CCTV_SIGHT_TICKS))
+    for _, person in ipairs(slice) do
+        cctv_sight.by_id[person.id] = nil
         local pos = valid(person.actor) and location(person.actor)
         if pos then
             for _, cam in ipairs(cctv_info.cameras) do
                 if in_view(cam, pos) and line_of_sight(person.actor, cam) then
-                    cctv_sight.seen[#cctv_sight.seen + 1] = { actor = person.actor, kind = person.kind, camera = cam.name or cam.id }
+                    cctv_sight.by_id[person.id] = { actor = person.actor, kind = person.kind, camera = cam.name or cam.id }
                     break
                 end
             end
