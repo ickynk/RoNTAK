@@ -148,6 +148,13 @@ class Handler(SimpleHTTPRequestHandler):
         if "/api/state" not in (self.path or ""):
             sys.stderr.write("%s %s\n" % (self.log_date_time_string(), fmt % args))
 
+    def end_headers(self):
+        # The page and scripts: always check for a newer version, so an update
+        # shows up without clearing the browser cache.
+        if not (self.path or "").startswith("/api/"):
+            self.send_header("Cache-Control", "no-cache")
+        super().end_headers()
+
     # Helpers -------------------------------------------------------------
 
     def send_json(self, data, status=HTTPStatus.OK):
@@ -184,9 +191,26 @@ class Handler(SimpleHTTPRequestHandler):
                 return self.get_map(safe_name(parts[2]))
             if len(parts) == 3 and parts[0] == "maps":
                 return self.get_map_file(safe_name(parts[1]), safe_name(parts[2]))
+            if parts in ([], ["index.html"]):
+                return self.get_index()
         except ValueError as e:
             return self.send_json({"error": str(e)}, HTTPStatus.BAD_REQUEST)
         return super().do_GET()
+
+    def get_index(self):
+        """The page, with each script and stylesheet address carrying its file's
+        change time: after an update the browser must fetch the new files, even
+        when it kept old copies."""
+        html = (WEB_DIR / "index.html").read_text(encoding="utf-8")
+        for name in ("style.css", "geo.js", "app.js"):
+            stamp = int((WEB_DIR / name).stat().st_mtime)
+            html = html.replace(f'"{name}"', f'"{name}?v={stamp}"')
+        body = html.encode("utf-8")
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
 
     def do_POST(self):
         parts = self.route()

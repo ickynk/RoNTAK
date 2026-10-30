@@ -31,7 +31,7 @@ VDF = r'''
 def make_game(library: Path, ue4ss: str = "3.x") -> Path:
     win64 = library / gamefinder.GAME_FOLDER / gamefinder.WIN64
     win64.mkdir(parents=True)
-    (win64 / gamefinder.GAME_EXE).write_text("")
+    (win64 / "ReadyOrNot-Win64-Shipping.exe").write_text("")
     if ue4ss == "3.x":
         (win64 / "ue4ss").mkdir()
         (win64 / "ue4ss" / "UE4SS.dll").write_text("")
@@ -67,6 +67,27 @@ class GameFinderTest(unittest.TestCase):
         for pasted in (win64, game, game / "ReadyOrNot"):
             self.assertEqual(gamefinder.win64_from(pasted), win64, pasted)
         self.assertIsNone(gamefinder.win64_from(self.tmp))
+
+    def test_other_exe_names_and_pasted_exe(self):
+        win64 = self.tmp / "Ready Or Not" / "ReadyOrNot" / "Binaries" / "Win64"
+        win64.mkdir(parents=True)
+        exe = win64 / "ReadyOrNotSteam-Win64-Shipping.exe"
+        exe.write_text("")
+        for pasted in (win64, self.tmp / "Ready Or Not", exe, f'"{win64}"'):
+            self.assertEqual(gamefinder.win64_from(pasted), win64, pasted)
+        # A different project folder name is found too.
+        other = self.tmp / "g2" / "RON" / "Binaries" / "Win64"
+        other.mkdir(parents=True)
+        (other / "ReadyOrNot-Win64-Shipping.exe").write_text("")
+        self.assertEqual(gamefinder.win64_from(self.tmp / "g2"), other)
+
+    def test_unknown_exe_is_reported(self):
+        win64 = self.tmp / "game" / "Proj" / "Binaries" / "Win64"
+        win64.mkdir(parents=True)
+        (win64 / "Something-Win64-Shipping.exe").write_text("")
+        self.assertIsNone(gamefinder.win64_from(self.tmp / "game"))
+        self.assertEqual([Path(p).name for p in gamefinder.shipping_exes(self.tmp / "game")],
+                         ["Something-Win64-Shipping.exe"])
 
     def test_ue4ss_layouts(self):
         new = make_game(self.tmp / "a", "3.x")

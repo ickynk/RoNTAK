@@ -86,6 +86,14 @@
           <button id="cal-add-floor">Add floor</button>
           <button id="cal-delete-floor" class="danger">Delete floor</button>
         </div>
+        <div class="card" id="adjust-box" hidden>
+          <div class="label">Adjust image</div>
+          <p class="steps">If the plan is the wrong size, tilted or squashed, fit it to the door markers here.
+            The markers stay put; the image moves. Lower "See-through" to see both.</p>
+          <label class="check"><input type="checkbox" id="adjust-drag"> Drag moves the image (not the map)</label>
+          <div id="adjust-controls"></div>
+          <button id="adjust-reset">Reset image</button>
+        </div>
         <button class="execute" id="cal-save">Save map</button>
       </section>
 

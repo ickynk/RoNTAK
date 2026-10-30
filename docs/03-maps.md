@@ -42,6 +42,22 @@ RoNTAK corrects mirrored or stretched images. Delete a wrong anchor with ✕.
 No door near a landmark you want to use? Tap the spot on the image instead; RoNTAK offers to use where you're
 standing in game.
 
+### Image the wrong size, tilted or squashed
+
+Community maps are not always drawn to scale. In **Calibrate**, once a floor has an image, the **Adjust image**
+box lets you fit it to the door markers by hand:
+
+1. Lower **See-through** to about 60 % so you can see the markers through the image.
+2. Tick **Drag moves the image**, then drag the image until one door lines up with its marker.
+3. Use **Rotate**, **Scale**, and **Stretch width / height** until the other doors line up too. Type a number in
+   the box next to a slider for fine steps.
+4. Use **Crop** to cut off borders, legends or a neighbouring floor drawn on the same image.
+5. Untick **Drag moves the image** (so dragging moves the map again), set **See-through** back up, and press
+   **Save map**.
+
+The markers never move; only the image does. **Reset image** undoes all of it. This works with or without door
+anchors: if you set anchors first, the adjustment fine-tunes on top of them.
+
 ### Several floors
 
 Each floor gets its own image. The floors already exist (see "Floors are automatic").

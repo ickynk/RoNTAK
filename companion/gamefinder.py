@@ -12,7 +12,9 @@ SETTINGS_FILE = HERE / "settings.json"
 
 GAME_FOLDER = Path("steamapps") / "common" / "Ready Or Not"
 WIN64 = Path("ReadyOrNot") / "Binaries" / "Win64"
-GAME_EXE = "ReadyOrNot-Win64-Shipping.exe"
+# The game's program in Binaries/Win64. Its exact name has changed between
+# builds (e.g. ReadyOrNot-Win64-Shipping.exe, ReadyOrNotSteam-Win64-Shipping.exe).
+GAME_EXE_PATTERN = "ReadyOrNot*-Win64-Shipping.exe"
 MOD_NAME = "RoNTAK"
 
 
@@ -75,14 +77,41 @@ def steam_libraries(root=None) -> list:
 
 # Game, UE4SS, mod ------------------------------------------------------------
 
+def is_win64(folder: Path) -> bool:
+    try:
+        return any(f.is_file() for f in folder.glob(GAME_EXE_PATTERN))
+    except OSError:
+        return False
+
+
 def win64_from(path) -> "Path | None":
     """The game's Binaries/Win64 folder from a path the user gave: the Win64
-    folder itself, the game folder, or any folder in between."""
-    path = Path(path).expanduser()
-    for candidate in (path, path / "Binaries" / "Win64", path / WIN64, path / "Ready Or Not" / WIN64):
-        if (candidate / GAME_EXE).is_file():
+    folder itself, the game's .exe, the game folder, or any folder in between."""
+    path = Path(str(path).strip().strip('"')).expanduser()
+    if path.is_file():
+        path = path.parent
+    candidates = [path, path / "Binaries" / "Win64", path / WIN64, path / "Ready Or Not" / WIN64]
+    try:
+        # The game folder with a differently named project folder inside.
+        candidates += sorted(path.glob("*/Binaries/Win64"))
+    except OSError:
+        pass
+    for candidate in candidates:
+        if is_win64(candidate):
             return candidate
     return None
+
+
+def shipping_exes(path) -> list:
+    """Names of *-Shipping.exe files under a pasted folder, to explain why it was not accepted."""
+    path = Path(str(path).strip().strip('"')).expanduser()
+    found = []
+    for pattern in ("*-Shipping.exe", "*/Binaries/Win64/*-Shipping.exe", "*/*/Binaries/Win64/*-Shipping.exe"):
+        try:
+            found += [str(f) for f in path.glob(pattern)]
+        except OSError:
+            pass
+    return found[:5]
 
 
 def find_win64(libraries=None) -> "Path | None":

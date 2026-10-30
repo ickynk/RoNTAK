@@ -137,15 +137,28 @@ label.file input { padding: 5px; }
 label.check { display: flex; align-items: center; gap: 8px; margin: 8px 0; color: var(--text); font-size: 13px; }
 label.check input { width: auto; margin: 0; }
 .row { display: flex; gap: 8px; margin-top: 8px; }
+.adjust-row { display: grid; grid-template-columns: 1fr 70px; gap: 2px 8px; margin-top: 6px; font-size: 12px; color: var(--muted); }
+.adjust-row span { grid-column: 1 / -1; }
+.adjust-row input[type=range] { width: 100%; padding: 0; }
+.adjust-row input[type=number] { padding: 3px 6px; }
+#adjust-reset { width: 100%; margin-top: 10px; }
 .row > * { flex: 1; }
 
 /* Phones and portrait tablets: map on top, panel below. */
 @media (max-width: 820px) {
   .layout { grid-template-columns: 1fr; grid-template-rows: 55% 45%; }
   .panel { border-left: none; border-top: 1px solid var(--line); }
-  .level, .brand, #status-text, #btn-phone { display: none; }
+  .level, .brand, #status-text { display: none; }
   .toolbar { gap: 6px; padding: 0 8px; }
   .toolbar button, .toolbar select { padding: 6px 8px; }
+}
+/* On a phone itself the Phone button isn't needed, and there is no room for it. */
+@media (max-width: 520px) {
+  #btn-phone { display: none; }
+}
+@media (max-width: 400px) {
+  .toolbar { gap: 4px; padding: 0 6px; }
+  .toolbar button, .toolbar select { padding: 5px 6px; font-size: 13px; }
 }
 
 .modal {
