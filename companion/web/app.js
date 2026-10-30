@@ -552,6 +552,16 @@
     }
   }
 
+  // Officer health (EPlayerHealthStatus): roster label, colour, and map mark.
+  const HEALTH = {
+    healthy: { label: "OK", color: "#66bb6a" },
+    injured: { label: "INJURED", color: "#ffa726", mark: "ring" },
+    downed: { label: "DOWN", color: "#ef5350", mark: "cross" },
+    incapacitated: { label: "INCAPACITATED", color: "#ef5350", mark: "cross" },
+    dead: { label: "KIA", color: "#9e9e9e", mark: "cross" },
+    arrested: { label: "ARRESTED", color: "#ef5350", mark: "cross" },
+  };
+
   // ---------------------------------------------------------------- cameras
 
   const CAMERA_COLORS = { cctv: "#4dd0e1", drone: "#aed581", helicopter: "#ffd54f" };
@@ -728,7 +738,12 @@
   const PERSON_COLORS = { suspect: "#ff7043", civilian: "#81c784" };
   const PERSON_LETTER = { surrendered: "S", arrested: "R", down: "✕", tracked: "H", last_seen: "?" };
 
-  // "3m" since a helicopter last saw someone.
+  // "air unit" or "CCTV Lobby": who sees, or last saw, a person.
+  function spottedBy(t) {
+    return t.source === "cctv" ? `CCTV${t.camera ? " " + t.camera : ""}` : "air unit";
+  }
+
+  // "3m" since a helicopter or camera last saw someone.
   function seenAgo(t) {
     const now = (app.state && app.state.time) || Date.now() / 1000;
     const s = Math.max(0, Math.round(now - (t.seen_at || now)));
@@ -769,17 +784,19 @@
       ctx.font = "700 10px system-ui, sans-serif";
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
-      ctx.fillText(PERSON_LETTER[t.status] || "?", sx, sy + 0.5);
+      const letter = t.status === "tracked" && t.source === "cctv" ? "C" : PERSON_LETTER[t.status];
+      ctx.fillText(letter || "?", sx, sy + 0.5);
       ctx.textBaseline = "alphabetic";
-      if (t.source === "helicopter") {
+      if (t.source) {
+        const color = CAMERA_COLORS[t.source] || CAMERA_COLORS.helicopter;
         if (t.status === "tracked") {
-          ctx.strokeStyle = CAMERA_COLORS.helicopter;
+          ctx.strokeStyle = color;
           ctx.lineWidth = 2;
           ctx.beginPath();
           ctx.arc(sx, sy, 14, 0, Math.PI * 2);
           ctx.stroke();
         }
-        cameraLabel(lastSeen ? `last seen ${seenAgo(t)}` : "air unit", sx, sy + 24, CAMERA_COLORS.helicopter);
+        cameraLabel(lastSeen ? `last seen ${seenAgo(t)}` : spottedBy(t), sx, sy + 24, color);
       }
       if (t.id === selected) {
         ctx.strokeStyle = "#00bcd4";
@@ -823,6 +840,20 @@
       ctx.lineWidth = highlighted.has(o.id) ? 3 : 1.5;
       ctx.strokeStyle = highlighted.has(o.id) ? "#ffffff" : "#101316";
       ctx.stroke();
+      const health = HEALTH[o.status];
+      if (health && health.mark) {
+        // Injured: orange ring; down / dead: an ✕ over the marker.
+        ctx.strokeStyle = health.color;
+        ctx.lineWidth = 2.5;
+        ctx.beginPath();
+        if (health.mark === "ring") {
+          ctx.arc(sx, sy, 12, 0, Math.PI * 2);
+        } else {
+          ctx.moveTo(sx - 7, sy - 7); ctx.lineTo(sx + 7, sy + 7);
+          ctx.moveTo(sx + 7, sy - 7); ctx.lineTo(sx - 7, sy + 7);
+        }
+        ctx.stroke();
+      }
 
       ctx.font = "600 11px system-ui, sans-serif";
       ctx.textAlign = "left";
@@ -1013,7 +1044,7 @@
     const person = personAt(sx, sy);
     const best = person ? null : doorAt(sx, sy);
     const [wx, wy] = screenToWorld(sx, sy);
-    if (person && person.source === "helicopter") {
+    if (person && person.source) {
       // Still a threat (or unknown): orders go to the spot, not the person.
       app.target = { type: "location", location: { ...person.pos }, spotted: person.id };
     } else if (person) {
@@ -1213,7 +1244,7 @@
     if (t.type === "location" && t.spotted) {
       const p = personById(t.spotted);
       const what = p ? `${p.kind === "suspect" ? "Suspect" : "Civilian"} ${p.status === "tracked" ? "tracked" : "last seen " + seenAgo(p)}` : "Spotted person";
-      return `${what} by air unit — orders go to this spot`;
+      return `${what} by ${p ? spottedBy(p) : "camera"} — orders go to this spot`;
     }
     if (t.type === "location") return `Map point (${Math.round(t.location.x)}, ${Math.round(t.location.y)})`;
     if (t.type === "room") return t.door ? `${t.room} — via ${doorLabel(t.door)}` : `${t.room} (no linked door)`;
@@ -1334,10 +1365,14 @@
     }
     for (const o of officers) {
       const li = document.createElement("li");
-      const hp = typeof o.health === "number" ? `${Math.round(o.health)}%` : "";
+      const health = HEALTH[o.status];
+      const hp = typeof o.health === "number" && o.status !== "dead" ? `${Math.round(o.health)}%` : "";
       li.innerHTML = `<span class="swatch" style="background:${TEAM_COLORS[o.team] || TEAM_COLORS.unknown}"></span>
-        <span></span><span class="hp">${(o.team || "unknown").toUpperCase()} ${hp}</span>`;
-      li.children[1].textContent = o.name;
+        <span class="who"></span>
+        <span class="health" style="color:${health ? health.color : "var(--muted)"}">${health ? health.label : ""} ${hp}</span>
+        <span class="hp">${(o.team || "unknown").toUpperCase()}</span>`;
+      li.querySelector(".who").textContent = o.name;
+      if (o.status === "dead") li.classList.add("dead");
       list.appendChild(li);
     }
   }

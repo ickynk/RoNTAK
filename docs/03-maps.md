@@ -82,9 +82,15 @@ The map shows what your support assets are looking at. Press **Cams** in the too
 | Drone | Green **X** with its view cone | While it is deployed |
 | CCTV | Blue camera pins with view cones | Only once the cameras are wired to your tablet |
 | The CCTV feed you are watching | Its pin is filled, ringed and labelled **LIVE** | While that feed is on your screen |
+| Suspects / civilians a CCTV camera sees | Their marker with a blue ring, **C**, and "CCTV *camera name*" | While inside any wired camera's view (25 m) with a clear line of sight, whether or not you watch that feed |
+| ...after they leave the view | Hollow dashed marker with **?** and "last seen 2m" | At their last known position |
 
-Tapping a person the air unit spotted selects **their spot**, not the person: use Move To, Cover Area or Deploy
-Grenade there. Restrain and Report become available once they surrender.
+Tapping a person the air unit or CCTV spotted selects **their spot**, not the person: use Move To, Cover Area or
+Deploy Grenade there. Restrain and Report become available once they surrender.
+
+The helicopter and CCTV work differently under the hood: the game itself tells the mod who the helicopter is
+tracking, while for CCTV the mod checks once a second who is inside each wired camera's picture and has a
+clear line of sight to it.
 
 No video is copied out of the game: the cones are drawn from the cameras' positions and angles, so they cost
 no frame rate.

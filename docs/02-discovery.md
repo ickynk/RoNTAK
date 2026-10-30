@@ -75,6 +75,9 @@ The helicopter, drone and CCTV names are in `config.cameras`.
   picks someone up. If that never appears while the helicopter follows someone, check that
   `target_found_hook` / `target_lost_hook` still exist (search the header dump for `OnTargetFound`).
 - **CCTV never appears:** it only shows once the cameras are wired to your tablet, or while you watch a feed.
+- **CCTV never marks anyone:** the console prints `CCTV <camera> sees suspect ...` when it does. If it prints
+  `CCTV line of sight check failed`, the line-of-sight function changed: look up `HasLineOfSightTo` in the header
+  dump and update `cctv_line_of_sight_function`. Set `cctv_spots_people = false` to turn the feature off.
 
 ## Watching functions (F9)
 

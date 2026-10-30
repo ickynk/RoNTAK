@@ -76,6 +76,7 @@ class Officer:
         self.id, self.name, self.team, self.items = oid, name, team, dict(items)
         self.pos = [x, y, 0.0]
         self.yaw = 180.0
+        self.status, self.health = "healthy", 100
         self.path = []
         self.follow = None
 
@@ -104,7 +105,7 @@ class Officer:
     def state(self):
         return {"id": self.id, "name": self.name, "team": self.team,
                 "pos": {"x": self.pos[0], "y": self.pos[1], "z": self.pos[2]},
-                "yaw": self.yaw, "health": 100, "items": self.items}
+                "yaw": self.yaw, "status": self.status, "health": self.health, "items": self.items}
 
 
 class MockGame:
@@ -142,6 +143,8 @@ class MockGame:
                                  "pos": {"x": x, "y": y, "z": 0.0}})
         self.clock = 0.0
         self.spotted = None
+        self.officers[1].status, self.officers[1].health = "injured", 58
+        self.cctv_spotted = None
         self.held = {}
         self.results = []
         self.session = None
@@ -331,6 +334,15 @@ class MockGame:
         cctv = {"wired": wired, "cameras": cams if wired else []}
         if viewing:
             cctv["viewing"] = viewing
+        # A civilian pacing the living room: in the Living Room camera's view
+        # (once wired) except while at the far end of the room.
+        cx, cy = px_to_world(500 + 400 * (0.5 + 0.5 * math.sin(t / 5)), 150)
+        seen = wired and cy > 1200
+        if seen or self.cctv_spotted is not None:
+            if seen:
+                self.cctv_spotted = {"id": "Civilian_C_2", "kind": "civilian", "source": "cctv", "camera": "Living Room",
+                                     "pos": {"x": cx, "y": cy, "z": 0.0}, "seen_at": int(time.time())}
+            self.cctv_spotted["status"] = "tracked" if seen else "last_seen"
         return {"helicopters": [heli], "drones": [drone], "cctv": cctv, "hook_fired": True}
 
     def tick(self, bridge, dt):
@@ -352,7 +364,7 @@ class MockGame:
             "doors": [{k: v for k, v in d.items() if not k.startswith("_")} for d in self.doors.values()],
             "rooms_version": f"{LEVEL}#{len(ROOMS_PX)}",
             "results": self.results,
-            "targets": self.targets + [self.spotted],
+            "targets": self.targets + [p for p in (self.spotted, self.cctv_spotted) if p],
             "cameras": cameras,
             "held": [{"id": e["cmd"]["id"], "team": t, "action": e["cmd"]["action"]} for t, e in self.held.items()],
             "configured_actions": sorted(set(ALL_ACTIONS) - UNCONFIGURED),

@@ -536,6 +536,57 @@ class ModTest(unittest.TestCase):
         self.lua.execute(f'fire_hook("{found}", objects.CyberneticCharacter[5])')
         self.assertNotIn("Swat_Other", [t["id"] for t in self.tick()["targets"]])
 
+    def cctv_scene(self, los):
+        """Wired CCTV, and Suspect_Active standing in front of camera Lobby."""
+        self.add_people()
+        self.add_cameras()
+        self.lua.execute(f"""
+            wired = true
+            los_points = {{}}
+            local p = objects.CyberneticCharacter[2]
+            p.K2_GetActorLocation = function() return {{ X = 600, Y = 600, Z = 0 }} end
+            p.HasLineOfSightTo = function(self, point) los_points[#los_points + 1] = point return {str(los).lower()} end
+            -- Behind the camera: never checked.
+            objects.CyberneticCharacter[3].K2_GetActorLocation = function() return {{ X = -500, Y = -500, Z = 0 }} end
+        """)
+        self.tick()  # level start
+        return {t["id"]: t for t in self.tick()["targets"]}
+
+    def test_cctv_marks_people_in_view_with_line_of_sight(self):
+        people = self.cctv_scene(los=True)
+        seen = people["Suspect_Active"]
+        self.assertEqual((seen["kind"], seen["status"], seen["source"], seen["camera"]), ("suspect", "tracked", "cctv", "Lobby"))
+        self.assertEqual(seen["pos"], {"x": 600, "y": 600, "z": 0})
+        point = dict(self.lua.globals().los_points[1])
+        self.assertGreater(point["X"], 10)  # checked from just in front of the lens
+        self.assertEqual(sorted(people), ["Civilian_Down", "Suspect_Active", "Suspect_Cuffed", "Suspect_Surrendered"])
+
+    def test_cctv_needs_line_of_sight(self):
+        people = self.cctv_scene(los=False)
+        self.assertNotIn("Suspect_Active", people)
+        self.assertGreater(len(self.lua.globals().los_points), 0)
+
+    def test_cctv_does_not_spot_until_wired(self):
+        self.add_people()
+        self.add_cameras()
+        self.lua.execute("objects.CyberneticCharacter[2].K2_GetActorLocation = function() return { X = 600, Y = 600, Z = 0 } end")
+        self.lua.execute("objects.CyberneticCharacter[2].HasLineOfSightTo = function() return true end")
+        self.tick()
+        self.assertNotIn("Suspect_Active", [t["id"] for t in self.tick()["targets"]])
+
+    def test_officer_health_status(self):
+        self.lua.execute(r"""
+            local o = objects.CyberneticsSwat_V2_C
+            o[1].GetHealthStatus = function() return 1 end
+            o[1].GetCurrentHealth = function() return 45 end
+            o[1].GetMaxHealth = function() return 100 end
+            o[2].GetHealthStatus = function() return 4 end
+            o[2].GetCurrentHealth = function() return 0 end
+            o[2].GetMaxHealth = function() return 150 end
+        """)
+        officers = {o["id"]: (o["status"], o["health"]) for o in self.tick()["officers"]}
+        self.assertEqual(officers, {"Swat_C_1": ("injured", 45), "Swat_C_2": ("dead", 0)})
+
     def test_restrain_and_report(self):
         self.add_people()
         self.tick()

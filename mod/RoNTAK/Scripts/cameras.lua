@@ -1,6 +1,8 @@
--- Helicopter, drone and CCTV cameras for the map, and the people the
--- helicopter has tracked. Actor lists are cached like the rest of the mod;
--- each tick only reads positions of the few actors found.
+-- Helicopter, drone and CCTV cameras for the map, and the suspects and
+-- civilians they see: the helicopter reports who it tracks; for CCTV the mod
+-- checks who is inside a wired camera's view with a clear line of sight.
+-- Actor lists are cached like the rest of the mod; each tick only reads
+-- positions of the few actors found.
 
 local config = require("config")
 local game = require("game")
@@ -15,17 +17,21 @@ local HELICOPTER_RESCAN_SECONDS = 10
 local DRONE_RESCAN_SECONDS = 5     -- drones appear when deployed
 local CCTV_RESCAN_SECONDS = 15     -- until a level's cameras are found
 local CCTV_WIRED_SECONDS = 1
+local CCTV_SIGHT_SECONDS = 1       -- who the CCTV cameras see
+local CCTV_DEFAULT_ASPECT = 9 / 16 -- picture height / width when the camera doesn't say
 
 local helicopters = { at = -math.huge, actors = {} }
 local drones = { at = -math.huge, actors = {} }
 local cctv = { level = nil, at = -math.huge, list = {}, by_actor = {}, system = nil, wired = false, wired_at = -math.huge }
 
--- People tracked by the helicopter, by object name. Set from the
--- OnTargetFound / OnTargetLost hooks, which only store the actor: everything
--- else is read in the tick.
+-- People seen by the helicopter or CCTV, by object name. The helicopter's
+-- OnTargetFound / OnTargetLost hooks only store the actor: everything else is
+-- read in the tick.
 local spotted = { level = nil, by_id = {} }
 local tracked_actor = nil
 local hook_fired = false
+-- People the CCTV cameras currently see: { actor, kind, camera name }.
+local cctv_sight = { at = -math.huge, seen = {}, los_failed = false }
 
 local function c() return config.cameras or {} end
 
@@ -74,30 +80,45 @@ local function person_kind(actor)
     return nil
 end
 
+-- Records that a camera sees actor now. Returns its id, or nil if it is not
+-- a suspect or civilian.
+local function mark_seen(actor, source, camera, kind)
+    if not valid(actor) then return nil end
+    local id = game.object_name(actor)
+    local entry = spotted.by_id[id]
+    if not entry then
+        kind = kind or person_kind(actor)
+        if not kind then return nil end
+        entry = { id = id, kind = kind }
+        spotted.by_id[id] = entry
+        if source == "helicopter" then
+            log.info("helicopter is tracking " .. kind .. " " .. id)
+        else
+            log.info("CCTV " .. tostring(camera) .. " sees " .. kind .. " " .. id)
+        end
+    end
+    local pos = location(actor)
+    if not pos then return nil end
+    entry.pos, entry.seen_at, entry.source, entry.camera = pos, os.time(), source, camera
+    return id
+end
+
 local function update_spotted(level)
     if spotted.level ~= level then
         spotted = { level = level, by_id = {} }
         tracked_actor = nil
+        cctv_sight = { at = -math.huge, seen = {}, los_failed = false }
     end
-    local tracked_id = nil
-    if valid(tracked_actor) then
-        local id = game.object_name(tracked_actor)
-        local entry = spotted.by_id[id]
-        if not entry then
-            local kind = person_kind(tracked_actor)
-            if kind then
-                entry = { id = id, kind = kind, source = "helicopter" }
-                spotted.by_id[id] = entry
-                log.info("helicopter is tracking " .. kind .. " " .. id)
-            end
-        end
-        local pos = entry and location(tracked_actor)
-        if pos then
-            entry.pos, entry.seen_at, tracked_id = pos, os.time(), id
-        end
+    local seen = {}
+    for _, s in ipairs(cctv_sight.seen) do
+        local id = mark_seen(s.actor, "cctv", s.camera, s.kind)
+        if id then seen[id] = true end
     end
-    for id, entry in pairs(spotted.by_id) do
-        entry.status = (id == tracked_id) and "tracked" or "last_seen"
+    -- The helicopter last, so it is named as the source when both see someone.
+    local id = mark_seen(tracked_actor, "helicopter")
+    if id then seen[id] = true end
+    for entry_id, entry in pairs(spotted.by_id) do
+        entry.status = seen[entry_id] and "tracked" or "last_seen"
     end
 end
 
@@ -157,11 +178,13 @@ local function rescan_cctv(level)
             if view then
                 view.fov = read_property(capture, "FOVAngle")
                 local id = game.object_name(actor)
+                local w, h = read_property(actor, "RenderWidth"), read_property(actor, "RenderHeight")
                 list[#list + 1] = {
                     id = id, pos = view.pos, view = view,
                     name = game.name_text(read_raw(actor, "CameraName")),
                     floor = read_property(actor, "FloorNumber"),
                     number = read_property(actor, "CameraNumber"),
+                    aspect = (type(w) == "number" and type(h) == "number" and w > 0) and h / w or CCTV_DEFAULT_ASPECT,
                 }
                 by_actor[id] = true
             end
@@ -192,6 +215,62 @@ local function cctv_state(level, viewing)
     return { wired = true, viewing = watching and viewing or nil, cameras = cctv.list }
 end
 
+-- Whether a point is inside a CCTV camera's picture and range.
+local function in_view(cam, pos)
+    local v = cam.view
+    local dx, dy, dz = pos.x - v.pos.x, pos.y - v.pos.y, pos.z - v.pos.z
+    local dist = math.sqrt(dx * dx + dy * dy + dz * dz)
+    if dist < 1 or dist > (c().cctv_view_range or 2500) then return false end
+    local yaw, pitch = math.rad(v.yaw or 0), math.rad(v.pitch or 0)
+    local ahead = dx * math.cos(pitch) * math.cos(yaw) + dy * math.cos(pitch) * math.sin(yaw) + dz * math.sin(pitch)
+    if ahead <= 0 then return false end
+    local side = -dx * math.sin(yaw) + dy * math.cos(yaw)
+    local up = -dx * math.sin(pitch) * math.cos(yaw) - dy * math.sin(pitch) * math.sin(yaw) + dz * math.cos(pitch)
+    local half = math.tan(math.rad((v.fov or 90) / 2))
+    -- A little extra height: positions are the body's centre, the picture shows head to feet.
+    return math.abs(side) <= ahead * half and math.abs(up) <= ahead * half * (cam.aspect or CCTV_DEFAULT_ASPECT) * 1.3
+end
+
+-- Asks the game whether the person can see the camera (and so the camera
+-- them). The point is moved a little in front of the lens, out of the
+-- camera's own housing.
+local function line_of_sight(actor, cam)
+    local v = cam.view
+    local yaw, pitch = math.rad(v.yaw or 0), math.rad(v.pitch or 0)
+    local point = {
+        X = v.pos.x + math.cos(pitch) * math.cos(yaw) * 30,
+        Y = v.pos.y + math.cos(pitch) * math.sin(yaw) * 30,
+        Z = v.pos.z + math.sin(pitch) * 30,
+    }
+    local fn = c().cctv_line_of_sight_function
+    local ok, result = pcall(function() return actor[fn](actor, point) end)
+    if ok and type(result) == "boolean" then return result end
+    if not cctv_sight.los_failed then
+        cctv_sight.los_failed = true
+        log.error("CCTV line of sight check failed (" .. tostring(fn) .. "): " .. tostring(result))
+    end
+    return false
+end
+
+-- Suspects and civilians inside a wired camera's view with a clear line of sight.
+local function update_cctv_sight(cctv_info)
+    if os.time() - cctv_sight.at < CCTV_SIGHT_SECONDS then return end
+    cctv_sight.at = os.time()
+    cctv_sight.seen = {}
+    if not (cctv_info and cctv_info.wired and c().cctv_spots_people ~= false) then return end
+    for _, person in ipairs(game.target_actors()) do
+        local pos = valid(person.actor) and location(person.actor)
+        if pos then
+            for _, cam in ipairs(cctv_info.cameras) do
+                if in_view(cam, pos) and line_of_sight(person.actor, cam) then
+                    cctv_sight.seen[#cctv_sight.seen + 1] = { actor = person.actor, kind = person.kind, camera = cam.name or cam.id }
+                    break
+                end
+            end
+        end
+    end
+end
+
 -- The object name of a pawn property that holds a camera / helicopter.
 local function viewing_id(pawn, property)
     local obj = valid(pawn) and read_raw(pawn, property)
@@ -203,16 +282,18 @@ end
 function cameras.state(level)
     if not level then return nil end
     local pawn = game.player_pawn()
+    local cctv_info = cctv_state(level, viewing_id(pawn, c().view_camera_property))
+    if spotted.level == level then update_cctv_sight(cctv_info) end
     update_spotted(level)
     return {
         helicopters = helicopter_list(viewing_id(pawn, c().view_helicopter_property)),
         drones = drone_list(),
-        cctv = cctv_state(level, viewing_id(pawn, c().view_camera_property)),
+        cctv = cctv_info,
         hook_fired = hook_fired,
     }
 end
 
--- Suspects and civilians the helicopter has tracked, minus those already
+-- Suspects and civilians the helicopter or CCTV has seen, minus those already
 -- in the targets list (surrendered, restrained or down).
 function cameras.spotted(targets)
     local known = {}
@@ -222,7 +303,7 @@ function cameras.spotted(targets)
         if not known[id] and entry.pos then
             list[#list + 1] = {
                 id = id, kind = entry.kind, status = entry.status, pos = entry.pos,
-                source = entry.source, seen_at = entry.seen_at,
+                source = entry.source, camera = entry.camera, seen_at = entry.seen_at,
             }
         end
     end

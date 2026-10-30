@@ -47,8 +47,14 @@ config.officers = {
     -- can be empty (it is checked before use); then the squad slot name is used.
     roster_property = "RosterCharacter",
     squad_names = { [0] = "Alpha", [1] = "Beta", [2] = "Charlie", [3] = "Delta" },
-    -- Optional property with health (number). Shown as a status bar.
-    health_property = nil,
+    -- Health shown in the roster: GetHealthStatus() returns an
+    -- EPlayerHealthStatus, and GetCurrentHealth() / GetMaxHealth() the
+    -- health points (AReadyOrNotCharacter, from the header dump).
+    health_status_function = "GetHealthStatus",
+    health_status_values = { [0] = "healthy", [1] = "injured", [2] = "downed", [3] = "incapacitated",
+                             [4] = "dead", [5] = "arrested" },
+    health_function = "GetCurrentHealth",
+    max_health_function = "GetMaxHealth",
     -- Skip actors whose object name contains any of these (e.g. the player
     -- pawn, if the player shares the officer class).
     exclude_name_patterns = {},
@@ -151,6 +157,12 @@ config.cameras = {
     cctv_system_classes = { "CCTVSystem" },
     cctv_wired_function = "IsWired",
     cctv_wired_property = "bWiredToTablet",
+    -- Mark suspects and civilians a wired camera can see: inside its view,
+    -- within cctv_view_range (cm), and with a clear line of sight
+    -- (AReadyOrNotCharacter::HasLineOfSightTo, called with the camera's position).
+    cctv_spots_people = true,
+    cctv_view_range = 2500,
+    cctv_line_of_sight_function = "HasLineOfSightTo",
     -- On the player pawn: the CCTV camera / helicopter whose feed is on screen.
     view_camera_property = "CurrentViewCamera",
     view_helicopter_property = "CurrentViewHelicopter",
