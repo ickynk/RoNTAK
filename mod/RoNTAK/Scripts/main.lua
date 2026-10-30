@@ -13,6 +13,10 @@ local rooms = require("rooms")
 
 local MAX_RESULTS = 30
 
+-- Generational garbage collection: frequent small collections of the many
+-- short-lived tables each tick makes, instead of rare long pauses.
+pcall(collectgarbage, "generational")
+
 local seq = 0
 local results = {}
 local busy = false

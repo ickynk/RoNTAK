@@ -12,7 +12,7 @@ local log = require("log")
 local rooms = {}
 
 -- If a level gives no rooms (still loading), try again after this long.
-local RETRY_SECONDS = 20
+local RETRY_SECONDS = 60   -- while a level has no rooms (one FindAllOf each time)
 
 local built = { level = nil, at = -math.huge, count = 0, version = nil }
 
@@ -99,8 +99,9 @@ end
 -- Returns a version string that changes whenever rooms.json is rewritten.
 function rooms.update(level)
     if not level then return nil end
-    local due = level ~= built.level or (built.count == 0 and os.time() - built.at >= RETRY_SECONDS)
-    if not due or #game.door_entries() == 0 then return built.version end
+    local new_level = level ~= built.level
+    local due = new_level or (built.count == 0 and os.time() - built.at >= RETRY_SECONDS)
+    if not due or #game.door_entries() == 0 or not game.scan_slot(new_level) then return built.version end
 
     local ok, list = pcall(collect)
     if not ok then

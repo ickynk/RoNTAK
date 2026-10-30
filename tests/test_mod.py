@@ -403,6 +403,34 @@ class ModTest(unittest.TestCase):
         self.assertEqual(len(state["officers"]), 2)
         self.assertEqual(len(state["doors"]), 2)
 
+    def test_no_tick_stacks_scans_or_door_reads(self):
+        """Over 3 minutes of game time, no tick runs more than one FindAllOf
+        rescan or re-reads every door at once (that was a hitch every 2 s)."""
+        self.add_people()
+        self.add_cameras()
+        self.lua.execute(r"""
+            clock = 0
+            os.time = function() return math.floor(clock) end
+            scans, door_reads = 0, 0
+            local find_all_of = FindAllOf
+            function FindAllOf(class) scans = scans + 1 return find_all_of(class) end
+            for _, d in ipairs(objects.Door) do
+                local is_open = d.IsOpen
+                d.IsOpen = function(...) door_reads = door_reads + 1 return is_open(...) end
+            end
+        """)
+        g = self.lua.globals()
+        worst_scans = worst_doors = 0
+        for i in range(720):  # 3 minutes at 4 ticks per second
+            g.scans, g.door_reads = 0, 0
+            self.tick()
+            if i > 0:  # the first tick of a level may scan everything
+                worst_scans = max(worst_scans, g.scans)
+                worst_doors = max(worst_doors, g.door_reads)
+            g.clock = g.clock + 0.25
+        self.assertLessEqual(worst_scans, 1)
+        self.assertLessEqual(worst_doors, 1)  # 2 doors here, one per tick
+
     def add_people(self):
         self.lua.execute(r"""
             local function person(n, x, flags)
@@ -549,8 +577,9 @@ class ModTest(unittest.TestCase):
             -- Behind the camera: never checked.
             objects.CyberneticCharacter[3].K2_GetActorLocation = function() return {{ X = -500, Y = -500, Z = 0 }} end
         """)
-        self.tick()  # level start
-        return {t["id"]: t for t in self.tick()["targets"]}
+        for _ in range(4):  # level start; scans are spread over the first ticks
+            state = self.tick()
+        return {t["id"]: t for t in state["targets"]}
 
     def test_cctv_marks_people_in_view_with_line_of_sight(self):
         people = self.cctv_scene(los=True)
