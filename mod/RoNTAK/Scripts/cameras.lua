@@ -67,7 +67,7 @@ end
 -- Helicopter -------------------------------------------------------------
 
 function cameras.install_hooks()
-    if not RegisterHook then return end
+    if not RegisterHook or c().enabled == false then return end
     local function hook(fn_path, fn)
         if not fn_path then return end
         local ok, err = pcall(RegisterHook, fn_path, fn)
@@ -302,7 +302,7 @@ end
 
 -- Cameras for state.json, or nil outside a level.
 function cameras.state(level)
-    if not level then return nil end
+    if not level or c().enabled == false then return nil end
     local pawn = game.player_pawn()
     local cctv_info = cctv_state(level, viewing_id(pawn, c().view_camera_property))
     if spotted.level == level then update_cctv_sight(cctv_info) end

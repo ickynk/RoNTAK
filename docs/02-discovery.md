@@ -74,6 +74,8 @@ The helicopter, drone and CCTV names are in `config.cameras`.
 - **The air unit never marks anyone:** the UE4SS console prints `helicopter is tracking suspect ...` when it
   picks someone up. If that never appears while the helicopter follows someone, check that
   `target_found_hook` / `target_lost_hook` still exist (search the header dump for `OnTargetFound`).
+- **Turning the camera features off:** set `enabled = false` at the top of `config.cameras`. The mod then reads
+  nothing about the helicopter, drones or CCTV.
 - **CCTV never appears:** it only shows once the cameras are wired to your tablet, or while you watch a feed.
 - **CCTV never marks anyone:** the console prints `CCTV <camera> sees suspect ...` when it does. If it prints
   `CCTV line of sight check failed`, the line-of-sight function changed: look up `HasLineOfSightTo` in the header

@@ -517,6 +517,11 @@ class ModTest(unittest.TestCase):
         state = self.tick()
         self.assertEqual(state["cameras"]["cctv"]["viewing"], "CCTV_C_2")
 
+    def test_cameras_can_be_switched_off(self):
+        self.add_cameras()
+        self.lua.execute('require("config").cameras.enabled = false')
+        self.assertNotIn("cameras", self.tick())  # nil is left out of state.json
+
     def test_watching_a_feed_counts_as_wired(self):
         self.add_cameras()
         self.lua.execute("objects.PlayerController[1].Pawn.CurrentViewCamera = objects.CCTVCameraPoint[1]")
