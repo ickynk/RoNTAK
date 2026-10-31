@@ -10,6 +10,12 @@
 --   C  camera high up, nothing cut (for comparison)
 -- floorplan_test.json records the area covered (pixel <-> world) and which
 -- steps worked. Run it once; it freezes the game for a moment.
+--
+-- The camera is a SceneCaptureComponent2D built with StaticConstructObject
+-- (no actor, no hooks). If that is not available, it falls back to spawning
+-- a SceneCapture2D actor; that needs a hook to pass the class, and the hook
+-- is then left installed: removing a hook from a native engine function
+-- leaves UE4SS without the original function ("no function map entry").
 
 local bridge = require("bridge")
 local game = require("game")
@@ -70,9 +76,11 @@ local function install_spawn_hook()
     if ok then hook_ids = { pre, post } else note("spawn hook FAILED: " .. tostring(pre)) end
 end
 
-local function remove_spawn_hook()
-    if hook_ids and UnregisterHook then pcall(UnregisterHook, SPAWN_PATH, hook_ids[1], hook_ids[2]) end
-    hook_ids = nil
+-- What a call returned, for the report: "UObject Name", "function", "nil"...
+local function describe(value)
+    if type(value) ~= "userdata" then return type(value) .. " " .. tostring(value) end
+    if not valid(value) then return "invalid object" end
+    return "object " .. game.object_name(value)
 end
 
 -- Pitch -90 (looking straight down), yaw 0: picture up = world +X, picture right = world +Y.
@@ -87,7 +95,7 @@ local function spawn_camera(world, statics, class, pos)
         { world, class, transform, 1, null_object() })
     spawn_class = nil
     if not ok or not valid(actor) then
-        note("spawn FAILED: " .. tostring(actor))
+        note(string.format("spawn FAILED (%s): %s", ok and "returned" or "error", describe(actor)))
         return nil
     end
     if not try_call(statics, "FinishSpawningActor", { actor, transform, 1 }, { actor, transform }) then
@@ -97,15 +105,43 @@ local function spawn_camera(world, statics, class, pos)
     return actor
 end
 
-local function capture_one(name, world, statics, rendering, class, rt, center, cut, slice)
+-- Method 1: a bare capture component, owned by the player pawn, placed by
+-- setting its world transform. Returns the component, or nil.
+local function construct_camera(component_class, outer, pos)
+    if not StaticConstructObject then
+        note("StaticConstructObject not available")
+        return nil
+    end
+    local ok, comp = pcall(StaticConstructObject, component_class, outer)
+    if not ok or not valid(comp) then
+        note(string.format("StaticConstructObject FAILED (%s): %s", ok and "returned" or "error", describe(comp)))
+        return nil
+    end
+    local loc, rot = { X = pos.x, Y = pos.y, Z = pos.z }, { Pitch = -90, Yaw = 0, Roll = 0 }
+    local placed = try_call(comp, "K2_SetWorldLocationAndRotation",
+        { loc, rot, false, {}, false }, { loc, rot, false, false })
+    local got_ok, got = pcall(function() return comp:K2_GetComponentLocation() end)
+    note(string.format("component placed: %s, now at %s", tostring(placed),
+        got_ok and got and string.format("%.0f %.0f %.0f", got.X, got.Y, got.Z) or "?"))
+    return comp
+end
+
+local function capture_one(name, world, statics, rendering, classes, rt, center, cut, slice, method)
     local z = slice == "A" and cut or cut + HIGH_ABOVE_CUT
-    local actor = spawn_camera(world, statics, class, { x = center.x, y = center.y, z = z })
-    if not actor then return false end
-    local comp = game.read_raw(actor, "CaptureComponent2D")
-    if not valid(comp) then
-        note(name .. ": no CaptureComponent2D")
-        pcall(function() actor:K2_DestroyActor() end)
-        return false
+    local pos = { x = center.x, y = center.y, z = z }
+    local actor, comp
+    if method == "construct" then
+        comp = construct_camera(classes.component, classes.outer, pos)
+        if not comp then return false, "no camera" end
+    else
+        actor = spawn_camera(world, statics, classes.actor, pos)
+        if not actor then return false, "no camera" end
+        comp = game.read_raw(actor, "CaptureComponent2D")
+        if not valid(comp) then
+            note(name .. ": no CaptureComponent2D")
+            pcall(function() actor:K2_DestroyActor() end)
+            return false
+        end
     end
     set(comp, "ProjectionType", 1)          -- ECameraProjectionMode::Orthographic
     set(comp, "OrthoWidth", AREA_CM)
@@ -126,8 +162,8 @@ local function capture_one(name, world, statics, rendering, class, rt, center, c
     if not ok then note(name .. ": CaptureScene FAILED: " .. tostring(err)) end
     local file = "floorplan_test_" .. name .. ".png"
     local exported = ok and try_call(rendering, "ExportRenderTarget", { world, rt, bridge.dir, file })
-    note(string.format("%s: %s", name, exported and ("saved " .. file) or "export FAILED"))
-    pcall(function() actor:K2_DestroyActor() end)
+    note(string.format("%s (%s): %s", name, method, exported and ("saved " .. file) or "export FAILED"))
+    if actor then pcall(function() actor:K2_DestroyActor() end) end
     return exported
 end
 
@@ -140,11 +176,25 @@ function floorplan.test()
         return
     end
     local world_ok, world = pcall(function() return pc:GetWorld() end)
-    local class = StaticFindObject and StaticFindObject("/Script/Engine.SceneCapture2D")
-    local statics = StaticFindObject and StaticFindObject("/Script/Engine.Default__GameplayStatics")
-    local rendering = StaticFindObject and StaticFindObject("/Script/Engine.Default__KismetRenderingLibrary")
-    if not (world_ok and valid(world) and valid(class) and valid(statics) and valid(rendering)) then
-        note("engine objects not found (world / SceneCapture2D / GameplayStatics / KismetRenderingLibrary)")
+    local find = StaticFindObject or function() return nil end
+    local classes = {
+        component = find("/Script/Engine.SceneCaptureComponent2D"),
+        actor = find("/Script/Engine.SceneCapture2D"),
+        outer = game.player_pawn(),
+    }
+    local statics = find("/Script/Engine.Default__GameplayStatics")
+    local rendering = find("/Script/Engine.Default__KismetRenderingLibrary")
+    if not (world_ok and valid(world) and valid(rendering)) then
+        note("engine objects not found (world / KismetRenderingLibrary)")
+        return
+    end
+    local method
+    if StaticConstructObject and valid(classes.component) and valid(classes.outer) then
+        method = "construct"
+    elseif valid(classes.actor) and valid(statics) then
+        method = "spawn"
+    else
+        note("no way to make a capture camera (StaticConstructObject / SceneCapture2D not found)")
         return
     end
 
@@ -159,12 +209,19 @@ function floorplan.test()
 
     local center = player.pos
     local cut = center.z + CUT_ABOVE_PLAYER
-    install_spawn_hook()
+    if method == "spawn" then install_spawn_hook() end -- left installed, see the top of this file
     for _, name in ipairs({ "A", "B", "C" }) do
-        local done, err = pcall(capture_one, name, world, statics, rendering, class, rt, center, cut, name)
-        if not done then note(name .. ": " .. tostring(err)) end
+        local done, result, why = pcall(capture_one, name, world, statics, rendering, classes, rt, center, cut, name, method)
+        if not done then note(name .. ": " .. tostring(result)) end
+        -- The camera could not be made this way: try the other one.
+        if done and why == "no camera" and method == "construct" and valid(classes.actor) and valid(statics) then
+            note("falling back to spawning a SceneCapture2D actor")
+            method = "spawn"
+            install_spawn_hook()
+            done, result = pcall(capture_one, name, world, statics, rendering, classes, rt, center, cut, name, method)
+            if not done then note(name .. ": " .. tostring(result)) end
+        end
     end
-    remove_spawn_hook()
 
     -- Pixel (u, v) <-> world: u runs along +Y, v along -X, AREA_CM across SIZE_PX.
     local half, k = AREA_CM / 2, AREA_CM / SIZE_PX

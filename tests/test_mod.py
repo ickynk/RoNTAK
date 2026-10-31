@@ -431,7 +431,54 @@ class ModTest(unittest.TestCase):
         self.assertLessEqual(worst_scans, 1)
         self.assertLessEqual(worst_doors, 1)  # 2 doors here, one per tick
 
+    def test_floorplan_capture_with_constructed_component(self):
+        self.lua.execute(r"""
+            local function obj(n, t)
+                t = t or {}
+                t.IsValid = function() return true end
+                t.GetFName = function() return { ToString = function() return n end } end
+                return t
+            end
+            made, exports = {}, {}
+            local component_class = obj("SceneCaptureComponent2D")
+            function StaticConstructObject(class, outer)
+                local comp = obj("Capture", {
+                    CaptureScene = function(c) c.captured = true end,
+                    K2_SetWorldLocationAndRotation = function(c, loc, rot) c.loc, c.rot = loc, rot end,
+                    K2_GetComponentLocation = function(c) return c.loc end,
+                })
+                made[#made + 1] = { class = class, outer = outer, comp = comp }
+                return comp
+            end
+            local rendering = obj("KismetRenderingLibrary", {
+                CreateRenderTarget2D = function(self, world, w, h, fmt) return obj("RT") end,
+                ExportRenderTarget = function(self, world, rt, dir, file) exports[#exports + 1] = file end,
+            })
+            local found = {
+                ["/Script/Engine.SceneCaptureComponent2D"] = component_class,
+                ["/Script/Engine.Default__KismetRenderingLibrary"] = rendering,
+            }
+            function StaticFindObject(path) return found[path] end
+            objects.PlayerController[1].Pawn.K2_GetActorLocation = function() return { X = 1000, Y = 2000, Z = 90 } end
+        """)
+        self.tick()
+        self.lua.globals().keybinds["F11"]()
+        g = self.lua.globals()
+        self.assertEqual(list(g.exports.values()), ["floorplan_test_A.png", "floorplan_test_B.png", "floorplan_test_C.png"])
+        shots = [g.made[i] for i in range(1, 4)]
+        self.assertEqual(shots[0]["class"].GetFName().ToString(), "SceneCaptureComponent2D")
+        self.assertEqual(shots[0]["outer"].GetFName().ToString(), "PlayerPawn_C_0")
+        self.assertEqual([s["comp"]["loc"]["Z"] for s in shots], [170, 5170, 5170])
+        self.assertEqual(dict(shots[0]["comp"]["rot"]), {"Pitch": -90, "Yaw": 0, "Roll": 0})
+        self.assertTrue(all(s["comp"]["captured"] for s in shots))
+        self.assertEqual(shots[0]["comp"]["OrthoNearClipPlane"], 0)
+        self.assertEqual(shots[1]["comp"]["bEnableClipPlane"], True)
+        self.assertIsNone(self.lua.globals().hooks["/Script/Engine.GameplayStatics:BeginDeferredActorSpawnFromClass"])
+        report = json.loads((self.bridge / "floorplan_test.json").read_text())["report"]
+        self.assertFalse(any("FAILED" in line for line in report), report)
+
     def test_floorplan_capture_test(self):
+        """Without StaticConstructObject: falls back to spawning a SceneCapture2D actor."""
         self.lua.execute(r"""
             local function obj(n, t)
                 t = t or {}
