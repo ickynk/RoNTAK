@@ -55,23 +55,20 @@ UE4SS_ZIP = make_zip({
     "dwmapi.dll": "new loader",
     "ue4ss/UE4SS.dll": "new ue4ss",
     "ue4ss/UE4SS-settings.ini": "default settings",
-    "ue4ss/Mods/mods.txt": "default mods",
+    "ue4ss/Mods/mods.txt": "; built-in mods\nBPModLoaderMod : 1\nKeybinds : 1\nNewBuiltIn : 1\n",
+    "ue4ss/Mods/Keybinds/Scripts/main.lua": "new keybinds",
+    "ue4ss/Mods/shared/UEHelpers/UEHelpers.lua": "new helpers",
 })
 
 
-def fake_github(experimental=True):
+def fake_github():
     """Stands in for install.fetch: GitHub's release API and the download."""
-    def release(tag, assets):
-        return json.dumps({"tag_name": tag, "assets": [
-            {"name": a, "browser_download_url": "https://example/" + a} for a in assets]}).encode()
-
     def fetch(url):
-        if url.endswith("experimental-latest"):
-            if not experimental:
-                raise OSError("404")
-            return release("experimental-latest", ["zDEV-UE4SS_v3.0.1-400-gabc.zip", "UE4SS_v3.0.1-400-gabc.zip"])
-        if url.endswith("/latest"):
-            return release("v3.0.1", ["zCustomGameConfigs.zip", "UE4SS_v3.0.1.zip"])
+        if url == install.UE4SS_RELEASE_API:
+            assets = ["zDEV-UE4SS_v3.0.1.zip", "zCustomGameConfigs.zip", "UE4SS_v3.0.1.zip"]
+            return json.dumps({"tag_name": "v3.0.1", "assets": [
+                {"name": a, "browser_download_url": "https://example/" + a} for a in assets]}).encode()
+        assert url == "https://example/UE4SS_v3.0.1.zip", url
         return UE4SS_ZIP
     return fetch
 
@@ -195,24 +192,62 @@ class InstallTest(unittest.TestCase):
         self.assertTrue((bare / "dwmapi.dll").is_file())
         self.assertTrue((bare / "ue4ss" / "Mods" / "RoNTAK" / "Scripts" / "main.lua").is_file())
 
-    def test_ue4ss_release_picks_main_zip_and_falls_back_to_stable(self):
-        install.fetch = fake_github(experimental=False)
-        version, name, url = install.find_ue4ss_release()
-        self.assertEqual((version, name), ("v3.0.1", "UE4SS_v3.0.1.zip"))
+    def test_ue4ss_release_is_the_stable_main_zip(self):
         install.fetch = fake_github()
-        self.assertEqual(install.find_ue4ss_release()[1], "UE4SS_v3.0.1-400-gabc.zip")
+        self.assertEqual(install.find_ue4ss_release()[:2], ("v3.0.1", "UE4SS_v3.0.1.zip"))
+        self.assertTrue(install.UE4SS_RELEASE_API.endswith("/releases/latest"))
 
-    def test_ue4ss_update_keeps_settings_and_backs_up(self):
+    def test_merge_mod_lists_keeps_choices_and_added_mods(self):
+        new = "; built-in mods\nBPModLoaderMod : 1\nKeybinds : 1\nNewBuiltIn : 1\n"
+        old = "BPModLoaderMod : 1\nKeybinds : 0\nRoNTAK : 1\nMyMod : 0\n"
+        self.assertEqual(install.merge_mod_lists(new, old),
+                         "; built-in mods\nBPModLoaderMod : 1\nKeybinds : 0\nNewBuiltIn : 1\nRoNTAK : 1\nMyMod : 0\n")
+
+    def test_update_replaces_old_2x_layout_and_keeps_added_mods(self):
+        win64 = make_game(self.tmp / "old", "old")             # UE4SS.dll directly in Win64
+        (win64 / "xinput1_3.dll").write_text("old proxy")
+        (win64 / "UE4SS-settings.ini").write_text("old settings")
+        for mod, text in (("RoNTAK", "rontak"), ("MyMod", "mine"), ("Keybinds", "old keybinds")):
+            (win64 / "Mods" / mod / "Scripts").mkdir(parents=True)
+            (win64 / "Mods" / mod / "Scripts" / "main.lua").write_text(text)
+        (win64 / "Mods" / "RoNTAK" / "bridge").mkdir()
+        (win64 / "Mods" / "RoNTAK" / "bridge" / "rooms.json").write_text("{}")
+        (win64 / "Mods" / "mods.txt").write_text("Keybinds : 0\nRoNTAK : 1\nMyMod : 1\n")
+        install.fetch = fake_github()
+        self.assertTrue(install.get_ue4ss(win64, update=True))
+        new = win64 / "ue4ss" / "Mods"
+        # Old loader files gone: only the new loader is left.
+        for old_file in ("UE4SS.dll", "xinput1_3.dll", "UE4SS-settings.ini"):
+            self.assertFalse((win64 / old_file).exists(), old_file)
+        self.assertEqual((win64 / "dwmapi.dll").read_text(), "new loader")
+        # Added mods moved over unchanged (bridge data too); built-ins are the new versions.
+        self.assertEqual((new / "MyMod" / "Scripts" / "main.lua").read_text(), "mine")
+        self.assertEqual((new / "RoNTAK" / "bridge" / "rooms.json").read_text(), "{}")
+        self.assertEqual((new / "Keybinds" / "Scripts" / "main.lua").read_text(), "new keybinds")
+        self.assertFalse((win64 / "Mods").exists())
+        self.assertEqual((new / "mods.txt").read_text(),
+                         "; built-in mods\nBPModLoaderMod : 1\nKeybinds : 0\nNewBuiltIn : 1\nRoNTAK : 1\nMyMod : 1\n")
+        # Everything old is in the backup.
+        with zipfile.ZipFile(next(win64.glob("ue4ss_backup_*.zip"))) as z:
+            self.assertTrue({"UE4SS.dll", "xinput1_3.dll", "UE4SS-settings.ini", "Mods/MyMod/Scripts/main.lua",
+                             "Mods/Keybinds/Scripts/main.lua", "Mods/mods.txt"} <= set(z.namelist()))
+        # The installer then puts RoNTAK into the new Mods folder.
+        self.assertEqual(gamefinder.mods_dir(win64), new)
+
+    def test_ue4ss_update_keeps_settings_and_mods_and_backs_up(self):
         win64 = self.win64
         (win64 / "dwmapi.dll").write_text("old loader")
         (win64 / "ue4ss" / "UE4SS-settings.ini").write_text("my settings")
-        (win64 / "ue4ss" / "Mods").mkdir(parents=True, exist_ok=True)
-        (win64 / "ue4ss" / "Mods" / "mods.txt").write_text("my mods")
+        (win64 / "ue4ss" / "Mods" / "MyMod").mkdir(parents=True, exist_ok=True)
+        (win64 / "ue4ss" / "Mods" / "MyMod" / "main.lua").write_text("mine")
+        (win64 / "ue4ss" / "Mods" / "mods.txt").write_text("MyMod : 1\n")
         install.fetch = fake_github()
         self.assertTrue(install.get_ue4ss(win64, update=True))
         self.assertEqual((win64 / "dwmapi.dll").read_text(), "new loader")
+        self.assertEqual((win64 / "ue4ss" / "UE4SS.dll").read_text(), "new ue4ss")
         self.assertEqual((win64 / "ue4ss" / "UE4SS-settings.ini").read_text(), "my settings")
-        self.assertEqual((win64 / "ue4ss" / "Mods" / "mods.txt").read_text(), "my mods")
+        self.assertEqual((win64 / "ue4ss" / "Mods" / "MyMod" / "main.lua").read_text(), "mine")
+        self.assertIn("MyMod : 1", (win64 / "ue4ss" / "Mods" / "mods.txt").read_text())
         backups = list(win64.glob("ue4ss_backup_*.zip"))
         self.assertEqual(len(backups), 1)
         with zipfile.ZipFile(backups[0]) as z:
