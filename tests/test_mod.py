@@ -431,7 +431,7 @@ class ModTest(unittest.TestCase):
         self.assertLessEqual(worst_scans, 1)
         self.assertLessEqual(worst_doors, 1)  # 2 doors here, one per tick
 
-    def test_floorplan_capture_with_constructed_component(self):
+    def test_floorplan_capture_test(self):
         self.lua.execute(r"""
             local function obj(n, t)
                 t = t or {}
@@ -439,110 +439,69 @@ class ModTest(unittest.TestCase):
                 t.GetFName = function() return { ToString = function() return n end } end
                 return t
             end
-            made, exports = {}, {}
-            local component_class = obj("SceneCaptureComponent2D")
+            local function capture_component(n, extra)
+                local comp = obj(n, extra)
+                comp.captures = {}
+                comp.CaptureScene = function(c)
+                    c.captures[#c.captures + 1] = { ortho = c.ProjectionType, z = c.loc.Z, source = c.CaptureSource,
+                        near = c.OrthoNearClipPlane, clip = c.bEnableClipPlane }
+                    drawn = c.drawable
+                end
+                comp.K2_SetWorldLocationAndRotation = function(c, loc, rot) c.loc, c.rot = loc, rot end
+                comp.K2_GetComponentLocation = function(c) return c.loc end
+                comp.K2_GetComponentRotation = function(c) return c.rot end
+                return comp
+            end
+            made, exports, drawn = {}, {}, false
             function StaticConstructObject(class, outer)
-                local comp = obj("Capture", {
-                    CaptureScene = function(c) c.captured = true end,
-                    K2_SetWorldLocationAndRotation = function(c, loc, rot) c.loc, c.rot = loc, rot end,
-                    K2_GetComponentLocation = function(c) return c.loc end,
-                })
+                local comp = capture_component("Capture", { drawable = false })  -- renders nothing, as in game
                 made[#made + 1] = { class = class, outer = outer, comp = comp }
                 return comp
             end
+            cctv_comp = capture_component("CaptureComponent", {
+                drawable = true, ProjectionType = 0, FOVAngle = 80, CaptureSource = 1, bCaptureEveryFrame = true,
+                loc = { X = 1, Y = 2, Z = 3 }, rot = { Pitch = -20, Yaw = 45, Roll = 0 },
+                GetOwner = function() return obj("BP_CCTVCamera_C_1") end,
+            })
+            objects.SceneCaptureComponent2D = { cctv_comp }
             local rendering = obj("KismetRenderingLibrary", {
                 CreateRenderTarget2D = function(self, world, w, h, fmt) return obj("RT") end,
-                ExportRenderTarget = function(self, world, rt, dir, file) exports[#exports + 1] = file end,
-            })
-            local found = {
-                ["/Script/Engine.SceneCaptureComponent2D"] = component_class,
-                ["/Script/Engine.Default__KismetRenderingLibrary"] = rendering,
-            }
-            function StaticFindObject(path) return found[path] end
-            objects.PlayerController[1].Pawn.K2_GetActorLocation = function() return { X = 1000, Y = 2000, Z = 90 } end
-        """)
-        self.tick()
-        self.lua.globals().keybinds["F11"]()
-        g = self.lua.globals()
-        self.assertEqual(list(g.exports.values()), ["floorplan_test_A.png", "floorplan_test_B.png", "floorplan_test_C.png"])
-        shots = [g.made[i] for i in range(1, 4)]
-        self.assertEqual(shots[0]["class"].GetFName().ToString(), "SceneCaptureComponent2D")
-        self.assertEqual(shots[0]["outer"].GetFName().ToString(), "PlayerPawn_C_0")
-        self.assertEqual([s["comp"]["loc"]["Z"] for s in shots], [170, 5170, 5170])
-        self.assertEqual(dict(shots[0]["comp"]["rot"]), {"Pitch": -90, "Yaw": 0, "Roll": 0})
-        self.assertTrue(all(s["comp"]["captured"] for s in shots))
-        self.assertEqual(shots[0]["comp"]["OrthoNearClipPlane"], 0)
-        self.assertEqual(shots[1]["comp"]["bEnableClipPlane"], True)
-        self.assertIsNone(self.lua.globals().hooks["/Script/Engine.GameplayStatics:BeginDeferredActorSpawnFromClass"])
-        report = json.loads((self.bridge / "floorplan_test.json").read_text())["report"]
-        self.assertFalse(any("FAILED" in line for line in report), report)
-
-    def test_floorplan_capture_test(self):
-        """Without StaticConstructObject: falls back to spawning a SceneCapture2D actor."""
-        self.lua.execute(r"""
-            local function obj(n, t)
-                t = t or {}
-                t.IsValid = function() return true end
-                t.GetFName = function() return { ToString = function() return n end } end
-                return t
-            end
-            spawned, exports = {}, {}
-            local capture_class = obj("SceneCapture2D")
-            local statics = obj("GameplayStatics", {
-                BeginDeferredActorSpawnFromClass = function(self, world, class, transform, ...)
-                    -- Like UE4SS in this game: the class argument arrives empty unless a pre-hook writes it.
-                    local args = { world, "stale", transform }
-                    local params = {}
-                    for i = 1, 3 do
-                        local index = i
-                        params[i] = { get = function() return args[index] end, set = function(_, v) args[index] = v end }
-                    end
-                    for _, hook in ipairs(hooks["/Script/Engine.GameplayStatics:BeginDeferredActorSpawnFromClass"] or {}) do
-                        hook({}, table.unpack(params))
-                    end
-                    local comp = obj("Capture", { CaptureScene = function(c) c.captured = true end })
-                    local a = obj("Cam", { CaptureComponent2D = comp, K2_DestroyActor = function(a) a.destroyed = true end,
-                        K2_SetActorRotation = function() end })
-                    spawned[#spawned + 1] = { class = args[2], z = transform.Translation.Z, actor = a, comp = comp }
-                    return a
+                ClearRenderTarget2D = function() drawn = false end,
+                ReadRenderTargetPixel = function()
+                    if drawn then return { R = 120, G = 110, B = 90, A = 0 } end
+                    return { R = 0, G = 0, B = 0, A = 0 }
                 end,
-                FinishSpawningActor = function() end,
-            })
-            local rendering = obj("KismetRenderingLibrary", {
-                CreateRenderTarget2D = function(self, world, w, h, fmt) return obj("RT", { w = w, fmt = fmt }) end,
                 ExportRenderTarget = function(self, world, rt, dir, file) exports[#exports + 1] = file end,
             })
             local found = {
-                ["/Script/Engine.SceneCapture2D"] = capture_class,
-                ["/Script/Engine.Default__GameplayStatics"] = statics,
+                ["/Script/Engine.SceneCaptureComponent2D"] = obj("SceneCaptureComponent2D"),
                 ["/Script/Engine.Default__KismetRenderingLibrary"] = rendering,
             }
             function StaticFindObject(path) return found[path] end
-            capture_class_ref = capture_class
             objects.PlayerController[1].Pawn.K2_GetActorLocation = function() return { X = 1000, Y = 2000, Z = 90 } end
         """)
         self.tick()
         self.lua.globals().keybinds["F11"]()
         g = self.lua.globals()
-        self.assertEqual(list(g.exports.values()), ["floorplan_test_A.png", "floorplan_test_B.png", "floorplan_test_C.png"])
-        shots = [g.spawned[i] for i in range(1, 4)]
-        for shot in shots:
-            self.assertEqual(shot["class"].GetFName().ToString(), "SceneCapture2D")  # written by the pre-hook
-            self.assertEqual((shot["comp"]["ProjectionType"], shot["comp"]["OrthoWidth"], shot["comp"]["CaptureSource"]),
-                             (1, 6000, 7))
-            self.assertTrue(shot["comp"]["captured"] and shot["actor"]["destroyed"])
-        self.assertEqual([s["z"] for s in shots], [170, 5170, 5170])  # A at the cut, B and C high
-        self.assertEqual(shots[0]["comp"]["OrthoNearClipPlane"], 0)
-        self.assertEqual(shots[1]["comp"]["bEnableClipPlane"], True)
-        self.assertEqual(dict(shots[1]["comp"]["ClipPlaneNormal"]), {"X": 0, "Y": 0, "Z": -1})
-        self.assertIsNone(shots[2]["comp"]["bEnableClipPlane"])
-        info = json.loads((self.bridge / "floorplan_test.json").read_text())
-        self.assertEqual(info["cut_z"], 170)
-        # Top-left pixel = +X / -Y corner; top-right = +Y; bottom-left = -X.
-        self.assertEqual(info["anchors"][0], {"world": [4000, -1000], "px": [0, 0]})
-        self.assertEqual(info["anchors"][1], {"world": [4000, 5000], "px": [2048, 0]})
-        self.assertEqual(info["anchors"][2], {"world": [-2000, -1000], "px": [0, 2048]})
-        self.assertFalse(any("FAILED" in line for line in info["report"]), info["report"])
+        self.assertEqual(list(g.exports.values()), [f"floorplan_test_{n}.png" for n in "ABCDEF"])
+        own = g.made[1]
+        self.assertEqual(own["outer"].GetFName().ToString(), "PlayerPawn_C_0")
+        shots = list(own["comp"]["captures"].values())
+        self.assertEqual([(c["ortho"], c["z"], c["source"]) for c in shots],
+                         [(1, 170, 7), (1, 5170, 7), (1, 5170, 7), (0, 5170, 2)])
+        self.assertEqual((shots[0]["near"], shots[1]["clip"], shots[2]["clip"]), (0, True, False))
+        borrowed = list(g.cctv_comp["captures"].values())
+        self.assertEqual([(c["ortho"], c["z"]) for c in borrowed], [(1, 5170), (1, 170)])
+        # Everything the test changed on the borrowed component is put back.
+        c = g.cctv_comp
+        self.assertEqual((c["ProjectionType"], c["FOVAngle"], c["CaptureSource"], c["bCaptureEveryFrame"]), (0, 80, 1, True))
+        self.assertEqual((dict(c["loc"]), c["rot"]["Yaw"]), ({"X": 1, "Y": 2, "Z": 3}, 45))
+        report = json.loads((self.bridge / "floorplan_test.json").read_text())["report"]
+        self.assertIn("1 capture components in the level: BP_CCTVCamera_C_1", report)
+        line = lambda n: next(l for l in report if l.startswith(n + ": "))
+        self.assertIn("0/9 sample pixels drawn", line("C"))
+        self.assertIn("9/9 sample pixels drawn, e.g. RGBA 120 110 90 0", line("E"))
+        self.assertIn("pitch -90", line("E"))
 
     def add_people(self):
         self.lua.execute(r"""
