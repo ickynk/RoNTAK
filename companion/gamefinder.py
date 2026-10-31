@@ -127,8 +127,9 @@ def ue4ss_installed(win64: Path) -> bool:
 
 
 def mods_dir(win64: Path) -> Path:
-    """UE4SS's Mods folder: Win64/ue4ss/Mods (UE4SS 3.x) or Win64/Mods (older)."""
-    if (win64 / "ue4ss").is_dir():
+    """UE4SS's Mods folder, next to UE4SS.dll: Win64/Mods (UE4SS 2.x and 3.0.x
+    releases) or Win64/ue4ss/Mods (later builds, which keep UE4SS in a ue4ss folder)."""
+    if (win64 / "ue4ss" / "UE4SS.dll").is_file():
         return win64 / "ue4ss" / "Mods"
     return win64 / "Mods"
 

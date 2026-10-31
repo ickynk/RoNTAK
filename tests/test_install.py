@@ -51,14 +51,32 @@ def make_zip(files: dict) -> bytes:
     return buf.getvalue()
 
 
+# The real UE4SS_v3.0.1.zip layout (flat), trimmed.
 UE4SS_ZIP = make_zip({
     "dwmapi.dll": "new loader",
-    "ue4ss/UE4SS.dll": "new ue4ss",
-    "ue4ss/UE4SS-settings.ini": "default settings",
-    "ue4ss/Mods/mods.txt": "; built-in mods\nBPModLoaderMod : 1\nKeybinds : 1\nNewBuiltIn : 1\n",
-    "ue4ss/Mods/Keybinds/Scripts/main.lua": "new keybinds",
-    "ue4ss/Mods/shared/UEHelpers/UEHelpers.lua": "new helpers",
+    "UE4SS.dll": "new ue4ss",
+    "UE4SS-settings.ini": "default settings",
+    "README.md": "readme",
+    "Mods/mods.txt": "; built-in mods\nBPModLoaderMod : 1\nKeybinds : 1\nNewBuiltIn : 1\n",
+    "Mods/Keybinds/Scripts/main.lua": "new keybinds",
+    "Mods/shared/UEHelpers/UEHelpers.lua": "new helpers",
 })
+# A later build that keeps UE4SS in a ue4ss folder.
+NESTED_ZIP = make_zip({
+    "dwmapi.dll": "nested loader",
+    "ue4ss/UE4SS.dll": "nested ue4ss",
+    "ue4ss/UE4SS-settings.ini": "nested settings",
+    "ue4ss/Mods/mods.txt": "Keybinds : 1\n",
+    "ue4ss/Mods/Keybinds/Scripts/main.lua": "nested keybinds",
+})
+
+
+def add_mods(mods_folder: Path, mods: dict, mods_txt: str = None):
+    for mod, text in mods.items():
+        (mods_folder / mod / "Scripts").mkdir(parents=True, exist_ok=True)
+        (mods_folder / mod / "Scripts" / "main.lua").write_text(text)
+    if mods_txt is not None:
+        (mods_folder / "mods.txt").write_text(mods_txt)
 
 
 def release(tag, prerelease=False):
@@ -140,6 +158,9 @@ class GameFinderTest(unittest.TestCase):
         none = make_game(self.tmp / "c", None)
         self.assertEqual(gamefinder.mods_dir(new), new / "ue4ss" / "Mods")
         self.assertEqual(gamefinder.mods_dir(old), old / "Mods")
+        # A leftover ue4ss folder without UE4SS.dll in it doesn't count.
+        (old / "ue4ss" / "Mods").mkdir(parents=True)
+        self.assertEqual(gamefinder.mods_dir(old), old / "Mods")
         self.assertTrue(gamefinder.ue4ss_installed(new) and gamefinder.ue4ss_installed(old))
         self.assertFalse(gamefinder.ue4ss_installed(none))
 
@@ -196,8 +217,10 @@ class InstallTest(unittest.TestCase):
         install.ask_yes_no = lambda question, default=False: True
         install.fetch = fake_github()
         self.assertEqual(install.main([str(bare)]), 0)
-        self.assertTrue((bare / "dwmapi.dll").is_file())
-        self.assertTrue((bare / "ue4ss" / "Mods" / "RoNTAK" / "Scripts" / "main.lua").is_file())
+        self.assertEqual((bare / "UE4SS.dll").read_text(), "new ue4ss")
+        # 3.0.x is flat: RoNTAK goes in Win64/Mods, where UE4SS 3.0.1 looks.
+        self.assertTrue((bare / "Mods" / "RoNTAK" / "Scripts" / "main.lua").is_file())
+        self.assertFalse((bare / "ue4ss").exists())
 
     def test_ue4ss_release_is_the_newest_stable_3_0_x(self):
         install.fetch = fake_github()
@@ -215,61 +238,96 @@ class InstallTest(unittest.TestCase):
         self.assertEqual(install.merge_mod_lists(new, old),
                          "; built-in mods\nBPModLoaderMod : 1\nKeybinds : 0\nNewBuiltIn : 1\nRoNTAK : 1\nMyMod : 0\n")
 
-    def test_update_replaces_old_2x_layout_and_keeps_added_mods(self):
-        win64 = make_game(self.tmp / "old", "old")             # UE4SS.dll directly in Win64
+    def test_update_from_2x_replaces_ue4ss_and_keeps_added_mods(self):
+        win64 = make_game(self.tmp / "old", "old")             # 2.x: UE4SS.dll and xinput1_3.dll in Win64
         (win64 / "xinput1_3.dll").write_text("old proxy")
-        (win64 / "UE4SS-settings.ini").write_text("old settings")
-        for mod, text in (("RoNTAK", "rontak"), ("MyMod", "mine"), ("Keybinds", "old keybinds")):
-            (win64 / "Mods" / mod / "Scripts").mkdir(parents=True)
-            (win64 / "Mods" / mod / "Scripts" / "main.lua").write_text(text)
+        (win64 / "UE4SS-settings.ini").write_text("old 2.x settings")
+        add_mods(win64 / "Mods", {"RoNTAK": "rontak", "MyMod": "mine", "Keybinds": "old keybinds"},
+                 "Keybinds : 0\nRoNTAK : 1\nMyMod : 1\n")
         (win64 / "Mods" / "RoNTAK" / "bridge").mkdir()
         (win64 / "Mods" / "RoNTAK" / "bridge" / "rooms.json").write_text("{}")
-        (win64 / "Mods" / "mods.txt").write_text("Keybinds : 0\nRoNTAK : 1\nMyMod : 1\n")
         install.fetch = fake_github()
         self.assertTrue(install.get_ue4ss(win64, update=True))
-        new = win64 / "ue4ss" / "Mods"
-        # Old loader files gone: only the new loader is left.
-        for old_file in ("UE4SS.dll", "xinput1_3.dll", "UE4SS-settings.ini"):
-            self.assertFalse((win64 / old_file).exists(), old_file)
+        mods = win64 / "Mods"
+        self.assertFalse((win64 / "xinput1_3.dll").exists())  # one loader only
         self.assertEqual((win64 / "dwmapi.dll").read_text(), "new loader")
-        # Added mods moved over unchanged (bridge data too); built-ins are the new versions.
-        self.assertEqual((new / "MyMod" / "Scripts" / "main.lua").read_text(), "mine")
-        self.assertEqual((new / "RoNTAK" / "bridge" / "rooms.json").read_text(), "{}")
-        self.assertEqual((new / "Keybinds" / "Scripts" / "main.lua").read_text(), "new keybinds")
-        self.assertFalse((win64 / "Mods").exists())
-        self.assertEqual((new / "mods.txt").read_text(),
+        self.assertEqual((win64 / "UE4SS.dll").read_text(), "new ue4ss")
+        self.assertEqual((win64 / "UE4SS-settings.ini").read_text(), "default settings")  # 2.x settings replaced
+        # Added mods untouched where they were; built-ins are the new versions.
+        self.assertEqual((mods / "MyMod" / "Scripts" / "main.lua").read_text(), "mine")
+        self.assertEqual((mods / "RoNTAK" / "bridge" / "rooms.json").read_text(), "{}")
+        self.assertEqual((mods / "Keybinds" / "Scripts" / "main.lua").read_text(), "new keybinds")
+        self.assertEqual((mods / "mods.txt").read_text(),
                          "; built-in mods\nBPModLoaderMod : 1\nKeybinds : 0\nNewBuiltIn : 1\nRoNTAK : 1\nMyMod : 1\n")
-        # Everything old is in the backup.
+        self.assertFalse((win64 / "ue4ss").exists())
+        self.assertEqual(gamefinder.mods_dir(win64), mods)
         with zipfile.ZipFile(next(win64.glob("ue4ss_backup_*.zip"))) as z:
             self.assertTrue({"UE4SS.dll", "xinput1_3.dll", "UE4SS-settings.ini", "Mods/MyMod/Scripts/main.lua",
-                             "Mods/Keybinds/Scripts/main.lua", "Mods/mods.txt"} <= set(z.namelist()))
-        # The installer then puts RoNTAK into the new Mods folder.
-        self.assertEqual(gamefinder.mods_dir(win64), new)
+                             "Mods/mods.txt"} <= set(z.namelist()))
 
-    def test_ue4ss_update_keeps_settings_and_mods_and_backs_up(self):
-        win64 = self.win64
-        (win64 / "dwmapi.dll").write_text("old loader")
-        (win64 / "ue4ss" / "UE4SS-settings.ini").write_text("my settings")
-        (win64 / "ue4ss" / "Mods" / "MyMod").mkdir(parents=True, exist_ok=True)
-        (win64 / "ue4ss" / "Mods" / "MyMod" / "main.lua").write_text("mine")
-        (win64 / "ue4ss" / "Mods" / "mods.txt").write_text("MyMod : 1\n")
+    def test_update_same_version_keeps_settings_and_mods(self):
+        win64 = make_game(self.tmp / "same", None)
+        for name, text in (("dwmapi.dll", "loader"), ("UE4SS.dll", "ue4ss"), ("UE4SS-settings.ini", "my settings")):
+            (win64 / name).write_text(text)
+        add_mods(win64 / "Mods", {"RoNTAK": "rontak"}, "RoNTAK : 1\n")
         install.fetch = fake_github()
         self.assertTrue(install.get_ue4ss(win64, update=True))
-        self.assertEqual((win64 / "dwmapi.dll").read_text(), "new loader")
-        self.assertEqual((win64 / "ue4ss" / "UE4SS.dll").read_text(), "new ue4ss")
-        self.assertEqual((win64 / "ue4ss" / "UE4SS-settings.ini").read_text(), "my settings")
-        self.assertEqual((win64 / "ue4ss" / "Mods" / "MyMod" / "main.lua").read_text(), "mine")
-        self.assertIn("MyMod : 1", (win64 / "ue4ss" / "Mods" / "mods.txt").read_text())
-        backups = list(win64.glob("ue4ss_backup_*.zip"))
-        self.assertEqual(len(backups), 1)
-        with zipfile.ZipFile(backups[0]) as z:
-            self.assertIn("dwmapi.dll", z.namelist())
+        self.assertEqual((win64 / "UE4SS-settings.ini").read_text(), "my settings")
+        self.assertEqual((win64 / "UE4SS.dll").read_text(), "new ue4ss")
+        self.assertEqual((win64 / "Mods" / "RoNTAK" / "Scripts" / "main.lua").read_text(), "rontak")
+        self.assertIn("RoNTAK : 1", (win64 / "Mods" / "mods.txt").read_text())
+
+    def test_moving_between_flat_and_nested_layouts(self):
+        # From a nested build to the flat 3.0.x: mods move to Win64/Mods, the ue4ss folder goes.
+        win64 = self.win64                                      # nested: ue4ss/UE4SS.dll
+        add_mods(win64 / "ue4ss" / "Mods", {"RoNTAK": "rontak"}, "RoNTAK : 1\n")
+        self.assertEqual(install.extract_ue4ss(UE4SS_ZIP, win64)[-1], f"Moved 1 mod folder(s) to {win64 / 'Mods'}: RoNTAK")
+        self.assertFalse((win64 / "ue4ss").exists())
+        self.assertEqual((win64 / "Mods" / "RoNTAK" / "Scripts" / "main.lua").read_text(), "rontak")
+        self.assertIn("RoNTAK : 1", (win64 / "Mods" / "mods.txt").read_text())
+        # And back to a nested build.
+        install.extract_ue4ss(NESTED_ZIP, win64)
+        self.assertFalse((win64 / "UE4SS.dll").exists() or (win64 / "Mods").exists())
+        self.assertEqual((win64 / "ue4ss" / "Mods" / "RoNTAK" / "Scripts" / "main.lua").read_text(), "rontak")
+        self.assertEqual(gamefinder.mods_dir(win64), win64 / "ue4ss" / "Mods")
+
+    def test_repairs_mods_moved_into_ue4ss_folder_by_mistake(self):
+        """What the previous installer did with UE4SS 3.0.1: flat UE4SS, but mods in Win64/ue4ss/Mods."""
+        win64 = make_game(self.tmp / "broken", None)
+        for name in ("dwmapi.dll", "UE4SS.dll", "UE4SS-settings.ini"):
+            (win64 / name).write_text("3.0.1")
+        add_mods(win64 / "ue4ss" / "Mods", {"RoNTAK": "rontak", "MyMod": "mine", "Keybinds": "keybinds"})
+        with zipfile.ZipFile(win64 / "ue4ss_backup_20261031_184500.zip", "w") as z:
+            z.writestr("Mods/mods.txt", "Keybinds : 1\nRoNTAK : 1\nMyMod : 1\n")
+        notes = install.repair_misplaced_mods(win64)
+        self.assertEqual(notes[0], "Repaired your UE4SS mods folder:")
+        self.assertFalse((win64 / "ue4ss").exists())
+        for mod in ("RoNTAK", "MyMod", "Keybinds"):
+            self.assertTrue((win64 / "Mods" / mod / "Scripts" / "main.lua").is_file(), mod)
+        self.assertEqual((win64 / "Mods" / "mods.txt").read_text(), "Keybinds : 1\nRoNTAK : 1\nMyMod : 1\n")
+        self.assertEqual(gamefinder.mods_dir(win64), win64 / "Mods")
+        self.assertEqual(install.repair_misplaced_mods(win64), [])  # nothing left to repair
+        # The installer then puts RoNTAK in Win64/Mods and points the companion there.
+        install.install(win64)
+        self.assertEqual(gamefinder.load_settings()["bridge"], str(win64 / "Mods" / "RoNTAK" / "bridge"))
+
+    def test_main_repairs_before_installing(self):
+        win64 = make_game(self.tmp / "broken", None)
+        for name in ("dwmapi.dll", "UE4SS.dll"):
+            (win64 / name).write_text("3.0.1")
+        add_mods(win64 / "ue4ss" / "Mods", {"RoNTAK": "rontak"})
+        install.ask_yes_no = lambda question, default=False: False  # no UE4SS update
+        self.assertEqual(install.main([str(win64)]), 0)
+        self.assertTrue((win64 / "Mods" / "RoNTAK" / "Scripts" / "main.lua").is_file())
+        self.assertFalse((win64 / "ue4ss").exists())
 
     def test_ue4ss_zip_with_unsafe_paths_is_refused(self):
         with self.assertRaises(ValueError):
             install.extract_ue4ss(make_zip({"dwmapi.dll": "x", "../evil.txt": "x"}), self.tmp / "w")
         with self.assertRaises(ValueError):
             install.extract_ue4ss(make_zip({"readme.txt": "not ue4ss"}), self.tmp / "w")
+        with self.assertRaises(ValueError):
+            install.extract_ue4ss(make_zip({"UE4SS.dll": "x", "/abs/evil.txt": "x"}), self.tmp / "w")
 
     def test_main_installs(self):
         install.ask_yes_no = lambda question, default=False: False  # no UE4SS update
