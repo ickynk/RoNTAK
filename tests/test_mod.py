@@ -439,36 +439,25 @@ class ModTest(unittest.TestCase):
                 t.GetFName = function() return { ToString = function() return n end } end
                 return t
             end
-            local function capture_component(n, extra)
-                local comp = obj(n, extra)
-                comp.captures = {}
+            made, exports, drawn = {}, {}, false
+            function StaticConstructObject(class, outer)
+                local comp = obj("Capture", { captures = {} })
                 comp.CaptureScene = function(c)
                     c.captures[#c.captures + 1] = { ortho = c.ProjectionType, z = c.loc.Z, source = c.CaptureSource,
-                        near = c.OrthoNearClipPlane, clip = c.bEnableClipPlane }
-                    drawn = c.drawable
+                        near = c.OrthoNearClipPlane, clip = c.bEnableClipPlane, composite = c.CompositeMode }
+                    drawn = true
                 end
                 comp.K2_SetWorldLocationAndRotation = function(c, loc, rot) c.loc, c.rot = loc, rot end
                 comp.K2_GetComponentLocation = function(c) return c.loc end
                 comp.K2_GetComponentRotation = function(c) return c.rot end
-                return comp
-            end
-            made, exports, drawn = {}, {}, false
-            function StaticConstructObject(class, outer)
-                local comp = capture_component("Capture", { drawable = false })  -- renders nothing, as in game
                 made[#made + 1] = { class = class, outer = outer, comp = comp }
                 return comp
             end
-            cctv_comp = capture_component("CaptureComponent", {
-                drawable = true, ProjectionType = 0, FOVAngle = 80, CaptureSource = 1, bCaptureEveryFrame = true,
-                loc = { X = 1, Y = 2, Z = 3 }, rot = { Pitch = -20, Yaw = 45, Roll = 0 },
-                GetOwner = function() return obj("BP_CCTVCamera_C_1") end,
-            })
-            objects.SceneCaptureComponent2D = { cctv_comp }
             local rendering = obj("KismetRenderingLibrary", {
                 CreateRenderTarget2D = function(self, world, w, h, fmt) return obj("RT") end,
-                ClearRenderTarget2D = function() drawn = false end,
+                ClearRenderTarget2D = function(self, world, rt, colour) drawn = false clear_alpha = colour.A end,
                 ReadRenderTargetPixel = function()
-                    if drawn then return { R = 120, G = 110, B = 90, A = 0 } end
+                    if drawn then return { R = 120, G = 110, B = 90, A = clear_alpha * 255 } end
                     return { R = 0, G = 0, B = 0, A = 0 }
                 end,
                 ExportRenderTarget = function(self, world, rt, dir, file) exports[#exports + 1] = file end,
@@ -483,25 +472,26 @@ class ModTest(unittest.TestCase):
         self.tick()
         self.lua.globals().keybinds["F11"]()
         g = self.lua.globals()
-        self.assertEqual(list(g.exports.values()), [f"floorplan_test_{n}.png" for n in "ABCDEF"])
+        self.assertEqual(list(g.exports.values()), [f"floorplan_test_{n}.png" for n in "ABCG"])
         own = g.made[1]
         self.assertEqual(own["outer"].GetFName().ToString(), "PlayerPawn_C_0")
         shots = list(own["comp"]["captures"].values())
-        self.assertEqual([(c["ortho"], c["z"], c["source"]) for c in shots],
-                         [(1, 170, 7), (1, 5170, 7), (1, 5170, 7), (0, 5170, 2)])
+        # All orthographic; A at the cut, the rest high; final colour except G (base colour, additive).
+        self.assertEqual([(c["ortho"], c["z"], c["source"], c["composite"]) for c in shots],
+                         [(1, 170, 2, 0), (1, 5170, 2, 0), (1, 5170, 2, 0), (1, 5170, 7, 1)])
         self.assertEqual((shots[0]["near"], shots[1]["clip"], shots[2]["clip"]), (0, True, False))
-        borrowed = list(g.cctv_comp["captures"].values())
-        self.assertEqual([(c["ortho"], c["z"]) for c in borrowed], [(1, 5170), (1, 170)])
-        # Everything the test changed on the borrowed component is put back.
-        c = g.cctv_comp
-        self.assertEqual((c["ProjectionType"], c["FOVAngle"], c["CaptureSource"], c["bCaptureEveryFrame"]), (0, 80, 1, True))
-        self.assertEqual((dict(c["loc"]), c["rot"]["Yaw"]), ({"X": 1, "Y": 2, "Z": 3}, 45))
-        report = json.loads((self.bridge / "floorplan_test.json").read_text())["report"]
-        self.assertIn("1 capture components in the level: BP_CCTVCamera_C_1", report)
+        self.assertEqual(dict(own["comp"]["rot"]), {"Pitch": -90, "Yaw": 0, "Roll": 0})
+        info = json.loads((self.bridge / "floorplan_test.json").read_text())
+        self.assertEqual(info["cut_z"], 170)
+        # Top-left pixel = +X / -Y corner; top-right = +Y; bottom-left = -X.
+        self.assertEqual(info["anchors"][0], {"world": [4000, -1000], "px": [0, 0]})
+        self.assertEqual(info["anchors"][1], {"world": [4000, 5000], "px": [2048, 0]})
+        self.assertEqual(info["anchors"][2], {"world": [-2000, -1000], "px": [0, 2048]})
+        report = info["report"]
+        self.assertFalse(any("FAILED" in line for line in report), report)
         line = lambda n: next(l for l in report if l.startswith(n + ": "))
-        self.assertIn("0/9 sample pixels drawn", line("C"))
-        self.assertIn("9/9 sample pixels drawn, e.g. RGBA 120 110 90 0", line("E"))
-        self.assertIn("pitch -90", line("E"))
+        self.assertIn("9/9 sample pixels drawn, e.g. RGBA 120 110 90 255", line("G"))
+        self.assertIn("pitch -90 yaw 0 roll 0", line("A"))
 
     def add_people(self):
         self.lua.execute(r"""

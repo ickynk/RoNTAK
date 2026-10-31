@@ -5,19 +5,16 @@
 -- in the bridge folder, with floorplan_test.json describing the area covered
 -- (pixel <-> world) and what happened. It freezes the game for a moment.
 --
--- Test 1 showed that a capture component built with StaticConstructObject is
--- placed correctly but renders nothing (it is not registered with the world).
--- This round compares:
---   A, B, C  the constructed component: ortho with the near plane at the cut
---            height / with a clip plane at the cut / no cut
---   D        the constructed component in plain perspective, final colour:
---            does it render anything at all?
---   E, F     a capture component the level already has (CCTV, helicopter,
---            scope...), borrowed for one frame: ortho no cut / ortho with
---            the near plane at the cut. Every setting it had is restored.
--- A few pixels of each picture are read back in game and logged, so the
--- result doesn't depend on how the PNG is viewed (the pictures can be fully
--- transparent: Windows shows that as white).
+-- Round 3 showed that a capture component built with StaticConstructObject
+-- renders (pixels read back in game), but in base colour every pixel is saved
+-- with alpha 0: viewers show that as white. Final colour is saved opaque.
+-- This round (all orthographic, camera straight down):
+--   A  final colour, near plane at the cut height (camera at the cut)
+--   B  final colour, clip plane at the cut height (camera high up)
+--   C  final colour, nothing cut
+--   G  base colour, added onto a target cleared to alpha 1 (additive
+--      composite): does that make the plain base colour picture opaque?
+-- A few pixels of each picture are read back in game and logged.
 
 local bridge = require("bridge")
 local game = require("game")
@@ -79,8 +76,8 @@ end
 local function place(comp, loc, rot)
     try_call(comp, "K2_SetWorldLocationAndRotation", { loc, rot, false, {}, false }, { loc, rot, false, false })
     local t = transform_of(comp)
-    return t and string.format("at %.0f %.0f %.0f, pitch %.0f yaw %.0f",
-        t.loc.X, t.loc.Y, t.loc.Z, t.rot.Pitch, t.rot.Yaw) or "position unknown"
+    return t and string.format("at %.0f %.0f %.0f, pitch %.0f yaw %.0f roll %.0f",
+        t.loc.X, t.loc.Y, t.loc.Z, t.rot.Pitch, t.rot.Yaw, t.rot.Roll or 0) or "position unknown"
 end
 
 -- Reads pixels back from the render target: "N/9 drawn, e.g. R G B A".
@@ -102,25 +99,15 @@ local function sample(rendering, world, rt)
     return string.format("%d/9 sample pixels drawn%s", drawn, example and (", e.g. RGBA " .. example) or "")
 end
 
--- Settings a test changes on a capture component (saved and restored when borrowing).
-local SETTINGS = { "ProjectionType", "OrthoWidth", "FOVAngle", "CaptureSource", "bCaptureEveryFrame",
-    "bCaptureOnMovement", "TextureTarget", "bEnableClipPlane", "ClipPlaneBase", "ClipPlaneNormal",
-    "bAutoCalculateOrthoPlanes", "OrthoNearClipPlane", "OrthoFarClipPlane" }
-
 local function capture(name, comp, ctx, opts)
     local where = place(comp, opts.loc, { Pitch = -90, Yaw = 0, Roll = 0 })
     set(comp, "TextureTarget", ctx.rt)
     set(comp, "bCaptureEveryFrame", false)
     set(comp, "bCaptureOnMovement", false)
-    if opts.perspective then
-        set(comp, "ProjectionType", 0)          -- perspective
-        set(comp, "FOVAngle", 90)
-        set(comp, "CaptureSource", 2)           -- SCS_FinalColorLDR
-    else
-        set(comp, "ProjectionType", 1)          -- ECameraProjectionMode::Orthographic
-        set(comp, "OrthoWidth", AREA_CM)
-        set(comp, "CaptureSource", 7)           -- SCS_BaseColor
-    end
+    set(comp, "ProjectionType", 1)              -- ECameraProjectionMode::Orthographic
+    set(comp, "OrthoWidth", AREA_CM)
+    set(comp, "CaptureSource", opts.base_colour and 7 or 2)  -- SCS_BaseColor / SCS_FinalColorLDR
+    set(comp, "CompositeMode", opts.additive and 1 or 0)     -- ESceneCaptureCompositeMode: Additive / Overwrite
     set(comp, "bEnableClipPlane", opts.clip ~= nil)
     if opts.clip then
         set(comp, "ClipPlaneBase", { X = opts.loc.X, Y = opts.loc.Y, Z = opts.clip })
@@ -131,7 +118,8 @@ local function capture(name, comp, ctx, opts)
         set(comp, "OrthoNearClipPlane", 0)
         set(comp, "OrthoFarClipPlane", 100000)
     end
-    pcall(function() ctx.rendering:ClearRenderTarget2D(ctx.world, ctx.rt, { R = 0, G = 0, B = 0, A = 0 }) end)
+    local clear_alpha = opts.additive and 1 or 0
+    pcall(function() ctx.rendering:ClearRenderTarget2D(ctx.world, ctx.rt, { R = 0, G = 0, B = 0, A = clear_alpha }) end)
     local ok, err = pcall(function() comp:CaptureScene() end)
     if not ok then
         note(name .. ": CaptureScene FAILED: " .. tostring(err))
@@ -141,38 +129,6 @@ local function capture(name, comp, ctx, opts)
     local file = "floorplan_test_" .. name .. ".png"
     local exported = try_call(ctx.rendering, "ExportRenderTarget", { ctx.world, ctx.rt, bridge.dir, file })
     note(string.format("%s: camera %s; %s; %s", name, where, pixels, exported and ("saved " .. file) or "export FAILED"))
-end
-
--- A capture component the level already has, registered with the renderer.
-local function find_borrowable()
-    local found = FindAllOf("SceneCaptureComponent2D") or {}
-    local names, pick = {}, nil
-    for _, comp in ipairs(found) do
-        if valid(comp) then
-            local ok, owner = pcall(function() return comp:GetOwner() end)
-            local owner_name = ok and valid(owner) and game.object_name(owner) or "no owner"
-            if #names < 12 then names[#names + 1] = owner_name end
-            -- Skip class defaults (no owner) and anything that isn't placed in the level.
-            if not pick and ok and valid(owner) and not owner_name:find("Default__", 1, true) then pick = comp end
-        end
-    end
-    note(string.format("%d capture components in the level: %s", #found, table.concat(names, ", ")))
-    return pick
-end
-
-local function borrow(comp, ctx, runs)
-    local saved = {}
-    for _, prop in ipairs(SETTINGS) do saved[prop] = get(comp, prop) end
-    local where = transform_of(comp)
-    for _, run in ipairs(runs) do
-        local ok, err = pcall(capture, run.name, comp, ctx, run.opts)
-        if not ok then note(run.name .. ": " .. tostring(err)) end
-    end
-    for _, prop in ipairs(SETTINGS) do
-        if saved[prop] ~= nil then pcall(function() comp[prop] = saved[prop] end) end
-    end
-    if where then place(comp, where.loc, where.rot) end
-    note("borrowed component restored")
 end
 
 function floorplan.test()
@@ -206,7 +162,6 @@ function floorplan.test()
     local low = { X = center.x, Y = center.y, Z = cut }
     local high = { X = center.x, Y = center.y, Z = cut + HIGH_ABOVE_CUT }
 
-    -- A-D: a component of our own.
     local component_class = find("/Script/Engine.SceneCaptureComponent2D")
     if StaticConstructObject and valid(component_class) then
         local made_ok, comp = pcall(StaticConstructObject, component_class, pawn)
@@ -215,7 +170,7 @@ function floorplan.test()
                 { name = "A", opts = { loc = low, near_plane = true } },
                 { name = "B", opts = { loc = high, clip = cut } },
                 { name = "C", opts = { loc = high } },
-                { name = "D", opts = { loc = high, perspective = true } },
+                { name = "G", opts = { loc = high, base_colour = true, additive = true } },
             }) do
                 local run_ok, err = pcall(capture, run.name, comp, ctx, run.opts)
                 if not run_ok then note(run.name .. ": " .. tostring(err)) end
@@ -225,15 +180,6 @@ function floorplan.test()
         end
     else
         note("StaticConstructObject / SceneCaptureComponent2D not available")
-    end
-
-    -- E-F: a component the level already has.
-    local borrowed = find_borrowable()
-    if borrowed then
-        borrow(borrowed, ctx, {
-            { name = "E", opts = { loc = high } },
-            { name = "F", opts = { loc = low, near_plane = true } },
-        })
     end
 
     -- Pixel (u, v) <-> world: u runs along +Y, v along -X, AREA_CM across SIZE_PX.
