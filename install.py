@@ -57,12 +57,17 @@ UE4SS_RELEASES_API = "https://api.github.com/repos/UE4SS-RE/RE-UE4SS/releases?pe
 UE4SS_SERIES = re.compile(r"^v?3\.0\.(\d+)$")
 # The main download, e.g. UE4SS_v3.0.1.zip (not zDEV-..., zCustomGameConfigs.zip...).
 UE4SS_ASSET = re.compile(r"^UE4SS_v[^/]*\.zip$")
-# Kept as they are when updating (your own UE4SS settings).
-UE4SS_KEEP = {"ue4ss/UE4SS-settings.ini"}
-MODS_LIST = "ue4ss/Mods/mods.txt"
-# UE4SS 2.x kept everything directly in Win64: these are its loader files,
-# removed when it is replaced (only if UE4SS.dll is there, so it is UE4SS's).
-OLD_LOADER_FILES = ("UE4SS.dll", "xinput1_3.dll", "UE4SS.pdb", "UE4SS-settings.ini", "UE4SS.log")
+# Where UE4SS keeps its files, relative to Win64. 2.x and the 3.0.x releases
+# are "flat" (everything in Win64); later builds are "nested" (everything but
+# the proxy DLL in a ue4ss folder). The layout is read from the files, never
+# assumed.
+LAYOUTS = {
+    "flat": {"dll": "UE4SS.dll", "settings": "UE4SS-settings.ini", "mods": "Mods"},
+    "nested": {"dll": "ue4ss/UE4SS.dll", "settings": "ue4ss/UE4SS-settings.ini", "mods": "ue4ss/Mods"},
+}
+# The DLL the game loads, which starts UE4SS (2.x: xinput1_3.dll, 3.x: dwmapi.dll).
+PROXY_DLLS = ("dwmapi.dll", "xinput1_3.dll")
+LOADER_EXTRAS = ("UE4SS.pdb", "UE4SS.log")
 
 
 def fetch(url: str) -> bytes:
@@ -95,15 +100,25 @@ def find_ue4ss_release():
     return best[1:] if best else None
 
 
-def old_layout(win64: Path) -> bool:
-    """UE4SS 2.x: UE4SS.dll and Mods directly in Win64, no ue4ss folder."""
-    return (win64 / "UE4SS.dll").is_file() and not (win64 / "ue4ss").is_dir()
+def installed_layout(win64: Path):
+    if (win64 / LAYOUTS["nested"]["dll"]).is_file():
+        return "nested"
+    if (win64 / LAYOUTS["flat"]["dll"]).is_file():
+        return "flat"
+    return None
+
+
+def zip_layout(names) -> str:
+    for layout in ("nested", "flat"):
+        if LAYOUTS[layout]["dll"] in names:
+            return layout
+    raise ValueError("this doesn't look like a UE4SS release (no UE4SS.dll)")
 
 
 def backup_ue4ss(win64: Path) -> Path:
-    """Zips the current UE4SS: loader files, settings and the Mods folder."""
+    """Zips the current UE4SS: loader files, settings and the Mods folders."""
     backup = win64 / f"ue4ss_backup_{time.strftime('%Y%m%d_%H%M%S')}.zip"
-    files = [win64 / name for name in OLD_LOADER_FILES + ("dwmapi.dll",)]
+    files = [win64 / name for name in PROXY_DLLS + LOADER_EXTRAS + ("UE4SS.dll", "UE4SS-settings.ini")]
     for folder in (win64 / "ue4ss", win64 / "Mods"):
         if folder.is_dir():
             files += [f for f in folder.rglob("*") if "bridge" not in f.relative_to(win64).parts]
@@ -136,54 +151,95 @@ def merge_mod_lists(new_text: str, old_text: str) -> str:
     return "\n".join(lines + extra) + "\n"
 
 
-def extract_ue4ss(data: bytes, win64: Path, old_mods_list: "str | None" = None) -> list:
-    """Extracts a UE4SS release zip into Win64. Your UE4SS settings are kept,
-    mods.txt is merged with yours, other files are replaced. Returns notes."""
+def move_mods(source: Path, dest: Path) -> list:
+    """Moves mod folders from source into dest (folders dest already has stay
+    as they are), then removes source. Returns notes."""
+    moved = []
+    dest.mkdir(parents=True, exist_ok=True)
+    for child in sorted(source.iterdir()):
+        if child.is_dir() and not (dest / child.name).exists():
+            shutil.move(str(child), str(dest / child.name))
+            moved.append(child.name)
+    shutil.rmtree(source, ignore_errors=True)
+    return [f"Moved {len(moved)} mod folder(s) to {dest}: {', '.join(moved)}"] if moved else []
+
+
+def extract_ue4ss(data: bytes, win64: Path) -> list:
+    """Installs a UE4SS release zip into Win64 over whatever UE4SS is there.
+    UE4SS's own files are replaced; mods you added stay (moved if the new
+    version keeps mods elsewhere); mods.txt is merged with yours; your
+    settings are kept unless the old UE4SS was a different generation.
+    Returns notes for the user."""
     notes = []
-    mods_list = win64 / "ue4ss" / "Mods" / "mods.txt"
-    if old_mods_list is None and mods_list.is_file():
-        old_mods_list = mods_list.read_text(encoding="utf-8", errors="replace")
     with zipfile.ZipFile(io.BytesIO(data)) as z:
         names = [n for n in z.namelist() if not n.endswith("/")]
-        if "dwmapi.dll" not in names and "ue4ss/UE4SS.dll" not in names:
-            raise ValueError("this doesn't look like a UE4SS release (no dwmapi.dll / ue4ss/UE4SS.dll)")
         for name in names:
             rel = PurePosixPath(name)
             if rel.is_absolute() or ".." in rel.parts:
                 raise ValueError(f"unsafe path in the zip: {name}")
+        new = LAYOUTS[zip_layout(names)]
+        old_name = installed_layout(win64)
+        old = LAYOUTS.get(old_name)
+
+        old_list = old and win64 / old["mods"] / "mods.txt"
+        old_list_text = old_list.read_text(encoding="utf-8", errors="replace") if old_list and old_list.is_file() else None
+        # An old proxy DLL the new version doesn't use would start a second UE4SS.
+        stale_proxies = [p for p in PROXY_DLLS if p not in names and (win64 / p).is_file()] if old else []
+        keep_settings = old is new and not stale_proxies and (win64 / new["settings"]).is_file()
+        if old and old is not new:
+            for name in (old["dll"], old["settings"]):
+                (win64 / name).unlink(missing_ok=True)
+        for proxy in stale_proxies:
+            (win64 / proxy).unlink()
+            notes.append(f"Removed the old loader {proxy}")
+        for extra in LOADER_EXTRAS:
+            (win64 / extra).unlink(missing_ok=True)
+
+        mods_list = new["mods"] + "/mods.txt"
         for name in names:
             dest = win64.joinpath(*PurePosixPath(name).parts)
-            if name in UE4SS_KEEP and dest.exists():
+            if name == new["settings"] and keep_settings:
                 notes.append(f"Kept your {name}")
                 continue
-            data_out = z.read(name)
-            if name == MODS_LIST and old_mods_list:
-                data_out = merge_mod_lists(data_out.decode("utf-8", errors="replace"), old_mods_list).encode("utf-8")
+            content = z.read(name)
+            if name == mods_list and old_list_text:
+                content = merge_mod_lists(content.decode("utf-8", errors="replace"), old_list_text).encode("utf-8")
                 notes.append("Merged your mod list into the new mods.txt")
             dest.parent.mkdir(parents=True, exist_ok=True)
-            dest.write_bytes(data_out)
+            dest.write_bytes(content)
+
+    if old and old is not new and (win64 / old["mods"]).is_dir():
+        notes += move_mods(win64 / old["mods"], win64 / new["mods"])
+    if old_name == "nested" and new is LAYOUTS["flat"]:
+        shutil.rmtree(win64 / "ue4ss", ignore_errors=True)  # in the backup
     return notes
 
 
-def migrate_old_mods(win64: Path) -> list:
-    """After replacing a UE4SS 2.x: moves the mods you added from Win64/Mods into
-    ue4ss/Mods (UE4SS's own mods there are now the new versions) and removes
-    the old folder's leftovers (they are in the backup)."""
-    notes = []
-    old, new = win64 / "Mods", win64 / "ue4ss" / "Mods"
-    if not old.is_dir():
-        return notes
-    for child in sorted(old.iterdir()):
-        if child.is_dir() and not (new / child.name).exists():
-            shutil.move(str(child), str(new / child.name))
-            notes.append(f"Moved your mod {child.name} to {new}")
-    shutil.rmtree(old, ignore_errors=True)
-    return notes
+def repair_misplaced_mods(win64: Path) -> list:
+    """Undoes an earlier installer mistake: with a flat UE4SS (UE4SS.dll in
+    Win64), mods had been moved into Win64/ue4ss/Mods, where UE4SS doesn't
+    look. Moves them back to Win64/Mods and restores mods.txt from the newest
+    backup. Returns notes (empty when there was nothing to fix)."""
+    stray = win64 / "ue4ss" / "Mods"
+    if installed_layout(win64) != "flat" or not stray.is_dir():
+        return []
+    notes = move_mods(stray, win64 / "Mods")
+    mods_list = win64 / "Mods" / "mods.txt"
+    if not mods_list.is_file():
+        for backup in sorted(win64.glob("ue4ss_backup_*.zip"), reverse=True):
+            with zipfile.ZipFile(backup) as z:
+                if "Mods/mods.txt" in z.namelist():
+                    mods_list.write_bytes(z.read("Mods/mods.txt"))
+                    notes.append(f"Restored mods.txt from {backup.name}")
+                    break
+    if not any(f.is_file() for f in (win64 / "ue4ss").rglob("*")):
+        shutil.rmtree(win64 / "ue4ss", ignore_errors=True)
+    return ["Repaired your UE4SS mods folder:"] + notes
 
 
 def get_ue4ss(win64: Path, update: bool) -> bool:
-    """Downloads the latest stable UE4SS and installs it into win64. An existing
-    UE4SS is backed up first; an old (2.x) one is replaced, keeping your mods."""
+    """Downloads the newest stable UE4SS 3.0.x and installs it into win64. An
+    existing UE4SS is backed up first."""
     print("  Looking up the latest UE4SS 3.0.x release on GitHub...")
     release = find_ue4ss_release()
     if not release:
@@ -197,19 +253,10 @@ def get_ue4ss(win64: Path, update: bool) -> bool:
     except (OSError, zipfile.BadZipFile) as e:
         print(f"  Download failed: {e}")
         return False
-    migrating = old_layout(win64)
-    old_mods_list = None
     if update:
         print(f"  Backed up your current UE4SS to {backup_ue4ss(win64)}")
-    if migrating:
-        old_list = win64 / "Mods" / "mods.txt"
-        old_mods_list = old_list.read_text(encoding="utf-8", errors="replace") if old_list.is_file() else None
-        for old_file in OLD_LOADER_FILES:
-            (win64 / old_file).unlink(missing_ok=True)
     try:
-        notes = extract_ue4ss(data, win64, old_mods_list)
-        if migrating:
-            notes += migrate_old_mods(win64)
+        notes = extract_ue4ss(data, win64)
     except (ValueError, zipfile.BadZipFile, OSError) as e:
         print(f"  Couldn't install UE4SS: {e}")
         return False
@@ -264,7 +311,9 @@ def main(argv=None) -> int:
             manual_ue4ss_steps(win64)
             return 1
     else:
-        print("UE4SS: installed" + (" (older 2.x layout)" if old_layout(win64) else ""))
+        for note in repair_misplaced_mods(win64):
+            print("  " + note)
+        print("UE4SS: installed")
         if ask_yes_no("Update UE4SS to the latest stable 3.0.x? UE4SS's own files are replaced; your mods and "
                       "mod list are kept, and the old version is backed up first"):
             get_ue4ss(win64, update=True)

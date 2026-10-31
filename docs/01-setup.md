@@ -40,8 +40,8 @@ Double-click **`Install RoNTAK.bat`** in the RoNTAK folder. It:
   - backs up everything first to `ue4ss_backup_<date>.zip` in the game's `Win64` folder,
   - replaces UE4SS's own files (the loader and its built-in mods),
   - keeps the mods you added and your on/off choices in `mods.txt` (new built-in mods are added to it),
-  - keeps your `UE4SS-settings.ini`, except when replacing an old UE4SS 2.x (files directly in `Win64`): that is
-    moved to the new layout (`Win64\ue4ss\Mods`), with your mods moved over and the new default settings,
+  - keeps your `UE4SS-settings.ini`, except when replacing an old UE4SS 2.x: that gets the new default settings
+    (yours is in the backup), and its old loader `xinput1_3.dll` is removed so only one UE4SS starts,
 - copies the mod into UE4SS's `Mods` folder, and
 - remembers where it put it.
 
@@ -95,6 +95,7 @@ without Ready or Not.
 | --- | --- |
 | "Python 3 is not installed" | Step 1, then run the `.bat` again. Make sure "Add python.exe to PATH" was ticked |
 | Installer says UE4SS is not installed | Answer **y** to let it download UE4SS, or step 3: the UE4SS files must be in the same folder as the game's `…-Win64-Shipping.exe` |
+| UE4SS log says `cannot find the path specified … \Win64\Mods` | An earlier RoNTAK installer put the mods in `Win64\ue4ss\Mods`. Run `Install RoNTAK.bat` again: it moves them back |
 | Game crashes on start after a UE4SS update | Delete `dwmapi.dll` and the `ue4ss` folder in `Win64`, then extract the `ue4ss_backup_<date>.zip` the installer made into `Win64`, and run the installer again (answer **n** to the update) |
 | ATAK screen stays "Waiting for game" | Load into a mission. Check the UE4SS console shows `[RoNTAK] INFO loaded` |
 | Installer can't find the game | Paste the folder Steam's **Browse local files** opens. If it still fails, it prints the program names it found: send them to the RoNTAK developer |
@@ -104,7 +105,8 @@ without Ready or Not.
 
 ## Manual install (without the .bat files)
 
-1. Copy `mod\RoNTAK` into UE4SS's `Mods` folder: `Win64\ue4ss\Mods` (or `Win64\Mods` with older UE4SS).
+1. Copy `mod\RoNTAK` into UE4SS's `Mods` folder, next to `UE4SS.dll`: `Win64\Mods` with UE4SS 3.0.x (and 2.x),
+   or `Win64\ue4ss\Mods` with later builds that keep UE4SS in a `ue4ss` folder.
 2. In the `companion` folder, run:
    ```
    python server.py --bridge "C:\...\Mods\RoNTAK\bridge"
