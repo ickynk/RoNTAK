@@ -15,6 +15,7 @@ reloads it.
 | **F8** | Lists game classes (with live counts and properties) and functions | `bridge\discovery.txt` |
 | **F9** | Start/stop logging calls to the functions in `config.sniff` | `bridge\sniff.txt` and the console |
 | **F10** | Sends `config.test_order` (GOLD Fall In) through the normal order path | console |
+| **F11** | TEST: top-down floor plan pictures of 60 × 60 m around you, three ways of cutting off what's above | `bridge\floorplan_test_A/B/C.png`, `bridge\floorplan_test.json` |
 
 The UE4SS **header dump** is the most useful tool. In a mission, open the UE4SS console window, go to the
 **Dumpers** tab and click **Dump CXX Headers**. A `CXXHeaderDump` folder appears next to the UE4SS files. The two
@@ -74,6 +75,8 @@ The helicopter, drone and CCTV names are in `config.cameras`.
 - **The air unit never marks anyone:** the UE4SS console prints `helicopter is tracking suspect ...` when it
   picks someone up. If that never appears while the helicopter follows someone, check that
   `target_found_hook` / `target_lost_hook` still exist (search the header dump for `OnTargetFound`).
+- **Turning the camera features off:** set `enabled = false` at the top of `config.cameras`. The mod then reads
+  nothing about the helicopter, drones or CCTV.
 - **CCTV never appears:** it only shows once the cameras are wired to your tablet, or while you watch a feed.
 - **CCTV never marks anyone:** the console prints `CCTV <camera> sees suspect ...` when it does. If it prints
   `CCTV line of sight check failed`, the line-of-sight function changed: look up `HasLineOfSightTo` in the header
