@@ -1,7 +1,10 @@
 """Tests for finding the game (companion/gamefinder.py) and installing the mod (install.py)."""
 
+import io
+import json
 import sys
 import tempfile
+import zipfile
 import unittest
 from pathlib import Path
 
@@ -40,10 +43,48 @@ def make_game(library: Path, ue4ss: str = "3.x") -> Path:
     return win64
 
 
+def make_zip(files: dict) -> bytes:
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        for name, text in files.items():
+            z.writestr(name, text)
+    return buf.getvalue()
+
+
+UE4SS_ZIP = make_zip({
+    "dwmapi.dll": "new loader",
+    "ue4ss/UE4SS.dll": "new ue4ss",
+    "ue4ss/UE4SS-settings.ini": "default settings",
+    "ue4ss/Mods/mods.txt": "default mods",
+})
+
+
+def fake_github(experimental=True):
+    """Stands in for install.fetch: GitHub's release API and the download."""
+    def release(tag, assets):
+        return json.dumps({"tag_name": tag, "assets": [
+            {"name": a, "browser_download_url": "https://example/" + a} for a in assets]}).encode()
+
+    def fetch(url):
+        if url.endswith("experimental-latest"):
+            if not experimental:
+                raise OSError("404")
+            return release("experimental-latest", ["zDEV-UE4SS_v3.0.1-400-gabc.zip", "UE4SS_v3.0.1-400-gabc.zip"])
+        if url.endswith("/latest"):
+            return release("v3.0.1", ["zCustomGameConfigs.zip", "UE4SS_v3.0.1.zip"])
+        return UE4SS_ZIP
+    return fetch
+
+
 class GameFinderTest(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())
         gamefinder.SETTINGS_FILE = self.tmp / "settings.json"
+        # Tests swap in fake questions and downloads; never the real ones.
+        real = (install.ask_yes_no, install.fetch)
+        install.ask_yes_no = lambda question, default=False: self.fail("unexpected question: " + question)
+        install.fetch = lambda url: self.fail("unexpected download: " + url)
+        self.addCleanup(lambda: setattr(install, "ask_yes_no", real[0]) or setattr(install, "fetch", real[1]))
 
     def test_library_folders(self):
         self.assertEqual(gamefinder.library_folders(VDF),
@@ -109,6 +150,11 @@ class InstallTest(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())
         gamefinder.SETTINGS_FILE = self.tmp / "settings.json"
+        # Tests swap in fake questions and downloads; never the real ones.
+        real = (install.ask_yes_no, install.fetch)
+        install.ask_yes_no = lambda question, default=False: self.fail("unexpected question: " + question)
+        install.fetch = lambda url: self.fail("unexpected download: " + url)
+        self.addCleanup(lambda: setattr(install, "ask_yes_no", real[0]) or setattr(install, "fetch", real[1]))
         self.win64 = make_game(self.tmp / "lib")
 
     def test_install_copies_mod_and_saves_bridge(self):
@@ -137,10 +183,49 @@ class InstallTest(unittest.TestCase):
 
     def test_main_stops_without_ue4ss(self):
         bare = make_game(self.tmp / "bare", None)
+        install.ask_yes_no = lambda question, default=False: False  # "no" to downloading UE4SS
         self.assertEqual(install.main([str(bare)]), 1)
         self.assertFalse((bare / "Mods").exists())
 
+    def test_main_downloads_ue4ss_when_missing(self):
+        bare = make_game(self.tmp / "bare", None)
+        install.ask_yes_no = lambda question, default=False: True
+        install.fetch = fake_github()
+        self.assertEqual(install.main([str(bare)]), 0)
+        self.assertTrue((bare / "dwmapi.dll").is_file())
+        self.assertTrue((bare / "ue4ss" / "Mods" / "RoNTAK" / "Scripts" / "main.lua").is_file())
+
+    def test_ue4ss_release_picks_main_zip_and_falls_back_to_stable(self):
+        install.fetch = fake_github(experimental=False)
+        version, name, url = install.find_ue4ss_release()
+        self.assertEqual((version, name), ("v3.0.1", "UE4SS_v3.0.1.zip"))
+        install.fetch = fake_github()
+        self.assertEqual(install.find_ue4ss_release()[1], "UE4SS_v3.0.1-400-gabc.zip")
+
+    def test_ue4ss_update_keeps_settings_and_backs_up(self):
+        win64 = self.win64
+        (win64 / "dwmapi.dll").write_text("old loader")
+        (win64 / "ue4ss" / "UE4SS-settings.ini").write_text("my settings")
+        (win64 / "ue4ss" / "Mods").mkdir(parents=True, exist_ok=True)
+        (win64 / "ue4ss" / "Mods" / "mods.txt").write_text("my mods")
+        install.fetch = fake_github()
+        self.assertTrue(install.get_ue4ss(win64, update=True))
+        self.assertEqual((win64 / "dwmapi.dll").read_text(), "new loader")
+        self.assertEqual((win64 / "ue4ss" / "UE4SS-settings.ini").read_text(), "my settings")
+        self.assertEqual((win64 / "ue4ss" / "Mods" / "mods.txt").read_text(), "my mods")
+        backups = list(win64.glob("ue4ss_backup_*.zip"))
+        self.assertEqual(len(backups), 1)
+        with zipfile.ZipFile(backups[0]) as z:
+            self.assertIn("dwmapi.dll", z.namelist())
+
+    def test_ue4ss_zip_with_unsafe_paths_is_refused(self):
+        with self.assertRaises(ValueError):
+            install.extract_ue4ss(make_zip({"dwmapi.dll": "x", "../evil.txt": "x"}), self.tmp / "w")
+        with self.assertRaises(ValueError):
+            install.extract_ue4ss(make_zip({"readme.txt": "not ue4ss"}), self.tmp / "w")
+
     def test_main_installs(self):
+        install.ask_yes_no = lambda question, default=False: False  # no UE4SS update
         self.assertEqual(install.main([str(self.win64)]), 0)
 
 
