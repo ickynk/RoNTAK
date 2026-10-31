@@ -15,11 +15,14 @@ About 10 minutes, once. You need Ready or Not (Steam) on Windows.
 
 ## Step 3: Install UE4SS (the mod loader)
 
+**Easiest:** skip this step. In step 4 the installer offers to download and install UE4SS for you
+(answer **y**). The steps below are for installing it by hand.
+
 1. In Steam, right-click **Ready or Not** → **Manage** → **Browse local files**.
 2. Open `ReadyOrNot` → `Binaries` → `Win64`. You should see a program named like
    `ReadyOrNot…-Win64-Shipping.exe`.
-3. Download the latest `UE4SS_v….zip` from <https://github.com/UE4SS-RE/RE-UE4SS/releases> (not the
-   `zDEV` one).
+3. Download the newest **3.0.x** `UE4SS_v3.0.….zip` from <https://github.com/UE4SS-RE/RE-UE4SS/releases>
+   (not the `zDEV` one, and not an experimental build).
 4. Extract **everything** in it into that `Win64` folder.
 
 > If the game crashes on start with UE4SS, check the UE4SS GitHub issues or the Ready or Not modding
@@ -30,7 +33,15 @@ About 10 minutes, once. You need Ready or Not (Steam) on Windows.
 Double-click **`Install RoNTAK.bat`** in the RoNTAK folder. It:
 
 - finds Ready or Not through Steam (on any drive),
-- checks that UE4SS is installed,
+- checks that UE4SS is installed. If it isn't, it asks **"Download and install UE4SS 3.0.x (latest stable) now?"**:
+  answer **y** and it downloads the newest stable **3.0.x** release from UE4SS's GitHub page (the version line
+  recommended for Ready or Not since its move to Unreal Engine 5) and puts it in the right folder.
+- if UE4SS is installed, offers to **update** it to the newest stable 3.0.x (press Enter to skip). Updating:
+  - backs up everything first to `ue4ss_backup_<date>.zip` in the game's `Win64` folder,
+  - replaces UE4SS's own files (the loader and its built-in mods),
+  - keeps the mods you added and your on/off choices in `mods.txt` (new built-in mods are added to it),
+  - keeps your `UE4SS-settings.ini`, except when replacing an old UE4SS 2.x (files directly in `Win64`): that is
+    moved to the new layout (`Win64\ue4ss\Mods`), with your mods moved over and the new default settings,
 - copies the mod into UE4SS's `Mods` folder, and
 - remembers where it put it.
 
@@ -83,7 +94,8 @@ without Ready or Not.
 | Problem | Fix |
 | --- | --- |
 | "Python 3 is not installed" | Step 1, then run the `.bat` again. Make sure "Add python.exe to PATH" was ticked |
-| Installer says UE4SS is not installed | Step 3: the UE4SS files must be in the same folder as the game's `…-Win64-Shipping.exe` |
+| Installer says UE4SS is not installed | Answer **y** to let it download UE4SS, or step 3: the UE4SS files must be in the same folder as the game's `…-Win64-Shipping.exe` |
+| Game crashes on start after a UE4SS update | Delete `dwmapi.dll` and the `ue4ss` folder in `Win64`, then extract the `ue4ss_backup_<date>.zip` the installer made into `Win64`, and run the installer again (answer **n** to the update) |
 | ATAK screen stays "Waiting for game" | Load into a mission. Check the UE4SS console shows `[RoNTAK] INFO loaded` |
 | Installer can't find the game | Paste the folder Steam's **Browse local files** opens. If it still fails, it prints the program names it found: send them to the RoNTAK developer |
 | No **Phone** button | It's hidden on screens narrower than a phone; widen the window. After an update, refresh the page |

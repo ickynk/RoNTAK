@@ -57,9 +57,9 @@ It ships filled in and tested. If a game update breaks something, the mod has to
 
 1. Install [Python 3](https://www.python.org/downloads/) (tick **"Add python.exe to PATH"**).
 2. Download **RoNTAK-x.y.z.zip** from this repository's **Releases** and extract it.
-3. Install [UE4SS](https://github.com/UE4SS-RE/RE-UE4SS/releases) into the game's `Binaries\Win64` folder.
-4. Double-click **`Install RoNTAK.bat`**.
-5. Start a mission, then double-click **`Start RoNTAK.bat`**. Press **Phone** on the ATAK screen to open it on
+3. Double-click **`Install RoNTAK.bat`**. It finds the game, offers to download and install
+   [UE4SS](https://github.com/UE4SS-RE/RE-UE4SS/releases) (the mod loader) if you don't have it, and installs the mod.
+4. Start a mission, then double-click **`Start RoNTAK.bat`**. Press **Phone** on the ATAK screen to open it on
    a phone or tablet.
 
 Step by step, with where to find everything: [docs/01-setup.md](docs/01-setup.md).
