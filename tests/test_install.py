@@ -61,13 +61,20 @@ UE4SS_ZIP = make_zip({
 })
 
 
-def fake_github():
-    """Stands in for install.fetch: GitHub's release API and the download."""
+def release(tag, prerelease=False):
+    assets = [f"zDEV-UE4SS_{tag}.zip", "zCustomGameConfigs.zip", f"UE4SS_{tag}.zip"]
+    return {"tag_name": tag, "prerelease": prerelease, "draft": False,
+            "assets": [{"name": a, "browser_download_url": "https://example/" + a} for a in assets]}
+
+
+def fake_github(releases=None):
+    """Stands in for install.fetch: GitHub's release list and the download."""
+    releases = releases or [release("experimental-latest", True), release("v3.0.1"), release("v3.0.0"),
+                            release("v2.5.2")]
+
     def fetch(url):
-        if url == install.UE4SS_RELEASE_API:
-            assets = ["zDEV-UE4SS_v3.0.1.zip", "zCustomGameConfigs.zip", "UE4SS_v3.0.1.zip"]
-            return json.dumps({"tag_name": "v3.0.1", "assets": [
-                {"name": a, "browser_download_url": "https://example/" + a} for a in assets]}).encode()
+        if url == install.UE4SS_RELEASES_API:
+            return json.dumps(releases).encode()
         assert url == "https://example/UE4SS_v3.0.1.zip", url
         return UE4SS_ZIP
     return fetch
@@ -192,10 +199,15 @@ class InstallTest(unittest.TestCase):
         self.assertTrue((bare / "dwmapi.dll").is_file())
         self.assertTrue((bare / "ue4ss" / "Mods" / "RoNTAK" / "Scripts" / "main.lua").is_file())
 
-    def test_ue4ss_release_is_the_stable_main_zip(self):
+    def test_ue4ss_release_is_the_newest_stable_3_0_x(self):
         install.fetch = fake_github()
         self.assertEqual(install.find_ue4ss_release()[:2], ("v3.0.1", "UE4SS_v3.0.1.zip"))
-        self.assertTrue(install.UE4SS_RELEASE_API.endswith("/releases/latest"))
+        # Later series, pre-releases and experimental builds are passed over.
+        install.fetch = fake_github([release("v4.0.0"), release("v3.1.0"), release("v3.0.9", prerelease=True),
+                                     release("v3.0.10"), release("v3.0.2"), release("experimental-latest", True)])
+        self.assertEqual(install.find_ue4ss_release()[:2], ("v3.0.10", "UE4SS_v3.0.10.zip"))
+        install.fetch = fake_github([release("v4.0.0"), release("experimental-latest", True)])
+        self.assertIsNone(install.find_ue4ss_release())
 
     def test_merge_mod_lists_keeps_choices_and_added_mods(self):
         new = "; built-in mods\nBPModLoaderMod : 1\nKeybinds : 1\nNewBuiltIn : 1\n"

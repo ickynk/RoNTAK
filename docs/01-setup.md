@@ -15,14 +15,14 @@ About 10 minutes, once. You need Ready or Not (Steam) on Windows.
 
 ## Step 3: Install UE4SS (the mod loader)
 
-**Easiest:** skip this step. In step 4 the installer offers to download and install the latest stable UE4SS for you
+**Easiest:** skip this step. In step 4 the installer offers to download and install UE4SS for you
 (answer **y**). The steps below are for installing it by hand.
 
 1. In Steam, right-click **Ready or Not** → **Manage** → **Browse local files**.
 2. Open `ReadyOrNot` → `Binaries` → `Win64`. You should see a program named like
    `ReadyOrNot…-Win64-Shipping.exe`.
-3. Download the latest `UE4SS_v….zip` from <https://github.com/UE4SS-RE/RE-UE4SS/releases> (not the
-   `zDEV` one).
+3. Download the newest **3.0.x** `UE4SS_v3.0.….zip` from <https://github.com/UE4SS-RE/RE-UE4SS/releases>
+   (not the `zDEV` one, and not an experimental build).
 4. Extract **everything** in it into that `Win64` folder.
 
 > If the game crashes on start with UE4SS, check the UE4SS GitHub issues or the Ready or Not modding
@@ -33,9 +33,10 @@ About 10 minutes, once. You need Ready or Not (Steam) on Windows.
 Double-click **`Install RoNTAK.bat`** in the RoNTAK folder. It:
 
 - finds Ready or Not through Steam (on any drive),
-- checks that UE4SS is installed. If it isn't, it asks **"Download and install the latest UE4SS now?"**: answer
-  **y** and it downloads the latest stable release from UE4SS's GitHub page and puts it in the right folder.
-- if UE4SS is installed, offers to **update** it to the latest stable release (press Enter to skip). Updating:
+- checks that UE4SS is installed. If it isn't, it asks **"Download and install UE4SS 3.0.x (latest stable) now?"**:
+  answer **y** and it downloads the newest stable **3.0.x** release from UE4SS's GitHub page (the version line
+  recommended for Ready or Not since its move to Unreal Engine 5) and puts it in the right folder.
+- if UE4SS is installed, offers to **update** it to the newest stable 3.0.x (press Enter to skip). Updating:
   - backs up everything first to `ue4ss_backup_<date>.zip` in the game's `Win64` folder,
   - replaces UE4SS's own files (the loader and its built-in mods),
   - keeps the mods you added and your on/off choices in `mods.txt` (new built-in mods are added to it),
