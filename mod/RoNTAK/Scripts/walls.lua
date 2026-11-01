@@ -10,7 +10,9 @@
 -- archways (open at chest height, wall above) stay open.
 --
 -- The work runs a slice at a time on its own loop, so the game doesn't
--- freeze. Hits on neighbouring rows are joined into wall segments, written
+-- freeze. It is a plain step-by-step loop that keeps its place between
+-- slices, not a coroutine: UE4SS game calls made inside a coroutine return
+-- garbage. Hits on neighbouring rows are joined into wall segments, written
 -- to <capture>.walls.json in the bridge folder.
 
 local bridge = require("bridge")
@@ -69,31 +71,65 @@ function walls.trace_height(ctx, player_pos, floor_z)
     return floor_z + math.max(MIN_TRACE_ABOVE_FLOOR, math.min(MAX_TRACE_ABOVE_FLOOR, above))
 end
 
--- Sweeps one row: along +X at y (axis "x") or along +Y at x (axis "y").
--- Returns the positions along the row where a wall was found.
-local function sweep_row(ctx, axis, across, from, to)
-    local found = {}
-    local at = from
-    local function point(along, z)
-        if axis == "x" then return vec(along, across, z) end
-        return vec(across, along, z)
-    end
-    for _ = 1, MAX_HITS_PER_ROW do
-        if at >= to then break end
-        local hit, dist = trace(ctx, point(at, ctx.trace_z), point(to, ctx.trace_z))
-        if not hit then break end
-        local along = axis == "x" and hit.x or hit.y
-        if dist < 1 then
-            at = at + STEP_INTO_WALL_CM          -- started inside something
-        else
-            if trace(ctx, point(along - CHECK_BEFORE_CM, ctx.check_z), point(along + CHECK_AFTER_CM, ctx.check_z)) then
-                found[#found + 1] = along
-            end
-            at = along + STEP_INTO_WALL_CM
+local function point(axis, along, across, z)
+    if axis == "x" then return vec(along, across, z) end
+    return vec(across, along, z)
+end
+
+local AXES = { "x", "y" }
+
+-- Ends the current row; after the last row of an axis, turns its hits into
+-- segments and moves on to the next axis.
+local function end_row(ctx)
+    ctx.rows[#ctx.rows + 1] = { across = ctx.across, hits = ctx.row_hits }
+    ctx.at = nil
+    ctx.row = ctx.row + 1
+    ctx.rows_done = ctx.rows_done + 1
+    ctx.percent = math.floor(100 * ctx.rows_done / (#AXES * ctx.row_count))
+    if ctx.row >= ctx.row_count then
+        for _, seg in ipairs(walls.segments(ctx.rows, AXES[ctx.axis])) do
+            ctx.segments[#ctx.segments + 1] = { math.floor(seg[1] + 0.5), math.floor(seg[2] + 0.5),
+                math.floor(seg[3] + 0.5), math.floor(seg[4] + 0.5) }
         end
-        coroutine.yield()
+        ctx.axis, ctx.row, ctx.rows = ctx.axis + 1, 0, {}
     end
-    return found
+end
+
+-- One step of the sweep: one ray along the current row (plus its check ray
+-- on a hit). Rows run along +X at fixed y (axis "x"), then along +Y at fixed
+-- x (axis "y"), every STEP_CM across the capture area. Returns true when the
+-- whole floor is done.
+local function step(ctx)
+    if ctx.axis > #AXES then return true end
+    local axis = AXES[ctx.axis]
+    local half = ctx.side / 2
+    local from = (axis == "x" and ctx.centre.x or ctx.centre.y) - half
+    local to = from + ctx.side
+    if ctx.at == nil then
+        ctx.across = (axis == "x" and ctx.centre.y or ctx.centre.x) - half + (ctx.row + 0.5) * STEP_CM
+        ctx.at, ctx.row_hits, ctx.row_rays = from, {}, 0
+    end
+    if ctx.at >= to or ctx.row_rays >= MAX_HITS_PER_ROW then
+        end_row(ctx)
+        return false
+    end
+    ctx.row_rays = ctx.row_rays + 1
+    local hit, dist = trace(ctx, point(axis, ctx.at, ctx.across, ctx.trace_z), point(axis, to, ctx.across, ctx.trace_z))
+    if not hit then
+        end_row(ctx)
+        return false
+    end
+    local along = axis == "x" and hit.x or hit.y
+    if dist < 1 then
+        ctx.at = ctx.at + STEP_INTO_WALL_CM  -- started inside something
+        return false
+    end
+    if trace(ctx, point(axis, along - CHECK_BEFORE_CM, ctx.across, ctx.check_z),
+            point(axis, along + CHECK_AFTER_CM, ctx.across, ctx.check_z)) then
+        ctx.row_hits[#ctx.row_hits + 1] = along
+    end
+    ctx.at = along + STEP_INTO_WALL_CM
+    return false
 end
 
 -- Joins hits on neighbouring rows into polylines, then into straight segments.
@@ -159,30 +195,6 @@ function walls.segments(rows, axis)
     return out
 end
 
-local function round(v) return math.floor(v + 0.5) end
-
-local function run(ctx)
-    local half = ctx.side / 2
-    local min_x, min_y = ctx.centre.x - half, ctx.centre.y - half
-    local rows_total = 2 * math.floor(ctx.side / STEP_CM)
-    local segments = {}
-    for _, axis in ipairs({ "x", "y" }) do
-        local rows = {}
-        for i = 0, math.floor(ctx.side / STEP_CM) - 1 do
-            local across = (axis == "x" and min_y or min_x) + (i + 0.5) * STEP_CM
-            local from = axis == "x" and min_x or min_y
-            rows[#rows + 1] = { across = across, hits = sweep_row(ctx, axis, across, from, from + ctx.side) }
-            ctx.rows_done = ctx.rows_done + 1
-            ctx.percent = math.floor(100 * ctx.rows_done / rows_total)
-            coroutine.yield()
-        end
-        for _, s in ipairs(walls.segments(rows, axis)) do
-            segments[#segments + 1] = { round(s[1]), round(s[2]), round(s[3]), round(s[4]) }
-        end
-    end
-    return segments
-end
-
 local function finish(ctx, segments)
     local seconds = os.time() - ctx.started
     bridge.write_file(ctx.out_file, json.encode({
@@ -210,26 +222,27 @@ function walls.start(opts)
         system = system, pawn = pawn, traces = 0, errors = 0, rows_done = 0, percent = 0, started = os.time(),
         file = opts.file, level = opts.level, centre = opts.centre, side = opts.side, floor_z = opts.floor_z,
         out_file = opts.file:gsub("%.png$", "") .. ".walls.json",
+        -- Where the sweep is: axis 1 = "x", 2 = "y"; row number; position along the row (nil: not started).
+        axis = 1, row = 0, at = nil, rows = {}, segments = {}, row_count = math.floor(opts.side / STEP_CM),
     }
     ctx.trace_z = walls.trace_height(ctx, opts.player_pos, opts.floor_z)
     ctx.check_z = opts.floor_z + CHECK_ABOVE_FLOOR
     note(string.format("tracing walls %.0f cm above the floor (check at %d cm)...", ctx.trace_z - opts.floor_z,
         CHECK_ABOVE_FLOOR))
-    local co = coroutine.create(function() return run(ctx) end)
-    job = { ctx = ctx, co = co, last_note = 0 }
+    job = { ctx = ctx, last_note = 0 }
 
     local function slice()
         if not job then return end
         local budget = ctx.traces + TRACES_PER_SLICE
         while ctx.traces < budget do
-            local ok, segments = coroutine.resume(co)
+            local ok, done = pcall(step, ctx)
             if not ok then
-                note("stopped: " .. tostring(segments))
+                note("stopped: " .. tostring(done))
                 job = nil
                 return
             end
-            if coroutine.status(co) == "dead" then
-                finish(ctx, segments)
+            if done then
+                finish(ctx, ctx.segments)
                 job = nil
                 return
             end

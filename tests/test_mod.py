@@ -516,6 +516,9 @@ class ModTest(unittest.TestCase):
             local system = {
                 IsValid = function() return true end,
                 LineTraceSingle = function(self, ctx, f, t, channel, complex, ignore, debug, hit)
+                    -- In game, UE4SS calls from inside a coroutine return garbage.
+                    local _, main = coroutine.running()
+                    if not main then error("game function called from a coroutine") end
                     traces = traces + 1
                     local best
                     for _, b in ipairs(boxes) do
