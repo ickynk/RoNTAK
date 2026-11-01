@@ -131,7 +131,7 @@ bind(config.keys.activity_dump, activity_dump)
 bind(config.keys.discovery_dump, discovery.dump)
 bind(config.keys.sniff_toggle, discovery.toggle_sniff)
 bind(config.keys.test_order, test_order)
-bind(config.keys.floorplan_test, floorplan.test)
+bind(config.keys.floor_capture, floorplan.capture)
 
 orders.install_class_hooks()
 cameras.install_hooks()

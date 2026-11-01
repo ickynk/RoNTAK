@@ -431,7 +431,7 @@ class ModTest(unittest.TestCase):
         self.assertLessEqual(worst_scans, 1)
         self.assertLessEqual(worst_doors, 1)  # 2 doors here, one per tick
 
-    def test_floorplan_capture_test(self):
+    def test_floor_capture(self):
         self.lua.execute(r"""
             local function obj(n, t)
                 t = t or {}
@@ -439,38 +439,16 @@ class ModTest(unittest.TestCase):
                 t.GetFName = function() return { ToString = function() return n end } end
                 return t
             end
-            local function capture_component(n, extra)
-                local comp = obj(n, extra)
-                comp.captures = {}
-                comp.CaptureScene = function(c)
-                    c.captures[#c.captures + 1] = { ortho = c.ProjectionType, z = c.loc.Z, source = c.CaptureSource,
-                        near = c.OrthoNearClipPlane, clip = c.bEnableClipPlane }
-                    drawn = c.drawable
-                end
-                comp.K2_SetWorldLocationAndRotation = function(c, loc, rot) c.loc, c.rot = loc, rot end
-                comp.K2_GetComponentLocation = function(c) return c.loc end
-                comp.K2_GetComponentRotation = function(c) return c.rot end
-                return comp
-            end
-            made, exports, drawn = {}, {}, false
+            made, exports, targets = {}, {}, {}
             function StaticConstructObject(class, outer)
-                local comp = capture_component("Capture", { drawable = false })  -- renders nothing, as in game
+                local comp = obj("Capture", { captures = 0 })
+                comp.CaptureScene = function(c) c.captures = c.captures + 1 end
+                comp.K2_SetWorldLocationAndRotation = function(c, loc, rot) c.loc, c.rot = loc, rot end
                 made[#made + 1] = { class = class, outer = outer, comp = comp }
                 return comp
             end
-            cctv_comp = capture_component("CaptureComponent", {
-                drawable = true, ProjectionType = 0, FOVAngle = 80, CaptureSource = 1, bCaptureEveryFrame = true,
-                loc = { X = 1, Y = 2, Z = 3 }, rot = { Pitch = -20, Yaw = 45, Roll = 0 },
-                GetOwner = function() return obj("BP_CCTVCamera_C_1") end,
-            })
-            objects.SceneCaptureComponent2D = { cctv_comp }
             local rendering = obj("KismetRenderingLibrary", {
-                CreateRenderTarget2D = function(self, world, w, h, fmt) return obj("RT") end,
-                ClearRenderTarget2D = function() drawn = false end,
-                ReadRenderTargetPixel = function()
-                    if drawn then return { R = 120, G = 110, B = 90, A = 0 } end
-                    return { R = 0, G = 0, B = 0, A = 0 }
-                end,
+                CreateRenderTarget2D = function(self, world, w, h, fmt) targets[#targets + 1] = { w = w, fmt = fmt } return obj("RT") end,
                 ExportRenderTarget = function(self, world, rt, dir, file) exports[#exports + 1] = file end,
             })
             local found = {
@@ -478,30 +456,33 @@ class ModTest(unittest.TestCase):
                 ["/Script/Engine.Default__KismetRenderingLibrary"] = rendering,
             }
             function StaticFindObject(path) return found[path] end
-            objects.PlayerController[1].Pawn.K2_GetActorLocation = function() return { X = 1000, Y = 2000, Z = 90 } end
+            objects.PlayerController[1].Pawn.K2_GetActorLocation = function() return { X = 100, Y = 50, Z = 90 } end
         """)
         self.tick()
         self.lua.globals().keybinds["F11"]()
         g = self.lua.globals()
-        self.assertEqual(list(g.exports.values()), [f"floorplan_test_{n}.png" for n in "ABCDEF"])
-        own = g.made[1]
-        self.assertEqual(own["outer"].GetFName().ToString(), "PlayerPawn_C_0")
-        shots = list(own["comp"]["captures"].values())
-        self.assertEqual([(c["ortho"], c["z"], c["source"]) for c in shots],
-                         [(1, 170, 7), (1, 5170, 7), (1, 5170, 7), (0, 5170, 2)])
-        self.assertEqual((shots[0]["near"], shots[1]["clip"], shots[2]["clip"]), (0, True, False))
-        borrowed = list(g.cctv_comp["captures"].values())
-        self.assertEqual([(c["ortho"], c["z"]) for c in borrowed], [(1, 5170), (1, 170)])
-        # Everything the test changed on the borrowed component is put back.
-        c = g.cctv_comp
-        self.assertEqual((c["ProjectionType"], c["FOVAngle"], c["CaptureSource"], c["bCaptureEveryFrame"]), (0, 80, 1, True))
-        self.assertEqual((dict(c["loc"]), c["rot"]["Yaw"]), ({"X": 1, "Y": 2, "Z": 3}, 45))
-        report = json.loads((self.bridge / "floorplan_test.json").read_text())["report"]
-        self.assertIn("1 capture components in the level: BP_CCTVCamera_C_1", report)
-        line = lambda n: next(l for l in report if l.startswith(n + ": "))
-        self.assertIn("0/9 sample pixels drawn", line("C"))
-        self.assertIn("9/9 sample pixels drawn, e.g. RGBA 120 110 90 0", line("E"))
-        self.assertIn("pitch -90", line("E"))
+        self.assertEqual(list(g.exports.values()), ["capture_RiverwoodHouse_z0.png"])
+        comp = g.made[1]["comp"]
+        self.assertEqual(g.made[1]["outer"].GetFName().ToString(), "PlayerPawn_C_0")
+        # Doors at x 40..500, y 0..30 and the player: a 4000 cm square (the minimum) around them.
+        self.assertEqual((comp["ProjectionType"], comp["CaptureSource"], comp["OrthoWidth"]), (1, 7, 4000))
+        self.assertEqual((comp["bAutoCalculateOrthoPlanes"], comp["OrthoNearClipPlane"]), (False, 0))
+        self.assertEqual((comp["loc"]["X"], comp["loc"]["Y"], comp["loc"]["Z"]), (270, 25, 170))
+        self.assertEqual(dict(comp["rot"]), {"Pitch": -90, "Yaw": 0, "Roll": 0})
+        self.assertEqual(comp["captures"], 1)
+        self.assertEqual(g.targets[1]["w"], 1334)  # 3 cm per pixel
+        captures = json.loads((self.bridge / "captures.json").read_text())
+        self.assertEqual(len(captures), 1)
+        c = captures[0]
+        self.assertEqual((c["level"], c["floor_z"], c["area_cm"], c["size_px"]), ("RiverwoodHouse", 0, 4000, 1334))
+        self.assertEqual(c["anchors"][0], {"world": [2270, -1975], "px": [0, 0]})
+        self.assertEqual(c["anchors"][2], {"world": [-1730, -1975], "px": [0, 1334]})
+        # Capturing the same floor again replaces the entry; another floor adds one.
+        g.keybinds["F11"]()
+        self.lua.execute("objects.PlayerController[1].Pawn.K2_GetActorLocation = function() return { X = 100, Y = 50, Z = 390 } end")
+        g.keybinds["F11"]()
+        floors = [c["floor_z"] for c in json.loads((self.bridge / "captures.json").read_text())]
+        self.assertEqual(floors, [0, 300])
 
     def add_people(self):
         self.lua.execute(r"""

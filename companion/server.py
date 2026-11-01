@@ -28,6 +28,7 @@ from pathlib import Path
 from urllib.parse import unquote, urlparse
 
 import gamefinder
+import pngfix
 
 HERE = Path(__file__).resolve().parent
 WEB_DIR = HERE / "web"
@@ -187,6 +188,8 @@ class Handler(SimpleHTTPRequestHandler):
                 return self.send_json(self.info)
             if parts == ["api", "rooms"]:
                 return self.send_json(read_json(self.bridge / "rooms.json") or {"level": None, "rooms": []})
+            if parts == ["api", "captures"]:
+                return self.send_json({"captures": self.captures()})
             if len(parts) == 3 and parts[:2] == ["api", "maps"]:
                 return self.get_map(safe_name(parts[2]))
             if len(parts) == 3 and parts[0] == "maps":
@@ -218,6 +221,8 @@ class Handler(SimpleHTTPRequestHandler):
             if parts == ["api", "command"]:
                 order = validate_order(json.loads(self.read_body()))
                 return self.send_json(self.queue.add(order))
+            if parts == ["api", "captures", "use"]:
+                return self.use_capture(json.loads(self.read_body()))
         except (ValueError, json.JSONDecodeError) as e:
             return self.send_json({"error": str(e)}, HTTPStatus.BAD_REQUEST)
         self.send_json({"error": "not found"}, HTTPStatus.NOT_FOUND)
@@ -270,6 +275,30 @@ class Handler(SimpleHTTPRequestHandler):
         folder.mkdir(parents=True, exist_ok=True)
         write_atomic(folder / "map.json", json.dumps(data, indent=2))
         self.send_json({"saved": True})
+
+    def captures(self) -> list:
+        """Floor plans captured in game (F11), from the mod's bridge/captures.json."""
+        found = read_json(self.bridge / "captures.json")
+        return [c for c in found if isinstance(c, dict) and c.get("file")] if isinstance(found, list) else []
+
+    def use_capture(self, body):
+        """Copies an in-game capture into the level's map folder, made opaque
+        (the game saves it with alpha 0), and returns its image name, anchors
+        and floor height."""
+        name = safe_name(str((body or {}).get("file", "")))
+        capture = next((c for c in self.captures() if c.get("file") == name), None)
+        if not capture or Path(name).suffix.lower() != ".png":
+            raise ValueError(f"no capture named {name!r}")
+        level = safe_name(str(capture.get("level", "")))
+        try:
+            data = pngfix.make_opaque((self.bridge / name).read_bytes())
+        except OSError as e:
+            raise ValueError(f"cannot read {name}: {e}") from e
+        folder = MAPS_DIR / level
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / name).write_bytes(data)
+        self.send_json({"image": name, "level": level, "anchors": capture.get("anchors", []),
+                        "floor_z": capture.get("floor_z")})
 
     def put_map_image(self, level, name):
         if Path(name).suffix.lower() not in IMAGE_TYPES:
