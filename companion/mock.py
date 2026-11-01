@@ -8,8 +8,10 @@ commands.json. Run through `python server.py --mock`.
 
 import json
 import math
+import struct
 import sys
 import time
+import zlib
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -374,7 +376,52 @@ class MockGame:
         tmp.replace(bridge / "state.json")
 
 
+def png_rgba(width, height, pixel):
+    """A plain PNG (filter 0 rows) from pixel(u, v) -> (r, g, b, a)."""
+    rows = b"".join(b"\x00" + b"".join(bytes(pixel(u, v)) for u in range(width)) for v in range(height))
+
+    def chunk(kind, body):
+        return struct.pack(">I", len(body)) + kind + body + struct.pack(">I", zlib.crc32(kind + body) & 0xFFFFFFFF)
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(rows)) + chunk(b"IEND", b""))
+
+
+def write_capture(bridge: Path):
+    """An F11 floor capture of the house, saved with alpha 0 like the game does."""
+    side, size = 2400.0, 300
+    centre = {"x": 750.0, "y": 1100.0}
+    k = side / size
+
+    def world(u, v):
+        return centre["x"] + side / 2 - v * k, centre["y"] - side / 2 + u * k
+
+    walls = []
+    for u0, v0, u1, v1 in ROOMS_PX.values():
+        walls.append((u0, v0, u1, v1))
+
+    def pixel(u, v):
+        x, y = world(u + 0.5, v + 0.5)
+        pu, pv = world_to_px(x, y)
+        inside = 0 <= pu <= 1000 and 0 <= pv <= 750
+        on_wall = any(min(abs(pu - a), abs(pu - c)) < 6 and b - 6 <= pv <= d + 6 or
+                      min(abs(pv - b), abs(pv - d)) < 6 and a - 6 <= pu <= c + 6 for a, b, c, d in walls)
+        colour = (40, 40, 45) if on_wall else (205, 196, 178) if inside else (88, 104, 74)
+        return colour + (0,)  # alpha 0, as the game exports base colour
+
+    file = "capture_MockHouse_z0.png"
+    (bridge / file).write_bytes(png_rgba(size, size, pixel))
+    half = side / 2
+
+    def anchor(u, v):
+        return {"world": [centre["x"] + half - v * k, centre["y"] - half + u * k], "px": [u, v]}
+    entry = {"file": file, "level": LEVEL, "floor_z": 0.0, "cut_z": 170.0, "time": int(time.time()),
+             "area_cm": side, "size_px": size, "centre": centre,
+             "anchors": [anchor(0, 0), anchor(size, 0), anchor(0, size)]}
+    (bridge / "captures.json").write_text(json.dumps([entry]), encoding="utf-8")
+
+
 def run(bridge: Path):
+    write_capture(bridge)
     game = MockGame()
     last = time.monotonic()
     while True:

@@ -19,6 +19,21 @@ You name rooms yourself on top of a floor plan image (see "Drawing rooms" below)
 To see the game's rooms as a rough guide while drawing, press **Rooms** and tick **Show the game's room
 outlines**. With it on, doors are also labelled with the game's room numbers on each side.
 
+## Floor plans from the game (F11): the easiest way
+
+RoNTAK can take exact floor plans straight from the game: a true top-down picture of the whole level, cut
+just above the floor you stand on, so roofs and upper floors are left out. They line up by themselves.
+
+1. Load into the level, with the companion running. A quiet moment is best: the game freezes for a second or two.
+2. Stand on a floor (anywhere on it) and press **F11**. The UE4SS console says `floor capture: saved …`.
+3. Repeat on every floor: go upstairs, press **F11** again, and so on.
+4. On the ATAK screen, press **Calibrate**. Under **In-game captures**, press **Use** next to each floor.
+5. Press **Save map**.
+
+The pictures show surfaces in plain colours (no lighting or fog). Pressing F11 again on the same floor replaces
+that floor's capture. You can still name rooms on top (see "Drawing rooms"), and use **Adjust image** to crop
+the edges.
+
 ## Add a floor plan image (optional)
 
 Any top-down image of the level works. Community-made maps are usually the best; screenshots or your own

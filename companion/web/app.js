@@ -1671,8 +1671,63 @@
       calibrate: "Calibrate: tap a door marker, then the same door on the image. Do this for two doors.",
       rooms: "Rooms: tap the corners of a room, then press Finish room.",
     }[app.mode] || "");
-    if (app.mode === "calibrate") renderCalibration();
+    if (app.mode === "calibrate") {
+      renderCalibration();
+      loadCaptures();
+    }
     redraw();
+  }
+
+  // ---------------------------------------------------------------- in-game captures (F11)
+
+  let captures = [];
+
+  async function loadCaptures() {
+    try {
+      captures = (await api("GET", "/api/captures")).captures || [];
+    } catch (e) {
+      captures = [];
+    }
+    renderCaptures();
+  }
+
+  function renderCaptures() {
+    const list = $("capture-list");
+    list.innerHTML = "";
+    const mine = captures.filter((c) => c.level === app.level).sort((a, b) => a.floor_z - b.floor_z);
+    for (const c of mine) {
+      const li = document.createElement("li");
+      const f = app.map.floors[floorForZ(c.floor_z)];
+      const when = c.time ? new Date(c.time * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "";
+      li.textContent = `${f ? f.name : "Floor"} (height ${Math.round(c.floor_z)}) · ${Math.round(c.area_cm / 100)} m · ${when}`;
+      const use = document.createElement("button");
+      use.textContent = f && f.image === c.file ? "In use" : "Use";
+      use.onclick = () => useCapture(c).catch((e) => alert("Could not use the capture: " + e.message));
+      li.appendChild(use);
+      list.appendChild(li);
+    }
+    if (!mine.length) list.innerHTML = "<li>None for this level yet: press F11 in game on each floor</li>";
+  }
+
+  // Puts a capture on the floor it was taken on (floors come from door heights
+  // if the map has none yet), positioned by the capture's own anchors.
+  async function useCapture(c) {
+    const result = await api("POST", "/api/captures/use", { file: c.file });
+    ensureAutoFloors();
+    if (!app.map.floors.length) ensureFloor();
+    app.floorIndex = floorForZ(result.floor_z);
+    app.autoFloor = false;
+    const f = floor();
+    f.image = result.image;
+    f.anchors = result.anchors;
+    delete f.adjust;
+    delete app.images[result.image];
+    app.view.fitted = false;
+    loadImage(f);
+    renderFloorSelect();
+    renderCalibration();
+    renderCaptures();
+    setHint(`Floor plan from the game placed on ${f.name}. Press Save map to keep it.`);
   }
 
   $("btn-calibrate").onclick = () => setMode("calibrate");

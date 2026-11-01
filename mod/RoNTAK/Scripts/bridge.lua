@@ -29,6 +29,8 @@ local function read_file(name)
     return data
 end
 
+bridge.read_file = read_file
+
 function bridge.write_file(name, text)
     local tmp = path(name .. ".tmp")
     local f, err = io.open(tmp, "wb")

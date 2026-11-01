@@ -38,6 +38,22 @@ class ServerTest(unittest.TestCase):
         except urllib.error.HTTPError as e:
             return e.code, json.loads(e.read())
 
+    def test_in_game_captures(self):
+        import mock
+        mock.write_capture(self.bridge)
+        status, body = self.call("GET", "/api/captures")
+        self.assertEqual([c["file"] for c in body["captures"]], ["capture_MockHouse_z0.png"])
+        status, body = self.call("POST", "/api/captures/use", {"file": "capture_MockHouse_z0.png"})
+        self.assertEqual(status, 200)
+        self.assertEqual((body["image"], body["level"], body["floor_z"], len(body["anchors"])),
+                         ("capture_MockHouse_z0.png", "MockHouse", 0.0, 3))
+        copy = (self.maps / "MockHouse" / "capture_MockHouse_z0.png").read_bytes()
+        self.assertTrue(copy.startswith(b"\x89PNG"))
+        self.assertNotEqual(copy, (self.bridge / "capture_MockHouse_z0.png").read_bytes())  # made opaque
+        for bad in ("../state.json", "state.json", "missing.png"):
+            status, body = self.call("POST", "/api/captures/use", {"file": bad})
+            self.assertEqual(status, 400, bad)
+
     def test_page_asks_for_fresh_scripts(self):
         with urllib.request.urlopen(self.base + "/") as res:
             html = res.read().decode()

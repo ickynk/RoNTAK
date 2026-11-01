@@ -1,20 +1,21 @@
--- Floor plan capture TEST (config.keys.floorplan_test, F11).
+-- Floor plan capture (config.keys.floor_capture, F11).
 --
--- Renders true top-down (orthographic: no perspective, the same scale
--- everywhere) pictures of the area around the player and saves them as PNG
--- in the bridge folder, with floorplan_test.json describing the area covered
--- (pixel <-> world) and what happened. It freezes the game for a moment.
+-- Stand on a floor and press the key: the mod renders a true top-down
+-- picture of the whole level at that floor and saves it in the bridge
+-- folder, for the companion to use as that floor's plan.
 --
--- Round 3 showed that a capture component built with StaticConstructObject
--- renders (pixels read back in game), but in base colour every pixel is saved
--- with alpha 0: viewers show that as white. Final colour is saved opaque.
--- This round (all orthographic, camera straight down):
---   A  final colour, near plane at the cut height (camera at the cut)
---   B  final colour, clip plane at the cut height (camera high up)
---   C  final colour, nothing cut
---   G  base colour, added onto a target cleared to alpha 1 (additive
---      composite): does that make the plain base colour picture opaque?
--- A few pixels of each picture are read back in game and logged.
+--   * Orthographic (no perspective): one scale everywhere, walls don't lean.
+--   * The camera sits ~1.7 m above the floor with its near plane at 0, so
+--     everything above (roofs, upper floors) is left out. (Tested: a clip
+--     plane did not cut anything in this game.)
+--   * Base colour (no lighting, fog or bloom), so dark rooms read clearly.
+--     The PNG comes out with alpha 0; the companion makes it opaque.
+--   * The area covers every door of the level plus a margin, so its
+--     position is known exactly: captures.json holds the pixel <-> world
+--     anchors, and no calibration is needed.
+--
+-- The camera is a SceneCaptureComponent2D built with StaticConstructObject
+-- (no actor, no hooks). It freezes the game for a moment.
 
 local bridge = require("bridge")
 local game = require("game")
@@ -23,21 +24,20 @@ local log = require("log")
 
 local floorplan = {}
 
-local SIZE_PX = 2048            -- picture width and height
-local AREA_CM = 6000            -- 60 m x 60 m around the player
 local CUT_ABOVE_PLAYER = 80     -- the pawn's position is ~90 cm above its feet: cut ~1.7 m up
-local HIGH_ABOVE_CUT = 5000     -- camera height when nothing is cut
+local FEET_BELOW_PLAYER = 90
+local MARGIN_CM = 1500          -- around the outermost doors
+local MIN_AREA_CM = 4000
+local CM_PER_PX = 3             -- target detail; the picture is at most MAX_PX wide
+local MIN_PX, MAX_PX = 1024, 4096
+local SAME_FLOOR_CM = 150       -- a new capture this close in height replaces the old one
+local CAPTURES = "captures.json"
 
 local valid = game.valid
-local report = {}
 
-local function note(line)
-    report[#report + 1] = line
-    log.info("floorplan: " .. line)
-end
+local function note(line) log.info("floor capture: " .. line) end
 
--- Tries each argument list in turn (engine versions differ in trailing
--- parameters). Returns ok, result.
+-- Tries each argument list in turn (engine versions differ in trailing parameters).
 local function try_call(obj, fn, ...)
     local last_err
     for _, args in ipairs({ ... }) do
@@ -48,151 +48,117 @@ local function try_call(obj, fn, ...)
     return false, last_err
 end
 
-local function get(obj, prop)
-    local ok, value = pcall(function() return obj[prop] end)
-    if ok then return value end
-    return nil
-end
-
 local function set(obj, prop, value)
     local ok, err = pcall(function() obj[prop] = value end)
-    if not ok then note(string.format("set %s FAILED: %s", prop, tostring(err))) end
-    return ok
+    if not ok then note(string.format("set %s failed: %s", prop, tostring(err))) end
 end
 
-local function describe(value)
-    if type(value) ~= "userdata" then return type(value) .. " " .. tostring(value) end
-    if not valid(value) then return "invalid object" end
-    return "object " .. game.object_name(value)
+-- The square to capture: all doors and the player, plus a margin.
+function floorplan.area(doors, player_pos)
+    local min_x, max_x, min_y, max_y = player_pos.x, player_pos.x, player_pos.y, player_pos.y
+    for _, d in ipairs(doors) do
+        min_x, max_x = math.min(min_x, d.pos.x), math.max(max_x, d.pos.x)
+        min_y, max_y = math.min(min_y, d.pos.y), math.max(max_y, d.pos.y)
+    end
+    local side = math.max(max_x - min_x, max_y - min_y, MIN_AREA_CM - 2 * MARGIN_CM) + 2 * MARGIN_CM
+    local px = math.max(MIN_PX, math.min(MAX_PX, math.ceil(side / CM_PER_PX)))
+    return { x = (min_x + max_x) / 2, y = (min_y + max_y) / 2 }, side, px
 end
 
-local function transform_of(comp)
-    local ok_l, loc = pcall(function() return comp:K2_GetComponentLocation() end)
-    local ok_r, rot = pcall(function() return comp:K2_GetComponentRotation() end)
-    if not (ok_l and loc and ok_r and rot) then return nil end
-    return { loc = { X = loc.X, Y = loc.Y, Z = loc.Z }, rot = { Pitch = rot.Pitch, Yaw = rot.Yaw, Roll = rot.Roll } }
+-- Pixel (u, v) <-> world for a capture centred on centre: picture up = +X,
+-- picture right = +Y (camera pitch -90, yaw 0; checked in game).
+function floorplan.anchors(centre, side, px)
+    local half, k = side / 2, side / px
+    local function anchor(u, v) return { world = { centre.x + half - v * k, centre.y - half + u * k }, px = { u, v } } end
+    return { anchor(0, 0), anchor(px, 0), anchor(0, px) }
 end
 
-local function place(comp, loc, rot)
-    try_call(comp, "K2_SetWorldLocationAndRotation", { loc, rot, false, {}, false }, { loc, rot, false, false })
-    local t = transform_of(comp)
-    return t and string.format("at %.0f %.0f %.0f, pitch %.0f yaw %.0f roll %.0f",
-        t.loc.X, t.loc.Y, t.loc.Z, t.rot.Pitch, t.rot.Yaw, t.rot.Roll or 0) or "position unknown"
+local function read_captures()
+    local text = bridge.read_file(CAPTURES)
+    local ok, list = pcall(json.decode, text or "[]")
+    return ok and type(list) == "table" and list or {}
 end
 
--- Reads pixels back from the render target: "N/9 drawn, e.g. R G B A".
-local function sample(rendering, world, rt)
-    local drawn, example = 0, nil
-    for _, fx in ipairs({ 0.25, 0.5, 0.75 }) do
-        for _, fy in ipairs({ 0.25, 0.5, 0.75 }) do
-            local ok, c = pcall(function()
-                return rendering:ReadRenderTargetPixel(world, rt, math.floor(SIZE_PX * fx), math.floor(SIZE_PX * fy))
-            end)
-            if not ok or type(c) == "nil" then return "pixels unreadable: " .. tostring(c) end
-            local r, g, b, a = get(c, "R") or 0, get(c, "G") or 0, get(c, "B") or 0, get(c, "A") or 0
-            if r + g + b > 0 then
-                drawn = drawn + 1
-                example = example or string.format("%d %d %d %d", r, g, b, a)
-            end
+-- Records a capture, replacing an older one of the same level and floor.
+local function remember(entry)
+    local list = {}
+    for _, old in ipairs(read_captures()) do
+        if not (old.level == entry.level and math.abs((old.floor_z or 0) - entry.floor_z) < SAME_FLOOR_CM) then
+            list[#list + 1] = old
         end
     end
-    return string.format("%d/9 sample pixels drawn%s", drawn, example and (", e.g. RGBA " .. example) or "")
+    list[#list + 1] = entry
+    bridge.write_file(CAPTURES, json.encode(list))
 end
 
-local function capture(name, comp, ctx, opts)
-    local where = place(comp, opts.loc, { Pitch = -90, Yaw = 0, Roll = 0 })
-    set(comp, "TextureTarget", ctx.rt)
-    set(comp, "bCaptureEveryFrame", false)
-    set(comp, "bCaptureOnMovement", false)
-    set(comp, "ProjectionType", 1)              -- ECameraProjectionMode::Orthographic
-    set(comp, "OrthoWidth", AREA_CM)
-    set(comp, "CaptureSource", opts.base_colour and 7 or 2)  -- SCS_BaseColor / SCS_FinalColorLDR
-    set(comp, "CompositeMode", opts.additive and 1 or 0)     -- ESceneCaptureCompositeMode: Additive / Overwrite
-    set(comp, "bEnableClipPlane", opts.clip ~= nil)
-    if opts.clip then
-        set(comp, "ClipPlaneBase", { X = opts.loc.X, Y = opts.loc.Y, Z = opts.clip })
-        set(comp, "ClipPlaneNormal", { X = 0, Y = 0, Z = -1 })
-    end
-    if opts.near_plane then
-        set(comp, "bAutoCalculateOrthoPlanes", false)
-        set(comp, "OrthoNearClipPlane", 0)
-        set(comp, "OrthoFarClipPlane", 100000)
-    end
-    local clear_alpha = opts.additive and 1 or 0
-    pcall(function() ctx.rendering:ClearRenderTarget2D(ctx.world, ctx.rt, { R = 0, G = 0, B = 0, A = clear_alpha }) end)
-    local ok, err = pcall(function() comp:CaptureScene() end)
-    if not ok then
-        note(name .. ": CaptureScene FAILED: " .. tostring(err))
-        return
-    end
-    local pixels = sample(ctx.rendering, ctx.world, ctx.rt)
-    local file = "floorplan_test_" .. name .. ".png"
-    local exported = try_call(ctx.rendering, "ExportRenderTarget", { ctx.world, ctx.rt, bridge.dir, file })
-    note(string.format("%s: camera %s; %s; %s", name, where, pixels, exported and ("saved " .. file) or "export FAILED"))
+local function file_name(level, floor_z)
+    return string.format("capture_%s_z%d.png", (level or "level"):gsub("[^%w_%-]", "_"), math.floor(floor_z + 0.5))
 end
 
-function floorplan.test()
-    report = {}
+function floorplan.capture()
     local pc = game.player_controller()
     local player = game.player()
     local pawn = game.player_pawn()
-    if not pc or not player or not player.pos or not valid(pawn) then
-        log.info("floorplan: no player yet, start a mission first")
+    local level = game.level_name()
+    if not pc or not player or not player.pos or not valid(pawn) or not level then
+        note("no player yet, start a mission first")
         return
     end
-    local world_ok, world = pcall(function() return pc:GetWorld() end)
     local find = StaticFindObject or function() return nil end
+    local world_ok, world = pcall(function() return pc:GetWorld() end)
     local rendering = find("/Script/Engine.Default__KismetRenderingLibrary")
-    if not (world_ok and valid(world) and valid(rendering)) then
-        note("engine objects not found (world / KismetRenderingLibrary)")
-        return
-    end
-    local ok, rt = try_call(rendering, "CreateRenderTarget2D",
-        { world, SIZE_PX, SIZE_PX, 3, { R = 0, G = 0, B = 0, A = 1 }, false, false },
-        { world, SIZE_PX, SIZE_PX, 3, { R = 0, G = 0, B = 0, A = 1 }, false },
-        { world, SIZE_PX, SIZE_PX, 3 })
-    if not ok or not valid(rt) then
-        note("CreateRenderTarget2D FAILED: " .. describe(rt))
-        return
-    end
-    local ctx = { world = world, rendering = rendering, rt = rt }
-
-    local center = player.pos
-    local cut = center.z + CUT_ABOVE_PLAYER
-    local low = { X = center.x, Y = center.y, Z = cut }
-    local high = { X = center.x, Y = center.y, Z = cut + HIGH_ABOVE_CUT }
-
     local component_class = find("/Script/Engine.SceneCaptureComponent2D")
-    if StaticConstructObject and valid(component_class) then
-        local made_ok, comp = pcall(StaticConstructObject, component_class, pawn)
-        if made_ok and valid(comp) then
-            for _, run in ipairs({
-                { name = "A", opts = { loc = low, near_plane = true } },
-                { name = "B", opts = { loc = high, clip = cut } },
-                { name = "C", opts = { loc = high } },
-                { name = "G", opts = { loc = high, base_colour = true, additive = true } },
-            }) do
-                local run_ok, err = pcall(capture, run.name, comp, ctx, run.opts)
-                if not run_ok then note(run.name .. ": " .. tostring(err)) end
-            end
-        else
-            note("StaticConstructObject FAILED: " .. describe(comp))
-        end
-    else
-        note("StaticConstructObject / SceneCaptureComponent2D not available")
+    if not (world_ok and valid(world) and valid(rendering) and valid(component_class) and StaticConstructObject) then
+        note("engine objects not found (world / KismetRenderingLibrary / SceneCaptureComponent2D / StaticConstructObject)")
+        return
     end
 
-    -- Pixel (u, v) <-> world: u runs along +Y, v along -X, AREA_CM across SIZE_PX.
-    local half, k = AREA_CM / 2, AREA_CM / SIZE_PX
-    local function anchor(u, v) return { world = { center.x + half - v * k, center.y - half + u * k }, px = { u, v } } end
-    bridge.write_file("floorplan_test.json", json.encode({
-        level = game.level_name(), center = center, cut_z = cut, area_cm = AREA_CM, size_px = SIZE_PX,
-        anchors = { anchor(0, 0), anchor(SIZE_PX, 0), anchor(0, SIZE_PX) },
-        report = report,
-    }))
-    log.info("floorplan: done, see floorplan_test.json in " .. bridge.dir)
-end
+    local centre, side, px = floorplan.area(game.doors(level), player.pos)
+    local ok, rt = try_call(rendering, "CreateRenderTarget2D",
+        { world, px, px, 3, { R = 0, G = 0, B = 0, A = 1 }, false, false },
+        { world, px, px, 3, { R = 0, G = 0, B = 0, A = 1 }, false },
+        { world, px, px, 3 })
+    if not ok or not valid(rt) then
+        note("could not create the picture: " .. tostring(rt))
+        return
+    end
+    local made, comp = pcall(StaticConstructObject, component_class, pawn)
+    if not made or not valid(comp) then
+        note("could not create the camera: " .. tostring(comp))
+        return
+    end
 
-floorplan.SIZE_PX, floorplan.AREA_CM = SIZE_PX, AREA_CM
+    local cut = player.pos.z + CUT_ABOVE_PLAYER
+    local loc = { X = centre.x, Y = centre.y, Z = cut }
+    local rot = { Pitch = -90, Yaw = 0, Roll = 0 }
+    try_call(comp, "K2_SetWorldLocationAndRotation", { loc, rot, false, {}, false }, { loc, rot, false, false })
+    set(comp, "TextureTarget", rt)
+    set(comp, "bCaptureEveryFrame", false)
+    set(comp, "bCaptureOnMovement", false)
+    set(comp, "ProjectionType", 1)                 -- orthographic
+    set(comp, "OrthoWidth", side)
+    set(comp, "CaptureSource", 7)                  -- SCS_BaseColor
+    set(comp, "bAutoCalculateOrthoPlanes", false)  -- near plane at the camera: nothing above it
+    set(comp, "OrthoNearClipPlane", 0)
+    set(comp, "OrthoFarClipPlane", 100000)
+    local captured, err = pcall(function() comp:CaptureScene() end)
+    if not captured then
+        note("capture failed: " .. tostring(err))
+        return
+    end
+
+    local floor_z = player.pos.z - FEET_BELOW_PLAYER
+    local file = file_name(level, floor_z)
+    if not try_call(rendering, "ExportRenderTarget", { world, rt, bridge.dir, file }) then
+        note("could not save " .. file)
+        return
+    end
+    remember({
+        file = file, level = level, floor_z = floor_z, cut_z = cut, time = os.time(),
+        area_cm = side, size_px = px, centre = centre, anchors = floorplan.anchors(centre, side, px),
+    })
+    note(string.format("saved %s (%.0f m across, %d px). Use it in the companion: Calibrate > In-game captures",
+        file, side / 100, px))
+end
 
 return floorplan
