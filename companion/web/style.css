@@ -144,6 +144,8 @@ label.check input { width: auto; margin: 0; }
 .adjust-row input[type=range] { width: 100%; padding: 0; }
 .adjust-row input[type=number] { padding: 3px 6px; }
 #adjust-reset { width: 100%; margin-top: 10px; }
+#room-find { width: 100%; margin-top: 8px; }
+.room-name { cursor: pointer; text-decoration: underline dotted; }
 .row > * { flex: 1; }
 
 /* Phones and portrait tablets: map on top, panel below. */
@@ -161,6 +163,12 @@ label.check input { width: auto; margin: 0; }
 @media (max-width: 400px) {
   .toolbar { gap: 4px; padding: 0 6px; }
   .toolbar button, .toolbar select { padding: 5px 6px; font-size: 13px; }
+  .toolbar select { max-width: 92px; }
+}
+@media (max-width: 370px) {
+  .toolbar { gap: 3px; padding: 0 4px; }
+  .toolbar button, .toolbar select { padding: 4px 5px; font-size: 12px; }
+  .toolbar select { max-width: 80px; }
 }
 
 .modal {

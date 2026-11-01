@@ -39,6 +39,16 @@ height is blocked there too, so doorways and archways stay open (closed doors sh
 as dark lines on top of the plan; untick **Show walls traced in game** to hide them. To add the walls to a
 community map instead, press **Walls only**: the floor keeps its picture.
 
+**Walls-only view.** The **Plan** button in the toolbar switches how floors are shown: **Plan** (the floor
+plan picture, walls on top), **Walls** (only the traced walls, dark on white) or **Blue** (white walls on blue,
+blueprint style). Doors, officers, people and cameras are shown on top in every view. The choice is remembered.
+
+**Rooms from the walls.** Press **Rooms**, then **Find rooms from traced walls**: every area enclosed by the
+traced walls becomes a room, named Room 1, Room 2, … Tap a name in the list to rename it ("Kitchen"), then press
+**Save map**. Doors on each room's walls are linked, like rooms you draw. Ordinary doorways and archways (up to
+about 1.2 m wide) separate rooms; wider openings only separate rooms where there's a door marker. Pressing
+**Find rooms** again replaces the found rooms you haven't renamed and keeps the ones you have.
+
 The pictures show surfaces in plain colours (no lighting or fog). Pressing F11 again on the same floor replaces
 that floor's capture. You can still name rooms on top (see "Drawing rooms"), and use **Adjust image** to crop
 the edges.
