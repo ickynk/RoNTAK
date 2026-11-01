@@ -87,6 +87,7 @@
     gameRooms: [], // rooms read from the game (rooms.json), see loadGameRooms()
     showGameRooms: loadSetting("showGameRooms") === "1", // off: their names are just "Room 5"
     showCameras: loadSetting("showCameras") !== "0", // helicopter, drone and CCTV view cones
+    showWalls: loadSetting("showWalls") !== "0", // walls traced in game (F11), drawn over the floor plan
     mapLoaded: false, // map.json of app.level has been read
     roomsVersion: null,
     pendingAnchor: null, // calibration: world position of the door tapped first
@@ -407,6 +408,7 @@
       drawGrid(r);
     }
 
+    drawWalls();
     drawRooms();
     drawCameras();
     drawDoors();
@@ -416,6 +418,28 @@
     drawTargetLocation();
     if (app.mode === "calibrate") drawAnchors();
     if (app.mode === "rooms") drawDraft();
+  }
+
+  // Walls traced in game with the floor capture: segments in world cm, drawn
+  // about as thick as a real wall.
+  const WALL_CM = 15;
+
+  function drawWalls() {
+    const f = floor();
+    if (!app.showWalls || !f || !f.walls || !f.walls.length) return;
+    const [ax, ay] = worldToScreen(0, 0), [bx, by] = worldToScreen(100, 0);
+    const pxPerCm = Math.hypot(bx - ax, by - ay) / 100;
+    ctx.strokeStyle = "#15191d";
+    ctx.lineWidth = Math.max(2, WALL_CM * pxPerCm);
+    ctx.lineCap = "square";
+    ctx.beginPath();
+    for (const [x1, y1, x2, y2] of f.walls) {
+      const [sx1, sy1] = worldToScreen(x1, y1), [sx2, sy2] = worldToScreen(x2, y2);
+      ctx.moveTo(sx1, sy1);
+      ctx.lineTo(sx2, sy2);
+    }
+    ctx.stroke();
+    ctx.lineCap = "butt";
   }
 
   // ---------------------------------------------------------------- image adjustment
@@ -1691,19 +1715,39 @@
     renderCaptures();
   }
 
+  $("show-walls").checked = app.showWalls;
+  $("show-walls").onchange = (e) => {
+    app.showWalls = e.target.checked;
+    saveSetting("showWalls", app.showWalls ? "1" : "0");
+    redraw();
+  };
+
   function renderCaptures() {
     const list = $("capture-list");
     list.innerHTML = "";
     const mine = captures.filter((c) => c.level === app.level).sort((a, b) => a.floor_z - b.floor_z);
+    const progress = app.state && app.state.capture_progress;
     for (const c of mine) {
       const li = document.createElement("li");
       const f = app.map.floors[floorForZ(c.floor_z)];
       const when = c.time ? new Date(c.time * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "";
-      li.textContent = `${f ? f.name : "Floor"} (height ${Math.round(c.floor_z)}) · ${Math.round(c.area_cm / 100)} m · ${when}`;
+      const tracing = progress && progress.file === c.file;
+      const walls = tracing ? `tracing walls ${progress.percent}%` : c.walls === null ? "no walls" : `${c.walls} walls`;
+      const text = document.createElement("span");
+      text.textContent = `${f ? f.name : "Floor"} (height ${Math.round(c.floor_z)}) · ${Math.round(c.area_cm / 100)} m · ${walls} · ${when}`;
+      li.appendChild(text);
       const use = document.createElement("button");
       use.textContent = f && f.image === c.file ? "In use" : "Use";
-      use.onclick = () => useCapture(c).catch((e) => alert("Could not use the capture: " + e.message));
+      use.title = "Use this picture and its walls for the floor";
+      use.onclick = () => useCapture(c, false).catch((e) => alert("Could not use the capture: " + e.message));
       li.appendChild(use);
+      if (c.walls && !tracing) {
+        const only = document.createElement("button");
+        only.textContent = "Walls only";
+        only.title = "Keep this floor's picture (e.g. a community map) and add the traced walls";
+        only.onclick = () => useCapture(c, true).catch((e) => alert("Could not use the walls: " + e.message));
+        li.appendChild(only);
+      }
       list.appendChild(li);
     }
     if (!mine.length) list.innerHTML = "<li>None for this level yet: press F11 in game on each floor</li>";
@@ -1711,23 +1755,28 @@
 
   // Puts a capture on the floor it was taken on (floors come from door heights
   // if the map has none yet), positioned by the capture's own anchors.
-  async function useCapture(c) {
-    const result = await api("POST", "/api/captures/use", { file: c.file });
+  async function useCapture(c, wallsOnly) {
+    const result = await api("POST", "/api/captures/use", { file: c.file, walls_only: wallsOnly });
     ensureAutoFloors();
     if (!app.map.floors.length) ensureFloor();
     app.floorIndex = floorForZ(result.floor_z);
     app.autoFloor = false;
     const f = floor();
-    f.image = result.image;
-    f.anchors = result.anchors;
-    delete f.adjust;
-    delete app.images[result.image];
-    app.view.fitted = false;
-    loadImage(f);
+    f.walls = result.walls;
+    if (!wallsOnly) {
+      f.image = result.image;
+      f.anchors = result.anchors;
+      delete f.adjust;
+      delete app.images[result.image];
+      app.view.fitted = false;
+      loadImage(f);
+    }
     renderFloorSelect();
     renderCalibration();
     renderCaptures();
-    setHint(`Floor plan from the game placed on ${f.name}. Press Save map to keep it.`);
+    const what = wallsOnly ? `${result.walls.length} traced walls added to` : "Floor plan from the game placed on";
+    setHint(`${what} ${f.name}. Press Save map to keep it.`);
+    redraw();
   }
 
   $("btn-calibrate").onclick = () => setMode("calibrate");
@@ -1859,6 +1908,12 @@
         if (i !== app.floorIndex) { app.floorIndex = i; renderCalibration(); }
       }
       if (!app.view.fitted) fitView();
+      const progressKey = JSON.stringify(s.capture_progress || null);
+      if (progressKey !== app.captureProgressKey) {
+        // A capture is being traced, or has just finished: refresh the list.
+        app.captureProgressKey = progressKey;
+        if (app.mode === "calibrate") loadCaptures();
+      }
       if (app.mode === "orders") {
         setHint(s.level && !app.map.floors.length ? "No floor plan for this level yet — use Calibrate to add one." : "");
       }

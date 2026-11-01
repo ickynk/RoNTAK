@@ -15,7 +15,7 @@ reloads it.
 | **F8** | Lists game classes (with live counts and properties) and functions | `bridge\discovery.txt` |
 | **F9** | Start/stop logging calls to the functions in `config.sniff` | `bridge\sniff.txt` and the console |
 | **F10** | Sends `config.test_order` (GOLD Fall In) through the normal order path | console |
-| **F11** | Top-down floor plan of the floor you stand on (see [03-maps.md](03-maps.md)) | `bridge\capture_<level>_z<height>.png`, `bridge\captures.json` |
+| **F11** | Top-down floor plan of the floor you stand on, then its walls traced (see [03-maps.md](03-maps.md)) | `bridge\capture_<level>_z<height>.png` and `.walls.json`, `bridge\captures.json` |
 
 The UE4SS **header dump** is the most useful tool. In a mission, open the UE4SS console window, go to the
 **Dumpers** tab and click **Dump CXX Headers**. A `CXXHeaderDump` folder appears next to the UE4SS files. The two

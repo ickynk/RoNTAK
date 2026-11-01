@@ -142,7 +142,8 @@ keybinds = {}
 function RegisterKeyBind(key, fn) keybinds[key] = fn end
 function ExecuteInGameThread(fn) fn() end
 loop = nil
-function LoopAsync(ms, fn) loop = fn end
+loops = {}  -- every LoopAsync; loop is the first (the mod's tick)
+function LoopAsync(ms, fn) loops[#loops + 1] = fn if not loop then loop = fn end end
 """
 
 
@@ -483,6 +484,84 @@ class ModTest(unittest.TestCase):
         g.keybinds["F11"]()
         floors = [c["floor_z"] for c in json.loads((self.bridge / "captures.json").read_text())]
         self.assertEqual(floors, [0, 300])
+
+    def test_wall_trace_after_floor_capture(self):
+        self.test_floor_capture()  # the picture first
+        self.lua.execute(r"""
+            -- Boxes { x0, x1, y0, y1, z0, z1 }: a wall at x 500-520 with a doorway at y 300-400
+            -- (wall above 210), a table and a chest-high shelf, and a ceiling at 300.
+            boxes = {
+                { 500, 520, 0, 300, 0, 300 }, { 500, 520, 400, 800, 0, 300 }, { 500, 520, 300, 400, 210, 300 },
+                { 200, 300, 200, 300, 0, 80 }, { 700, 720, 100, 300, 0, 150 },
+                { -5000, 5000, -5000, 5000, 300, 320 },
+            }
+            local function hit_box(f, t, b)
+                local t0, t1 = 0, 1
+                local ranges = { { f.X, t.X, b[1], b[2] }, { f.Y, t.Y, b[3], b[4] }, { f.Z, t.Z, b[5], b[6] } }
+                for _, r in ipairs(ranges) do
+                    local s, e, lo, hi = r[1], r[2], r[3], r[4]
+                    local d = e - s
+                    if d == 0 then
+                        if s < lo or s > hi then return nil end
+                    else
+                        local a, c = (lo - s) / d, (hi - s) / d
+                        if a > c then a, c = c, a end
+                        t0, t1 = math.max(t0, a), math.min(t1, c)
+                        if t0 > t1 then return nil end
+                    end
+                end
+                return t0
+            end
+            traces = 0
+            local system = {
+                IsValid = function() return true end,
+                LineTraceSingle = function(self, ctx, f, t, channel, complex, ignore, debug, hit)
+                    -- In game, UE4SS calls from inside a coroutine return garbage.
+                    local _, main = coroutine.running()
+                    if not main then error("game function called from a coroutine") end
+                    traces = traces + 1
+                    local best
+                    for _, b in ipairs(boxes) do
+                        local u = hit_box(f, t, b)
+                        if u and (not best or u < best) then best = u end
+                    end
+                    if not best then return false end
+                    local len = math.sqrt((t.X - f.X) ^ 2 + (t.Y - f.Y) ^ 2 + (t.Z - f.Z) ^ 2)
+                    hit.Location = { X = f.X + (t.X - f.X) * best, Y = f.Y + (t.Y - f.Y) * best, Z = f.Z + (t.Z - f.Z) * best }
+                    hit.Distance = best * len
+                    return true
+                end,
+            }
+            local find = StaticFindObject
+            function StaticFindObject(path)
+                if path == "/Script/Engine.Default__KismetSystemLibrary" then return system end
+                return find(path)
+            end
+        """)
+        self.lua.execute("objects.PlayerController[1].Pawn.K2_GetActorLocation = function() return { X = 100, Y = 50, Z = 90 } end")
+        g = self.lua.globals()
+        g.keybinds["F11"]()  # the ground floor again: picture, then the wall trace
+        state = self.tick()
+        self.assertEqual(state["capture_progress"]["file"], "capture_RiverwoodHouse_z0.png")
+        job = g.loops[len(g.loops)]
+        for _ in range(100000):
+            if job():
+                break
+        self.assertNotIn("capture_progress", self.tick())
+        out = json.loads((self.bridge / "capture_RiverwoodHouse_z0.walls.json").read_text())
+        self.assertEqual((out["trace_z"], out["check_z"]), (240, 120))  # ceiling 300 -> capped at 2.4 m
+        walls = out["walls"]
+        # The wall's face at x = 500, in two parts either side of the doorway.
+        face = sorted((min(w[1], w[3]), max(w[1], w[3])) for w in walls if w[0] == w[2] == 500)
+        self.assertEqual(len(face), 2, face)
+        self.assertTrue(face[0][0] <= 15 and 285 <= face[0][1] <= 300, face)
+        self.assertTrue(400 <= face[1][0] <= 415 and face[1][1] >= 785, face)
+        # Nothing in the doorway, and no table or shelf.
+        for x1, y1, x2, y2 in walls:
+            self.assertFalse(min(x1, x2) <= 510 and 310 <= min(y1, y2) <= 390, (x1, y1, x2, y2))
+            self.assertFalse(150 <= min(x1, x2) <= 350 and 150 <= min(y1, y2) <= 350, (x1, y1, x2, y2))
+            self.assertFalse(690 <= min(x1, x2) <= 730, (x1, y1, x2, y2))
+        self.assertGreater(out["traces"], 500)
 
     def add_people(self):
         self.lua.execute(r"""

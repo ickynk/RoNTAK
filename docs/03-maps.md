@@ -25,10 +25,19 @@ RoNTAK can take exact floor plans straight from the game: a true top-down pictur
 just above the floor you stand on, so roofs and upper floors are left out. They line up by themselves.
 
 1. Load into the level, with the companion running. A quiet moment is best: the game freezes for a second or two.
-2. Stand on a floor (anywhere on it) and press **F11**. The UE4SS console says `floor capture: saved …`.
+2. Stand on a floor (anywhere on it) and press **F11**. The UE4SS console says `floor capture: saved …`, then
+   the walls are traced (see below): `wall trace: 25%` … `wall trace: … wall segments …`. Stay on that floor
+   level until it's done; you can move around.
 3. Repeat on every floor: go upstairs, press **F11** again, and so on.
 4. On the ATAK screen, press **Calibrate**. Under **In-game captures**, press **Use** next to each floor.
 5. Press **Save map**.
+
+**Walls.** Many of the game's walls are hollow and don't show in a picture cut above the floor, so after each
+capture the mod traces them with the game's collision: rows of invisible rays sweep the whole floor just below
+the ceiling (at most 2.4 m up), over furniture and people. A hit only counts as wall if a second ray at chest
+height is blocked there too, so doorways and archways stay open (closed doors show as wall). The walls are drawn
+as dark lines on top of the plan; untick **Show walls traced in game** to hide them. To add the walls to a
+community map instead, press **Walls only**: the floor keeps its picture.
 
 The pictures show surfaces in plain colours (no lighting or fog). Pressing F11 again on the same floor replaces
 that floor's capture. You can still name rooms on top (see "Drawing rooms"), and use **Adjust image** to crop
