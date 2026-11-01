@@ -419,6 +419,27 @@ def write_capture(bridge: Path):
              "anchors": [anchor(0, 0), anchor(size, 0), anchor(0, size)]}
     (bridge / "captures.json").write_text(json.dumps([entry]), encoding="utf-8")
 
+    # Traced walls: the room outlines, with a 90 cm gap at each door.
+    edges = set()
+    for u0, v0, u1, v1 in ROOMS_PX.values():
+        edges |= {(u0, v0, u1, v0), (u0, v1, u1, v1), (u0, v0, u0, v1), (u1, v0, u1, v1)}
+    gap = 45 / 2  # half a door in image px (0.5 px per cm)
+    walls = []
+    for u0, v0, u1, v1 in sorted(edges):
+        cuts = sorted((u if v0 == v1 else v) for u, v, *_ in DOORS_PX.values()
+                      if (v0 == v1 and v == v0 and u0 < u < u1) or (u0 == u1 and u == u0 and v0 < v < v1))
+        start = u0 if v0 == v1 else v0
+        end = u1 if v0 == v1 else v1
+        for c in cuts + [None]:
+            stop = end if c is None else c - gap
+            if stop > start:
+                a = (start, v0) if v0 == v1 else (u0, start)
+                b = (stop, v0) if v0 == v1 else (u0, stop)
+                walls.append([round(n) for n in (*px_to_world(*a), *px_to_world(*b))])
+            if c is not None:
+                start = c + gap
+    (bridge / "capture_MockHouse_z0.walls.json").write_text(json.dumps({"walls": walls}), encoding="utf-8")
+
 
 def run(bridge: Path):
     write_capture(bridge)

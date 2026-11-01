@@ -13,6 +13,8 @@
 --   * The area covers every door of the level plus a margin, so its
 --     position is known exactly: captures.json holds the pixel <-> world
 --     anchors, and no calibration is needed.
+--   * Walls the picture can't show (hollow meshes cut open) are then traced
+--     with the game's collision over a few seconds (walls.lua).
 --
 -- The camera is a SceneCaptureComponent2D built with StaticConstructObject
 -- (no actor, no hooks). It freezes the game for a moment.
@@ -21,6 +23,7 @@ local bridge = require("bridge")
 local game = require("game")
 local json = require("json")
 local log = require("log")
+local walls = require("walls")
 
 local floorplan = {}
 
@@ -159,6 +162,7 @@ function floorplan.capture()
     })
     note(string.format("saved %s (%.0f m across, %d px). Use it in the companion: Calibrate > In-game captures",
         file, side / 100, px))
+    walls.start({ file = file, level = level, centre = centre, side = side, floor_z = floor_z, player_pos = player.pos })
 end
 
 return floorplan

@@ -277,28 +277,42 @@ class Handler(SimpleHTTPRequestHandler):
         self.send_json({"saved": True})
 
     def captures(self) -> list:
-        """Floor plans captured in game (F11), from the mod's bridge/captures.json."""
+        """Floor plans captured in game (F11), from the mod's bridge/captures.json,
+        each with the number of traced wall segments (None while not traced)."""
         found = read_json(self.bridge / "captures.json")
-        return [c for c in found if isinstance(c, dict) and c.get("file")] if isinstance(found, list) else []
+        captures = [dict(c) for c in found if isinstance(c, dict) and c.get("file")] if isinstance(found, list) else []
+        for c in captures:
+            walls = self.capture_walls(c["file"])
+            c["walls"] = len(walls) if walls is not None else None
+        return captures
+
+    def capture_walls(self, name: str):
+        """The wall segments traced for a capture ([x1, y1, x2, y2] in world cm), or None."""
+        data = read_json(self.bridge / (Path(name).stem + ".walls.json"))
+        walls = data.get("walls") if isinstance(data, dict) else None
+        return [w for w in walls if isinstance(w, list) and len(w) == 4] if isinstance(walls, list) else None
 
     def use_capture(self, body):
         """Copies an in-game capture into the level's map folder, made opaque
-        (the game saves it with alpha 0), and returns its image name, anchors
-        and floor height."""
-        name = safe_name(str((body or {}).get("file", "")))
+        (the game saves it with alpha 0), and returns its image name, anchors,
+        floor height and traced walls. With walls_only, only the walls."""
+        body = body or {}
+        name = safe_name(str(body.get("file", "")))
         capture = next((c for c in self.captures() if c.get("file") == name), None)
         if not capture or Path(name).suffix.lower() != ".png":
             raise ValueError(f"no capture named {name!r}")
         level = safe_name(str(capture.get("level", "")))
-        try:
-            data = pngfix.make_opaque((self.bridge / name).read_bytes())
-        except OSError as e:
-            raise ValueError(f"cannot read {name}: {e}") from e
-        folder = MAPS_DIR / level
-        folder.mkdir(parents=True, exist_ok=True)
-        (folder / name).write_bytes(data)
-        self.send_json({"image": name, "level": level, "anchors": capture.get("anchors", []),
-                        "floor_z": capture.get("floor_z")})
+        result = {"level": level, "floor_z": capture.get("floor_z"), "walls": self.capture_walls(name) or []}
+        if not body.get("walls_only"):
+            try:
+                data = pngfix.make_opaque((self.bridge / name).read_bytes())
+            except OSError as e:
+                raise ValueError(f"cannot read {name}: {e}") from e
+            folder = MAPS_DIR / level
+            folder.mkdir(parents=True, exist_ok=True)
+            (folder / name).write_bytes(data)
+            result.update(image=name, anchors=capture.get("anchors", []))
+        self.send_json(result)
 
     def put_map_image(self, level, name):
         if Path(name).suffix.lower() not in IMAGE_TYPES:

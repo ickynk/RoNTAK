@@ -50,6 +50,18 @@ class ServerTest(unittest.TestCase):
         copy = (self.maps / "MockHouse" / "capture_MockHouse_z0.png").read_bytes()
         self.assertTrue(copy.startswith(b"\x89PNG"))
         self.assertNotEqual(copy, (self.bridge / "capture_MockHouse_z0.png").read_bytes())  # made opaque
+        self.assertEqual(len(body["walls"]), 32)
+        status, body = self.call("GET", "/api/captures")
+        self.assertEqual(body["captures"][0]["walls"], 32)
+        # Walls only: no picture copied.
+        (self.maps / "MockHouse" / "capture_MockHouse_z0.png").unlink()
+        status, body = self.call("POST", "/api/captures/use", {"file": "capture_MockHouse_z0.png", "walls_only": True})
+        self.assertEqual((status, len(body["walls"]), "image" in body), (200, 32, False))
+        self.assertFalse((self.maps / "MockHouse" / "capture_MockHouse_z0.png").exists())
+        # Not traced (yet): no walls.
+        (self.bridge / "capture_MockHouse_z0.walls.json").unlink()
+        status, body = self.call("GET", "/api/captures")
+        self.assertIsNone(body["captures"][0]["walls"])
         for bad in ("../state.json", "state.json", "missing.png"):
             status, body = self.call("POST", "/api/captures/use", {"file": bad})
             self.assertEqual(status, 400, bad)

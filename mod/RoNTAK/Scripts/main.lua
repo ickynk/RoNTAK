@@ -2,6 +2,7 @@
 -- Entry point loaded by UE4SS.
 
 local bridge = require("bridge")
+local walls = require("walls")
 local cameras = require("cameras")
 local config = require("config")
 local discovery = require("discovery")
@@ -68,6 +69,7 @@ local function tick()
         rooms_version = rooms_version,
         results = results,
         configured_actions = configured_actions(),
+        capture_progress = walls.progress(),
     })
 end
 
