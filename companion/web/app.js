@@ -88,6 +88,7 @@
     showGameRooms: loadSetting("showGameRooms") === "1", // off: their names are just "Room 5"
     showCameras: loadSetting("showCameras") !== "0", // helicopter, drone and CCTV view cones
     showWalls: loadSetting("showWalls") !== "0", // walls traced in game (F11), drawn over the floor plan
+    planView: loadSetting("planView") || "picture", // picture | walls | blueprint (see PLAN_VIEWS)
     mapLoaded: false, // map.json of app.level has been read
     roomsVersion: null,
     pendingAnchor: null, // calibration: world position of the door tapped first
@@ -402,13 +403,19 @@
 
     const f = floor();
     const img = f && app.images[f.image];
-    if (img && img.complete && img.naturalWidth) {
+    const look = PLAN_VIEWS[app.planView] || PLAN_VIEWS.picture;
+    if (look.background) {
+      // Walls-only views: plain background, no picture.
+      ctx.fillStyle = look.background;
+      ctx.fillRect(0, 0, r.width, r.height);
+      drawGrid(r, look.grid);
+    } else if (img && img.complete && img.naturalWidth) {
       drawFloorImage(f, img);
     } else {
       drawGrid(r);
     }
 
-    drawWalls();
+    drawWalls(look);
     drawRooms();
     drawCameras();
     drawDoors();
@@ -424,12 +431,22 @@
   // about as thick as a real wall.
   const WALL_CM = 15;
 
-  function drawWalls() {
+  // How a floor is shown: its picture (walls on top), or the traced walls
+  // alone on a plain background.
+  const PLAN_VIEWS = {
+    picture: { label: "Plan", title: "Floor plan picture", wall: "#15191d" },
+    walls: { label: "Walls", title: "Traced walls on white", background: "#f2f0ea", grid: "#e2dfd6", wall: "#1d2329" },
+    blueprint: { label: "Blue", title: "Traced walls, blueprint style", background: "#1d4a82", grid: "#2a5a96", wall: "#f4f8ff" },
+  };
+  const PLAN_VIEW_ORDER = ["picture", "walls", "blueprint"];
+
+  function drawWalls(look) {
     const f = floor();
-    if (!app.showWalls || !f || !f.walls || !f.walls.length) return;
+    // The walls-only views always show the walls; on the picture they can be hidden.
+    if ((!look.background && !app.showWalls) || !f || !f.walls || !f.walls.length) return;
     const [ax, ay] = worldToScreen(0, 0), [bx, by] = worldToScreen(100, 0);
     const pxPerCm = Math.hypot(bx - ax, by - ay) / 100;
-    ctx.strokeStyle = "#15191d";
+    ctx.strokeStyle = look.wall;
     ctx.lineWidth = Math.max(2, WALL_CM * pxPerCm);
     ctx.lineCap = "square";
     ctx.beginPath();
@@ -478,7 +495,7 @@
     ctx.restore();
   }
 
-  function drawGrid(r) {
+  function drawGrid(r, color = "#1f262c") {
     // 10 m grid in world space.
     const inv = Geo.invert(transform());
     const corners = [[0, 0], [r.width, 0], [0, r.height], [r.width, r.height]].map(([sx, sy]) => {
@@ -487,7 +504,7 @@
     });
     const xs = corners.map((c) => c[0]), ys = corners.map((c) => c[1]);
     const step = 1000;
-    ctx.strokeStyle = "#1f262c";
+    ctx.strokeStyle = color;
     ctx.lineWidth = 1;
     ctx.beginPath();
     for (let x = Math.floor(Math.min(...xs) / step) * step; x <= Math.max(...xs); x += step) {
@@ -527,7 +544,8 @@
         ctx.setLineDash([]);
       }
       // Game room names are always shown (they are what the image lacks).
-      if ((isSel || room.game || !(f && f.image)) && roomCenter(room)) {
+      const pictureShown = f && f.image && !(PLAN_VIEWS[app.planView] || {}).background;
+      if ((isSel || room.game || !pictureShown) && roomCenter(room)) {
         const [cx, cy] = roomCenter(room);
         const [sx, sy] = worldToScreen(cx, cy);
         ctx.font = "600 12px system-ui, sans-serif";
@@ -1626,7 +1644,12 @@
     list.innerHTML = "";
     for (const room of app.map.rooms) {
       const li = document.createElement("li");
-      li.textContent = `${room.name} · ${(room.doors || []).length} door(s)`;
+      const name = document.createElement("span");
+      name.className = "room-name";
+      name.textContent = `${room.name} · ${(room.doors || []).length} door(s)`;
+      name.title = "Tap to rename";
+      name.onclick = () => renameRoom(room);
+      li.appendChild(name);
       const del = document.createElement("button");
       del.textContent = "✕";
       del.onclick = () => {
@@ -1637,7 +1660,9 @@
       li.appendChild(del);
       list.appendChild(li);
     }
-    if (!app.map.rooms.length) list.innerHTML = "<li>No hand-drawn rooms</li>";
+    if (!app.map.rooms.length) list.innerHTML = "<li>No rooms yet</li>";
+    const f = floor();
+    $("room-find").disabled = !(f && f.walls && f.walls.length);
     $("show-game-rooms").checked = app.showGameRooms;
     $("game-room-count").textContent = app.gameRooms.length ? `(${app.gameRooms.length})` : "";
   }
@@ -1650,6 +1675,24 @@
     renderOrders();
     redraw();
   };
+
+  function renderViewButton() {
+    const look = PLAN_VIEWS[app.planView] || PLAN_VIEWS.picture;
+    $("btn-view").textContent = look.label;
+    $("btn-view").title = `${look.title} (click to switch)`;
+  }
+  $("btn-view").onclick = () => {
+    const i = PLAN_VIEW_ORDER.indexOf(app.planView);
+    app.planView = PLAN_VIEW_ORDER[(i + 1) % PLAN_VIEW_ORDER.length];
+    saveSetting("planView", app.planView);
+    renderViewButton();
+    const f = floor();
+    if (app.planView !== "picture" && !(f && f.walls && f.walls.length)) {
+      setHint("No traced walls on this floor yet: press F11 in game, then Calibrate > In-game captures > Use.");
+    }
+    redraw();
+  };
+  renderViewButton();
 
   function renderCamerasButton() {
     $("btn-cameras").classList.toggle("active", app.showCameras);
@@ -1680,6 +1723,47 @@
   };
 
   $("room-save").onclick = () => saveMap().catch((e) => alert("Save failed: " + e.message));
+
+  function renameRoom(room) {
+    const name = (prompt("Room name?", room.name) || "").trim();
+    if (!name || name === room.name) return;
+    if (app.map.rooms.some((r) => r !== room && r.name === name)) return alert(`There is already a room called ${name}.`);
+    if (app.target && app.target.room === room.name) app.target.room = name;
+    room.name = name;
+    delete room.auto;
+    renderRooms();
+    renderOrders();
+    redraw();
+  }
+
+  // Rooms from the traced walls of this floor: each enclosed area becomes
+  // "Room N", for naming. Rooms found earlier and not renamed are replaced;
+  // renamed or hand-drawn ones are kept, and new rooms on top of them skipped.
+  function findRooms() {
+    const f = floor();
+    if (!f || !f.walls || !f.walls.length) return;
+    const doors = ((app.state && app.state.doors) || []).filter((d) => onFloor(d.pos.z, f)).map((d) => d.pos);
+    const outlines = Geo.roomsFromWalls(f.walls, doors);
+    app.map.rooms = app.map.rooms.filter((r) => !(r.auto && r.floor === f.name));
+    const kept = app.map.rooms.filter((r) => r.floor === f.name && hasOutline(r));
+    let n = 0, added = 0;
+    for (const polygon of outlines) {
+      const [cx, cy] = Geo.centroid(polygon);
+      if (kept.some((r) => Geo.pointInPolygon(cx, cy, r.polygon))) continue;
+      let name;
+      do { name = `Room ${++n}`; } while (app.map.rooms.some((r) => r.name === name));
+      const linked = ((app.state && app.state.doors) || [])
+        .filter((d) => onFloor(d.pos.z, f) && Geo.distToPolygonEdge(d.pos.x, d.pos.y, polygon) < DOOR_ROOM_LINK_UNITS)
+        .map((d) => d.id);
+      app.map.rooms.push({ name, floor: f.name, polygon, doors: linked, auto: true });
+      added++;
+    }
+    renderRooms();
+    redraw();
+    setHint(added ? `Found ${added} rooms on ${f.name}. Tap a name in the list to rename it, then Save map.`
+      : "No enclosed rooms found in the traced walls.");
+  }
+  $("room-find").onclick = findRooms;
 
   // ---------------------------------------------------------------- toolbar
 
@@ -1774,6 +1858,7 @@
     renderFloorSelect();
     renderCalibration();
     renderCaptures();
+    renderRooms();
     const what = wallsOnly ? `${result.walls.length} traced walls added to` : "Floor plan from the game placed on";
     setHint(`${what} ${f.name}. Press Save map to keep it.`);
     redraw();
