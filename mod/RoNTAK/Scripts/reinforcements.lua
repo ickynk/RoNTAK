@@ -151,6 +151,38 @@ local function spawn_spot(pawn, world_ctx, half)
     return nil, rejected
 end
 
+-- How a call's return value looks, for the log.
+local function describe(v)
+    if type(v) ~= "userdata" then return type(v) .. " " .. tostring(v) end
+    if not valid(v) then return "an invalid object" end
+    return "object " .. object_name(v)
+end
+
+local reported_returns = {}
+
+-- Spawns an actor of class at a spot. Some UE4SS builds spawn it but return
+-- nothing usable from SpawnActor; then the new actor is looked up: an actor
+-- of that class at the spot that is_new() accepts.
+local function spawn_actor(world, class, at, is_new)
+    local ok, made = pcall(function() return world:SpawnActor(class, at, ZERO_ROT) end)
+    if ok and valid(made) then return made end
+    local class_name = object_name(class)
+    if not reported_returns[class_name] then
+        reported_returns[class_name] = true
+        note(string.format("SpawnActor(%s) returned %s; looking the new actor up instead", class_name,
+            ok and describe(made) or ("an error: " .. tostring(made))))
+    end
+    local best, best_d = nil, (c().find_spawned_cm or 300) ^ 2
+    for _, a in ipairs(FindAllOf(class_name) or {}) do
+        if valid(a) and is_new(a) then
+            local p = game.location(a)
+            local d = p and (p.x - at.X) ^ 2 + (p.y - at.Y) ^ 2
+            if d and d < best_d then best, best_d = a, d end
+        end
+    end
+    return best
+end
+
 -- Spawned objects of one operator, removed again if a step fails.
 local function discard(made)
     for i = #made, 1, -1 do
@@ -174,8 +206,14 @@ local function copy_gear(op, donor, world, at, made)
     donor_inv.InventoryItems:ForEach(function(_, element)
         local item = element:get()
         if valid(item) then
-            local copy = world:SpawnActor(item:GetClass(), at, ZERO_ROT)
-            check(valid(copy), "item spawn failed")
+            -- A new item has no owner yet and isn't one of this operator's copies.
+            local copy = spawn_actor(world, item:GetClass(), at, function(a)
+                for _, m in ipairs(made) do if object_name(m) == object_name(a) then return false end end
+                local owned = false
+                pcall(function() owned = valid(a:GetOwner()) end)
+                return not owned
+            end)
+            check(valid(copy), "item spawn failed (" .. object_name(item) .. ")")
             made[#made + 1] = copy
             copy:SetOwner(op)
             check(inv:AddInventoryItem(copy), "item not accepted")
@@ -228,7 +266,12 @@ local function spawn_operator(job)
     local ok, err = pcall(function()
         -- An entry position is a standing officer's centre; a nav-mesh point is the floor.
         local z = spot.centre and spot.z + 10 or spot.z + half + 10
-        local op = world:SpawnActor(donor:GetClass(), { X = spot.x, Y = spot.y, Z = z }, ZERO_ROT)
+        -- A new officer isn't one the mod already knows (nor the player).
+        local known = {}
+        for _, o in ipairs(game.officer_actors()) do known[o.name] = true end
+        local op = spawn_actor(world, donor:GetClass(), { X = spot.x, Y = spot.y, Z = z }, function(a)
+            return not known[object_name(a)] and object_name(a) ~= object_name(pawn)
+        end)
         check(valid(op), "operator spawn failed")
         made[#made + 1] = op
         op.SquadPosition = job.slot
