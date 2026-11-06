@@ -563,6 +563,113 @@ class ModTest(unittest.TestCase):
             self.assertFalse(690 <= min(x1, x2) <= 730, (x1, y1, x2, y2))
         self.assertGreater(out["traces"], 500)
 
+    def add_reinforcement_world(self, equip_ok=True):
+        """A world that can spawn officers and items, a navigation mesh, and stock officers with gear."""
+        self.lua.execute(f"""
+            equip_ok = {str(equip_ok).lower()}
+            local function obj(n, t)
+                t = t or {{}}
+                t.IsValid = function(self) return not self.destroyed end
+                t.GetFName = function() return {{ ToString = function() return n end }} end
+                t.K2_DestroyActor = function(self) self.destroyed = true destroyed[#destroyed + 1] = n end
+                return t
+            end
+            function list(values)  -- a TArray stand-in that can grow and be emptied
+                local a = values or {{}}
+                a.ForEach = function(self, fn) for i, v in ipairs(self) do fn(i, {{ get = function() return v end }}) end end
+                a.Empty = function(self) for i = #self, 1, -1 do self[i] = nil end end
+                return a
+            end
+            destroyed, spawned, finished, in_hand = {{}}, 0, 0, {{}}
+            local officer_class = obj("CyberneticsSwat_V2_C")
+            local function gear_owner(o, items)
+                local inv = {{ InventoryItems = list(items), SpawnedGear = {{ Grenades = list(), TacticalDevices = list(), Miscelaneous = list() }} }}
+                inv.IsValid = function() return true end
+                inv.AddInventoryItem = function(self, item) table.insert(self.InventoryItems, item) return true end
+                inv.RefreshItemCategories = function() end
+                inv.OnRep_SpawnedGear = function() end
+                inv.PutItemInHands = function(self, item) in_hand[#in_hand + 1] = item return equip_ok end
+                o.InventoryComp = inv
+            end
+            for i, donor in ipairs(objects.CyberneticsSwat_V2_C) do
+                donor.GetClass = function() return officer_class end
+                donor.DefaultTeam = donor.SquadPosition == 0 and 2 or 1
+                donor.IsDeadOrUnconscious = function() return false end
+                donor.CapsuleComponent = {{ GetScaledCapsuleHalfHeight = function() return 90 end }}
+                local rifle = obj("Rifle_" .. i, {{ GetClass = function() return obj("RifleClass") end }})
+                local nade = obj("Flash_" .. i, {{ GetClass = function() return obj("FlashClass") end }})
+                gear_owner(donor, {{ rifle, nade }})
+                donor.InventoryComp.SpawnedGear.Primary = rifle
+                table.insert(donor.InventoryComp.SpawnedGear.Grenades, nade)
+                donor.GetEquippedWeapon = function() return rifle end
+            end
+            local world = {{ IsValid = function() return true end, GetFName = function() return {{ ToString = function() return "RiverwoodHouse" end }} end }}
+            world.SpawnActor = function(self, class, at, rot)
+                spawned = spawned + 1
+                if class == officer_class then
+                    local o = actor("Swat_New_" .. spawned, at.X, at.Y, at.Z - 100, 0, {{}})
+                    local base_valid = o.IsValid
+                    o.IsValid = function(self) return not self.destroyed end
+                    o.K2_DestroyActor = function(self) self.destroyed = true destroyed[#destroyed + 1] = "officer" end
+                    o.IsDeadOrUnconscious = function() return false end
+                    o.SpawnDefaultController = function(self)
+                        self.Controller = obj("Controller_" .. spawned, {{ OnAIFinishSpawning = function() finished = finished + 1 end }})
+                    end
+                    gear_owner(o, {{}})
+                    table.insert(objects.CyberneticsSwat_V2_C, o)
+                    return o
+                end
+                return obj("Item_" .. spawned, {{ SetOwner = function(self, owner) self.owner = owner end }})
+            end
+            objects.PlayerController[1].GetWorld = function() return world end
+            objects.SWATManager[1].SwatAI = list({{ objects.CyberneticsSwat_V2_C[1], objects.CyberneticsSwat_V2_C[2] }})
+            local nav = obj("Nav", {{ K2_ProjectPointToNavigation = function(self, ctx, want, out)
+                out.X, out.Y, out.Z = want.X, want.Y, want.Z
+                return true
+            end }})
+            function StaticFindObject(path) if path:find("NavigationSystemV1") then return nav end end
+        """)
+
+    def test_call_in_green_team(self):
+        self.add_reinforcement_world()
+        self.run_orders({"id": 1, "team": "green", "action": "request_team", "target": {}, "options": {}})
+        for _ in range(4):
+            state = self.tick()
+        g = self.lua.globals()
+        result = next(r for r in state["results"] if r["id"] == 1)
+        self.assertEqual((result["status"], result["message"]), ("ok", "GREEN on scene"))
+        self.assertEqual(g.finished, 2)
+        self.assertEqual(self.lua.eval("#objects.SWATManager[1].SwatAI"), 4)  # 2 stock + Echo + Foxtrot
+        green = sorted((o["name"], o["team"]) for o in state["officers"] if o["team"] == "green")
+        self.assertEqual(green, [("Echo", "green"), ("Foxtrot", "green")])
+        new = [o for o in g.objects.CyberneticsSwat_V2_C.values() if o.SquadPosition in (4, 5)]
+        self.assertEqual(sorted(o.SquadPosition for o in new), [4, 5])
+        self.assertEqual({o.DefaultTeam for o in new}, {2})  # follows BLUE orders until stage 2
+        for o in new:
+            items = [o.InventoryComp.InventoryItems[i] for i in (1, 2)]
+            self.assertIsNone(o.InventoryComp.InventoryItems[3])  # rifle and flashbang copied, nothing else
+            self.assertEqual(o.InventoryComp.SpawnedGear.Primary.GetFName().ToString(), items[0].GetFName().ToString())
+            self.assertIsNotNone(o.InventoryComp.SpawnedGear.Grenades[1])
+        self.assertEqual(self.lua.eval("#in_hand"), 2)
+        # Asking again while both are alive: nothing new.
+        self.send("A", [{"id": 2, "team": "green", "action": "request_team", "target": {}, "options": {}}])
+        state = self.tick()
+        result = next(r for r in state["results"] if r["id"] == 2)
+        self.assertEqual((result["status"], result["message"]), ("ok", "GREEN is already on scene"))
+
+    def test_failed_call_in_removes_what_it_spawned(self):
+        self.add_reinforcement_world(equip_ok=False)
+        self.run_orders({"id": 1, "team": "yellow", "action": "request_team", "target": {}, "options": {}})
+        for _ in range(3):
+            state = self.tick()
+        result = next(r for r in state["results"] if r["id"] == 1)
+        self.assertEqual(result["status"], "error")
+        self.assertIn("Golf: primary weapon not equipped", result["message"])
+        g = self.lua.globals()
+        self.assertIn("officer", list(g.destroyed.values()))
+        self.assertEqual(self.lua.eval("#objects.SWATManager[1].SwatAI"), 2)  # nothing registered
+        self.assertFalse(any(o["team"] == "yellow" for o in state["officers"]))
+
     def add_people(self):
         self.lua.execute(r"""
             local function person(n, x, flags)

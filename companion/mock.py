@@ -144,6 +144,7 @@ class MockGame:
             self.targets.append({"id": tid, "kind": kind, "status": status, "reported": False,
                                  "pos": {"x": x, "y": y, "z": 0.0}})
         self.clock = 0.0
+        self.call_ins = []
         self.spotted = None
         self.officers[1].status, self.officers[1].health = "injured", 58
         self.cctv_spotted = None
@@ -252,6 +253,8 @@ class MockGame:
     def dispatch(self, cmd):
         """Like the mod: run now, hold for GO, or start / clear the held orders."""
         result = {"id": cmd["id"], "team": cmd["team"], "action": cmd["action"]}
+        if cmd["action"] == "request_team":
+            return self.request_team(cmd, result)
         if cmd["action"] == "go":
             held, self.held = self.held, {}
             for entry in held.values():
@@ -271,6 +274,33 @@ class MockGame:
             self.held[cmd["team"]] = {"cmd": cmd, "result": result}
             return result
         return self.execute(cmd)
+
+    CALL_INS = {"green": ("Echo", "Foxtrot"), "yellow": ("Golf", "Hotel")}
+
+    def request_team(self, cmd, result):
+        """Like the mod's reinforcements: one operator per second next to the player."""
+        team = cmd["team"]
+        names = [n for n in self.CALL_INS[team] if not any(o.name == n for o in self.officers)]
+        if not names:
+            return dict(result, status="ok", message=f"{team.upper()} is already on scene")
+        result.update(status="pending", message=f"calling in {len(names)} operator(s)", wanted=len(names), done=0)
+        self.call_ins.extend({"team": team, "name": n, "result": result, "at": self.clock + 1 + i}
+                             for i, n in enumerate(names))
+        return result
+
+    def spawn_call_ins(self):
+        for job in [j for j in self.call_ins if j["at"] <= self.clock]:
+            self.call_ins.remove(job)
+            p = self.player["pos"]
+            u, v = world_to_px(p["x"], p["y"])
+            o = Officer(f"Swat_{job['name']}", job["name"], job["team"], u - 30 - 20 * len(self.officers), v, {
+                "flashbang": 1, "c2": 1, "chemlight": 1})
+            o.follow = 120 + 30 * len(self.officers)
+            self.officers.append(o)
+            r = job["result"]
+            r["done"] += 1
+            if r["done"] >= r["wanted"]:
+                r.update(status="ok", message=f"{job['team'].upper()} on scene")
 
     def read_commands(self, bridge):
         try:
@@ -352,6 +382,7 @@ class MockGame:
             self.results.insert(0, self.dispatch(cmd))
             del self.results[30:]
         self.clock += dt
+        self.spawn_call_ins()
         self.update_player(dt)
         cameras = self.cameras()
         for o in self.officers:

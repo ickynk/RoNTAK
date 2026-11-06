@@ -6,8 +6,12 @@
   const DOOR_HIT_PX = 20;
   const DOOR_ROOM_LINK_UNITS = 120;
 
-  const TEAM_COLORS = { red: "#e53935", blue: "#1e88e5", gold: "#f9a825", unknown: "#9e9e9e" };
-  const TEAM_LABEL = { red: "RED", blue: "BLUE", gold: "GOLD" };
+  const TEAM_COLORS = { red: "#e53935", blue: "#1e88e5", gold: "#f9a825", green: "#2ecc71", yellow: "#ffe600", unknown: "#9e9e9e" };
+  const TEAM_LABEL = { red: "RED", blue: "BLUE", gold: "GOLD", green: "GREEN", yellow: "YELLOW" };
+  // Teams called in during a mission (the mod's config.reinforcements).
+  // [team, operators, stock team whose orders they also follow for now]
+  const CALL_IN_TEAMS = [["green", "Echo, Foxtrot", "blue"], ["yellow", "Golf, Hotel", "red"]];
+  const CALL_IN_SIZE = 2;
 
   const OPTION_CHOICES = {
     breach: [["kick", "Kick"], ["shotgun", "Shotgun"], ["c2", "C2"], ["ram", "Ram"], ["leader", "Leader"]],
@@ -1947,6 +1951,36 @@
     }
   }
   $("go").onclick = () => sendControl("go");
+
+  // Reinforcement buttons: call a team in, or show that it is coming / on scene.
+  function renderCallIns() {
+    const box = $("call-ins");
+    const s = app.state || {};
+    const live = Boolean(s.connected) && viewingLiveLevel();
+    const results = s.results || [];
+    const key = JSON.stringify([live, (s.officers || []).map((o) => [o.team, o.status]),
+      results.filter((r) => r.action === "request_team").slice(0, 4)]);
+    if (box.dataset.key === key) return;
+    box.dataset.key = key;
+    box.innerHTML = "";
+    for (const [team, names, joins] of CALL_IN_TEAMS) {
+      const alive = (s.officers || []).filter((o) => o.team === team && o.status !== "dead").length;
+      const last = results.find((r) => r.action === "request_team" && r.team === team);
+      const b = document.createElement("button");
+      b.className = "call-in";
+      b.style.borderColor = TEAM_COLORS[team];
+      const coming = last && last.status === "pending";
+      b.textContent = coming ? `${TEAM_LABEL[team]}: coming… ${last.done || 0}/${last.wanted || CALL_IN_SIZE}`
+        : alive >= CALL_IN_SIZE ? `${TEAM_LABEL[team]} on scene`
+        : `Call in ${TEAM_LABEL[team]} · ${names}`;
+      b.title = last && last.status === "error" ? `Last call-in failed: ${last.message}`
+        : `Spawn ${names} next to you. For now they also take ${TEAM_LABEL[joins]}'s orders.`;
+      b.disabled = !live || coming || alive >= CALL_IN_SIZE;
+      b.onclick = () => api("POST", "/api/command", { team, action: "request_team" })
+        .catch((e) => alert("Could not call in the team: " + e.message));
+      box.appendChild(b);
+    }
+  }
   $("clear-held").onclick = () => sendControl("clear_held");
 
   // Orders the mod is holding for GO (from state.json).
@@ -2095,6 +2129,7 @@
     }
     renderStatus();
     renderRoster();
+    renderCallIns();
     const pos = app.state && app.state.player && app.state.player.pos;
     $("cal-pos").textContent = pos ? `X ${Math.round(pos.x)}  Y ${Math.round(pos.y)}  Z ${Math.round(pos.z)}` : "—";
     renderTasks();

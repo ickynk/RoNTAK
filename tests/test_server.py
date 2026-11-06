@@ -123,6 +123,14 @@ class ServerTest(unittest.TestCase):
         last = json.loads((self.bridge / "commands.json").read_text())["commands"][-1]
         self.assertNotIn("hold", last)  # GO itself is never held
 
+    def test_request_team(self):
+        status, body = self.call("POST", "/api/command", {"team": "green", "action": "request_team"})
+        self.assertEqual(status, 200)
+        status, body = self.call("POST", "/api/command", {"team": "purple", "action": "request_team"})
+        self.assertEqual(status, 400)
+        status, body = self.call("POST", "/api/command", {"team": "green", "action": "move_to", "target": {}})
+        self.assertEqual(status, 400)  # orders for called-in teams come in stage 2
+
     def test_command_validation(self):
         self.assertEqual(self.call("POST", "/api/command", {"team": "green", "action": "hold"})[0], 400)
         self.assertEqual(self.call("POST", "/api/command", {"team": "red", "action": "dance"})[0], 400)

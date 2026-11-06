@@ -238,6 +238,12 @@ end
 
 local officers_this_tick = { tick = nil, list = {} }
 
+-- After an officer is added (reinforcements): rescan on the next scan slot.
+function game.forget_officers()
+    officer_cache.at = -math.huge
+    officers_this_tick.tick = nil
+end
+
 -- Officer actors with their team and position, for orders that need the
 -- actual objects. Positions are read once per tick.
 function game.officer_actors()
