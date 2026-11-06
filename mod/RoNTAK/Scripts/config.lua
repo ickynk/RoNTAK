@@ -164,6 +164,8 @@ config.reinforcements = {
     entry_clearance_cm = 50,  -- ...or to an exact entry position (officers stood there side by side)
     -- When SpawnActor returns nothing usable, the new actor is looked for this close to the spot.
     find_spawned_cm = 300,
+    items_per_tick = 2,   -- gear items copied per mod tick (4 ticks a second)
+    log_steps = true,     -- log each step of setting up an operator (for troubleshooting)
     -- Where to try spawning around the player (cm), first free spot wins.
     spawn_offsets = { { 300, 0 }, { -300, 0 }, { 0, 300 }, { 0, -300 }, { 300, 300 }, { -300, 300 },
                       { 300, -300 }, { -300, -300 }, { 500, 0 }, { -500, 0 }, { 0, 500 }, { 0, -500 },

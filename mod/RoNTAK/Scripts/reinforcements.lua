@@ -1,7 +1,7 @@
 -- Reinforcements: extra SWAT teams called in during a mission (stage 1).
 --
 -- Requesting a team (RoNTAK button or config.keys.request_<team>) spawns its
--- operators one per tick:
+-- operators one after another, each set up a step per tick (see STEPS):
 --   1. a free spot at the mission's entry point (where the squad stood when
 --      the mission began), else near the player on the AI navigation mesh,
 --      clear of other officers;
@@ -196,33 +196,95 @@ local function check(ok, what)
 end
 
 -- Copies the donor's gear onto the new operator.
-local function copy_gear(op, donor, world, at, made)
-    local inv, donor_inv = op.InventoryComp, donor.InventoryComp
-    check(valid(inv) and valid(donor_inv), "no inventory")
-    local primary = nil
-    pcall(function() primary = donor:GetEquippedWeapon() end)
-    local primary_name = valid(primary) and object_name(primary) or nil
-    local copies, in_hand = {}, nil
-    donor_inv.InventoryItems:ForEach(function(_, element)
+local function step_note(job, line)
+    if c().log_steps ~= false then note(job.name .. ": " .. line) end
+end
+
+-- Setting up one operator, a step per tick (the gear a few items per tick),
+-- so the game never stalls on it and a log line names every step:
+--   spawn -> items -> gear -> finish -> register.
+local STEPS = {}
+
+function STEPS.spawn(job)
+    local pc = game.player_controller()
+    local pawn = game.player_pawn()
+    check(pc and valid(pawn), "no player")
+    local world = pc:GetWorld()
+    check(valid(world), "no world")
+    local stock = stock_by_slot()
+    local donor = stock[job.kit] or stock[0] or stock[1] or stock[2] or stock[3]
+    check(donor, "no ready stock officer to copy")
+    local half = 90
+    pcall(function() half = donor.CapsuleComponent:GetScaledCapsuleHalfHeight() end)
+    local spot, rejected = spawn_spot(pawn, donor, half)
+    if not spot then
+        error(string.format("no free spot at the entry point or near you (%s; entry point %s; spots taken %d, off the nav mesh %d, other floor %d)",
+            entry.spots and "entry known" or "entry not recorded", entry.spots and #entry.spots .. " positions" or "-",
+            rejected.occupied, rejected.off_nav, rejected.other_floor), 0)
+    end
+    -- An entry position is a standing officer's centre; a nav-mesh point is the floor.
+    local z = spot.centre and spot.z + 10 or spot.z + half + 10
+    -- A new officer isn't one the mod already knows (nor the player).
+    local known = {}
+    for _, o in ipairs(game.officer_actors()) do known[o.name] = true end
+    local op = spawn_actor(world, donor:GetClass(), { X = spot.x, Y = spot.y, Z = z }, function(a)
+        return not known[object_name(a)] and object_name(a) ~= object_name(pawn)
+    end)
+    check(valid(op), "operator spawn failed")
+    job.made[#job.made + 1] = op
+    op.SquadPosition = job.slot
+    op.DefaultTeam = (config.team_args or {})[job.team_def.joins] or donor.DefaultTeam
+    if not valid(op.Controller) then op:SpawnDefaultController() end
+    check(valid(op.Controller), "no AI controller")
+    job.made[#job.made + 1] = op.Controller
+    check(valid(op.InventoryComp) and valid(donor.InventoryComp), "no inventory")
+    job.op, job.donor, job.world = op, donor, world
+    job.at = { X = spot.x, Y = spot.y, Z = spot.z + 50 }
+    job.items, job.copies = {}, {}
+    donor.InventoryComp.InventoryItems:ForEach(function(_, element)
         local item = element:get()
+        if valid(item) then job.items[#job.items + 1] = item end
+    end)
+    pcall(function()
+        local primary = donor:GetEquippedWeapon()
+        job.primary = valid(primary) and object_name(primary) or nil
+    end)
+    step_note(job, string.format("spawned (%s, gear of %s: %d items)", object_name(op), object_name(donor), #job.items))
+    return "items"
+end
+
+-- Copies a few of the donor's items.
+function STEPS.items(job)
+    check(valid(job.op) and valid(job.donor), "operator or gear source gone")
+    for _ = 1, c().items_per_tick or 2 do
+        local item = table.remove(job.items, 1)
+        if not item then return "gear" end
         if valid(item) then
+            local class_name = object_name(item:GetClass())
+            step_note(job, "copying " .. class_name)
             -- A new item has no owner yet and isn't one of this operator's copies.
-            local copy = spawn_actor(world, item:GetClass(), at, function(a)
-                for _, m in ipairs(made) do if object_name(m) == object_name(a) then return false end end
+            local copy = spawn_actor(job.world, item:GetClass(), job.at, function(a)
+                for _, m in ipairs(job.made) do if object_name(m) == object_name(a) then return false end end
                 local owned = false
                 pcall(function() owned = valid(a:GetOwner()) end)
                 return not owned
             end)
-            check(valid(copy), "item spawn failed (" .. object_name(item) .. ")")
-            made[#made + 1] = copy
-            copy:SetOwner(op)
-            check(inv:AddInventoryItem(copy), "item not accepted")
-            copies[object_name(item)] = copy
-            if object_name(item) == primary_name then in_hand = copy end
+            check(valid(copy), "item spawn failed (" .. class_name .. ")")
+            job.made[#job.made + 1] = copy
+            copy:SetOwner(job.op)
+            check(job.op.InventoryComp:AddInventoryItem(copy), "item not accepted (" .. class_name .. ")")
+            job.copies[object_name(item)] = copy
+            if object_name(item) == job.primary then job.in_hand = copy end
         end
-    end)
-    -- The gear record points at items; point the copy's at the copies.
-    local from, to = donor_inv.SpawnedGear, inv.SpawnedGear
+    end
+    return #job.items > 0 and "items" or "gear"
+end
+
+-- Points the gear record at the copies and puts the primary weapon in hand.
+function STEPS.gear(job)
+    check(valid(job.op) and valid(job.donor), "operator or gear source gone")
+    local inv, copies = job.op.InventoryComp, job.copies
+    local from, to = job.donor.InventoryComp.SpawnedGear, inv.SpawnedGear
     for _, slot in ipairs(c().gear_slots or {}) do
         local item = from[slot]
         if valid(item) and copies[object_name(item)] then to[slot] = copies[object_name(item)] end
@@ -241,57 +303,30 @@ local function copy_gear(op, donor, world, at, made)
     end
     pcall(function() inv:RefreshItemCategories() end)
     pcall(function() inv:OnRep_SpawnedGear() end)
-    check(valid(in_hand), "no primary weapon to copy")
-    check(inv:PutItemInHands(in_hand, true, true, true), "primary weapon not equipped")
+    check(valid(job.in_hand), "no primary weapon to copy")
+    check(inv:PutItemInHands(job.in_hand, true, true, true), "primary weapon not equipped")
+    step_note(job, "geared up")
+    return "finish"
 end
 
-local function spawn_operator(job)
-    local pc = game.player_controller()
-    local pawn = game.player_pawn()
-    check(pc and valid(pawn), "no player")
-    local world = pc:GetWorld()
-    check(valid(world), "no world")
-    local stock = stock_by_slot()
-    local donor = stock[job.kit] or stock[0] or stock[1] or stock[2] or stock[3]
-    check(donor, "no ready stock officer to copy")
-    local half = 90
-    pcall(function() half = donor.CapsuleComponent:GetScaledCapsuleHalfHeight() end)
-    local spot, rejected = spawn_spot(pawn, donor, half)
-    if not spot then
-        error(string.format("no free spot at the entry point or near you (%s; entry point %s; spots taken %d, off the nav mesh %d, other floor %d)",
-            entry.spots and "entry known" or "entry not recorded", entry.spots and #entry.spots .. " positions" or "-",
-            rejected.occupied, rejected.off_nav, rejected.other_floor), 0)
-    end
-    local made = {}
-    local ok, err = pcall(function()
-        -- An entry position is a standing officer's centre; a nav-mesh point is the floor.
-        local z = spot.centre and spot.z + 10 or spot.z + half + 10
-        -- A new officer isn't one the mod already knows (nor the player).
-        local known = {}
-        for _, o in ipairs(game.officer_actors()) do known[o.name] = true end
-        local op = spawn_actor(world, donor:GetClass(), { X = spot.x, Y = spot.y, Z = z }, function(a)
-            return not known[object_name(a)] and object_name(a) ~= object_name(pawn)
-        end)
-        check(valid(op), "operator spawn failed")
-        made[#made + 1] = op
-        op.SquadPosition = job.slot
-        op.DefaultTeam = (config.team_args or {})[job.team_def.joins] or donor.DefaultTeam
-        if not valid(op.Controller) then op:SpawnDefaultController() end
-        check(valid(op.Controller), "no AI controller")
-        made[#made + 1] = op.Controller
-        copy_gear(op, donor, world, { X = spot.x, Y = spot.y, Z = spot.z + 50 }, made)
-        op.Controller:OnAIFinishSpawning()
-        local manager = game.resolve_target(c().manager or "SWATManager")
-        check(valid(manager), "no squad manager")
-        local n = 0
-        manager.SwatAI:ForEach(function() n = n + 1 end)
-        manager.SwatAI[n + 1] = op
-    end)
-    if not ok then
-        discard(made)
-        error(err, 0)
-    end
+-- The game's own end of spawning an AI officer.
+function STEPS.finish(job)
+    check(valid(job.op) and valid(job.op.Controller), "operator gone")
+    job.op.Controller:OnAIFinishSpawning()
+    step_note(job, "AI started")
+    return "register"
+end
+
+-- Joins the squad manager's list, so squad orders reach the operator.
+function STEPS.register(job)
+    check(valid(job.op), "operator gone")
+    local manager = game.resolve_target(c().manager or "SWATManager")
+    check(valid(manager), "no squad manager")
+    local n = 0
+    manager.SwatAI:ForEach(function() n = n + 1 end)
+    manager.SwatAI[n + 1] = job.op
     game.forget_officers()
+    return "done"
 end
 
 -- Starts calling in a team. Returns a result for RoNTAK's order list.
@@ -328,16 +363,23 @@ function reinforcements.request(cmd)
     return result
 end
 
--- Spawns the next queued operator; called once per mod tick.
+-- Advances the operator being set up by one step; called once per mod tick.
 function reinforcements.tick()
     record_entry()
-    local job = table.remove(queue, 1)
+    local job = queue[1]
     if not job then return end
+    job.step = job.step or "spawn"
+    job.made = job.made or {}
+    job.name = job.name or ((config.officers or {}).squad_names or {})[job.slot] or ("slot " .. job.slot)
     local result = results[job.id]
-    local ok, err = pcall(spawn_operator, job)
-    local name = ((config.officers or {}).squad_names or {})[job.slot] or ("slot " .. job.slot)
+    local ok, next_step = pcall(STEPS[job.step], job)
+    if ok and next_step ~= "done" then
+        job.step = next_step
+        return
+    end
+    table.remove(queue, 1)
     if ok then
-        note(string.format("%s (%s) is on scene", name, string.upper(job.team)))
+        note(string.format("%s (%s) is on scene", job.name, string.upper(job.team)))
         if result then
             result.done = result.done + 1
             if result.done >= result.wanted then
@@ -345,8 +387,10 @@ function reinforcements.tick()
             end
         end
     else
-        note(string.format("%s (%s) could not be called in: %s", name, string.upper(job.team), tostring(err)))
-        if result then result.status, result.message = "error", name .. ": " .. tostring(err) end
+        discard(job.made)
+        note(string.format("%s (%s) could not be called in (step %s): %s", job.name, string.upper(job.team),
+            job.step, tostring(next_step)))
+        if result then result.status, result.message = "error", job.name .. ": " .. tostring(next_step) end
         -- The rest of this request would most likely fail the same way.
         for i = #queue, 1, -1 do if queue[i].id == job.id then table.remove(queue, i) end end
     end
