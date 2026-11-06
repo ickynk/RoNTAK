@@ -82,7 +82,9 @@ Two extra teams can be called in during a mission:
 | **GREEN** | Echo, Foxtrot | Alpha, Beta | **Call in GREEN** on the ATAK screen, or **Page Up** in game |
 | **YELLOW** | Golf, Hotel | Charlie, Delta | **Call in YELLOW**, or **Page Down** in game |
 
-They appear next to you, one per second, and show up on the map and roster in their colour. Calling a team
+They arrive one per second at the mission's **entry point**, where your squad stood when the mission began
+(or next to you if that's full, or with `spawn_at = "player"` in `config.reinforcements`), and show up on the map
+and roster in their colour. Calling a team
 again only replaces operators who are dead or missing. If a call-in fails, hover over its button to see why (the
 UE4SS console also says `reinforcements: …`).
 
