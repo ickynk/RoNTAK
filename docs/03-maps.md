@@ -1,5 +1,17 @@
 # 3. Maps: floors, floor plan images, and rooms
 
+## Looking at other levels' maps
+
+The **Map** box at the top of the side panel picks which level's map is shown:
+
+- **Auto** (the default): the level you're playing, switching by itself when you start another mission.
+- **Any other level** with a saved map or an in-game capture: its floors, plans, walls and rooms, without being in
+  that level, even with the game closed. Live positions and orders are off while it's shown (they belong to the
+  level in play); calibrating, using captures, finding and naming rooms and **Save map** all work, so you can
+  prepare maps between missions.
+
+Pick **Auto** again to follow the game.
+
 ## Floors are automatic
 
 When you load a level that has no saved map yet, RoNTAK finds the heights where several doors sit together and
@@ -19,16 +31,17 @@ You name rooms yourself on top of a floor plan image (see "Drawing rooms" below)
 To see the game's rooms as a rough guide while drawing, press **Rooms** and tick **Show the game's room
 outlines**. With it on, doors are also labelled with the game's room numbers on each side.
 
-## Floor plans from the game (F11): the easiest way
+## Floor plans from the game (Home key): the easiest way
 
 RoNTAK can take exact floor plans straight from the game: a true top-down picture of the whole level, cut
 just above the floor you stand on, so roofs and upper floors are left out. They line up by themselves.
 
 1. Load into the level, with the companion running. A quiet moment is best: the game freezes for a second or two.
-2. Stand on a floor (anywhere on it) and press **F11**. The UE4SS console says `floor capture: saved …`, then
+2. Stand on a floor (anywhere on it) and press **Home**. The UE4SS console says `floor capture: saved …`, then
    the walls are traced (see below): `wall trace: 25%` … `wall trace: … wall segments …`. Stay on that floor
-   level until it's done; you can move around.
-3. Repeat on every floor: go upstairs, press **F11** again, and so on.
+   level until it's done; you can move around. (The key is set in `config.lua`, `floor_capture`; it isn't F11
+   because that is the game's fullscreen / borderless toggle.)
+3. Repeat on every floor: go upstairs, press **Home** again, and so on.
 4. On the ATAK screen, press **Calibrate**. Under **In-game captures**, press **Use** next to each floor.
 5. Press **Save map**.
 
@@ -49,7 +62,7 @@ traced walls becomes a room, named Room 1, Room 2, … Tap a name in the list to
 about 1.2 m wide) separate rooms; wider openings only separate rooms where there's a door marker. Pressing
 **Find rooms** again replaces the found rooms you haven't renamed and keeps the ones you have.
 
-The pictures show surfaces in plain colours (no lighting or fog). Pressing F11 again on the same floor replaces
+The pictures show surfaces in plain colours (no lighting or fog). Pressing Home again on the same floor replaces
 that floor's capture. You can still name rooms on top (see "Drawing rooms"), and use **Adjust image** to crop
 the edges.
 

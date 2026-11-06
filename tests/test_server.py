@@ -38,6 +38,14 @@ class ServerTest(unittest.TestCase):
         except urllib.error.HTTPError as e:
             return e.code, json.loads(e.read())
 
+    def test_known_levels_for_the_map_select(self):
+        (self.maps / "Level1").mkdir(exist_ok=True)
+        import mock
+        mock.write_capture(self.bridge)  # a capture of MockHouse, which has no map folder here
+        status, body = self.call("GET", "/api/maps")
+        self.assertIn("Level1", body["levels"])
+        self.assertIn("MockHouse", body["levels"])
+
     def test_in_game_captures(self):
         import mock
         mock.write_capture(self.bridge)
@@ -114,6 +122,14 @@ class ServerTest(unittest.TestCase):
         status, cmd = self.call("POST", "/api/command", {"team": "gold", "action": "go", "hold": True})
         last = json.loads((self.bridge / "commands.json").read_text())["commands"][-1]
         self.assertNotIn("hold", last)  # GO itself is never held
+
+    def test_request_team(self):
+        status, body = self.call("POST", "/api/command", {"team": "green", "action": "request_team"})
+        self.assertEqual(status, 200)
+        status, body = self.call("POST", "/api/command", {"team": "purple", "action": "request_team"})
+        self.assertEqual(status, 400)
+        status, body = self.call("POST", "/api/command", {"team": "green", "action": "move_to", "target": {}})
+        self.assertEqual(status, 400)  # orders for called-in teams come in stage 2
 
     def test_command_validation(self):
         self.assertEqual(self.call("POST", "/api/command", {"team": "green", "action": "hold"})[0], 400)

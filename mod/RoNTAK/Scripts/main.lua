@@ -7,6 +7,7 @@ local cameras = require("cameras")
 local config = require("config")
 local discovery = require("discovery")
 local floorplan = require("floorplan")
+local reinforcements = require("reinforcements")
 local game = require("game")
 local log = require("log")
 local mapinfo = require("mapinfo")
@@ -41,9 +42,14 @@ local function tick()
     game.begin_tick()
     local level = game.level_name()
     for _, cmd in ipairs(bridge.new_commands()) do
-        remember(orders.dispatch(cmd))
+        if cmd.action == "request_team" then
+            remember(reinforcements.request(cmd))
+        else
+            remember(orders.dispatch(cmd))
+        end
     end
     orders.run_checks()
+    reinforcements.tick()
 
     local doors = level and game.doors(level) or {}
     local rooms_version = rooms.update(level)
@@ -134,6 +140,9 @@ bind(config.keys.discovery_dump, discovery.dump)
 bind(config.keys.sniff_toggle, discovery.toggle_sniff)
 bind(config.keys.test_order, test_order)
 bind(config.keys.floor_capture, floorplan.capture)
+for team in pairs((config.reinforcements or {}).teams or {}) do
+    bind(config.keys["request_" .. team], function() remember(reinforcements.request_from_key(team)) end)
+end
 
 orders.install_class_hooks()
 cameras.install_hooks()

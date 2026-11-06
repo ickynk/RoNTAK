@@ -1,4 +1,4 @@
--- Floor plan capture (config.keys.floor_capture, F11).
+-- Floor plan capture (config.keys.floor_capture, the Home key).
 --
 -- Stand on a floor and press the key: the mod renders a true top-down
 -- picture of the whole level at that floor and saves it in the bridge

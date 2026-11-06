@@ -26,7 +26,10 @@ config.keys = {
     discovery_dump = "F8",   -- write candidate classes/functions to bridge/discovery.txt
     sniff_toggle   = "F9",   -- start/stop logging calls to config.sniff functions
     test_order     = "F10",  -- send config.test_order through the normal order path
-    floor_capture  = "F11",  -- save a top-down floor plan of the floor you stand on (companion: Calibrate)
+    floor_capture  = "HOME", -- save a top-down floor plan of the floor you stand on (companion: Calibrate).
+                             -- Not F11: that is the game's fullscreen / borderless toggle.
+    request_green  = "PAGE_UP",   -- call in GREEN team (config.reinforcements)
+    request_yellow = "PAGE_DOWN", -- call in YELLOW team
 }
 
 ---------------------------------------------------------------------------
@@ -43,11 +46,14 @@ config.officers = {
     team_property = "SquadPosition",
     -- Which squad slot belongs to which team (checked in game: Alpha and Beta
     -- are BLUE, Charlie and Delta are RED).
-    team_values = { [0] = "blue", [1] = "blue", [2] = "red", [3] = "red" },
+    team_values = { [0] = "blue", [1] = "blue", [2] = "red", [3] = "red",
+                    -- Called-in teams (config.reinforcements), in the game's spare slots 4-7.
+                    [4] = "green", [5] = "green", [6] = "yellow", [7] = "yellow" },
     -- Officer names: RosterCharacter.FirstName / LastName. The roster entry
     -- can be empty (it is checked before use); then the squad slot name is used.
     roster_property = "RosterCharacter",
-    squad_names = { [0] = "Alpha", [1] = "Beta", [2] = "Charlie", [3] = "Delta" },
+    squad_names = { [0] = "Alpha", [1] = "Beta", [2] = "Charlie", [3] = "Delta",
+                    [4] = "Echo", [5] = "Foxtrot", [6] = "Golf", [7] = "Hotel" },
     -- Health shown in the roster: GetHealthStatus() returns an
     -- EPlayerHealthStatus, and GetCurrentHealth() / GetMaxHealth() the
     -- health points (AReadyOrNotCharacter, from the header dump).
@@ -134,6 +140,27 @@ config.targets = {
     arrested_function = "IsArrested",
     down_function = "IsDeadOrUnconscious",
     reported_function = "HasBeenReported",
+}
+
+-- Extra SWAT teams called in during a mission (reinforcements.lua). Each
+-- team's operators take the game's spare squad slots 4-7 (named in
+-- config.officers.squad_names) and copy the gear of the stock officer in
+-- the matching "kits" slot (0 Alpha, 1 Beta, 2 Charlie, 3 Delta). In game,
+-- orders go by RED / BLUE / GOLD only: "joins" is the stock team whose
+-- orders the team follows until it can be commanded on its own.
+config.reinforcements = {
+    teams = {
+        green = { slots = { 4, 5 }, kits = { 0, 1 }, joins = "blue" },   -- Echo, Foxtrot
+        yellow = { slots = { 6, 7 }, kits = { 2, 3 }, joins = "red" },   -- Golf, Hotel
+    },
+    manager = "SWATManager",
+    -- Where to try spawning, around the player (cm), first free spot wins.
+    spawn_offsets = { { 300, 0 }, { -300, 0 }, { 0, 300 }, { 0, -300 }, { 300, 300 }, { -300, 300 },
+                      { 300, -300 }, { -300, -300 }, { 500, 0 }, { -500, 0 }, { 0, 500 }, { 0, -500 },
+                      { 150, 0 }, { -150, 0 }, { 0, 150 }, { 0, -150 } },
+    -- The parts of InventoryComp.SpawnedGear that point at items.
+    gear_slots = { "Primary", "Secondary", "Armor", "Helmet", "HelmetMount", "Facewear", "RandomGear", "LongTactical" },
+    gear_lists = { "Grenades", "TacticalDevices", "Miscelaneous" },  -- (sic: the game's spelling)
 }
 
 -- Helicopter, drone and CCTV cameras, drawn on the map as view cones

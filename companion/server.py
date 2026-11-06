@@ -46,12 +46,16 @@ MAX_KEPT_COMMANDS = 50
 MAX_UPLOAD_BYTES = 30 * 1024 * 1024
 
 TEAMS = {"red", "blue", "gold"}
+# Teams called in during a mission (the mod's config.reinforcements). For now
+# they can only be requested; orders still go to RED / BLUE / GOLD.
+CALL_IN_TEAMS = {"green", "yellow"}
 ACTIONS = {
     "stack_up", "open_clear", "breach_clear", "move_clear", "scan_door", "wedge_door",
     "move_to", "fall_in", "hold", "search_secure",
     "pick_lock", "close_door", "remove_wedge", "check_traps", "disarm_trap", "scan_open",
     "cover_area", "chemlight", "deploy_grenade", "restrain", "report",
     "go", "clear_held",  # start / clear the orders held for GO
+    "request_team",      # call in an extra team (team: green / yellow)
 }
 OPTION_KEYS = ("breach", "grenade", "side", "scan")
 IMAGE_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp", ".svg": "image/svg+xml"}
@@ -111,10 +115,14 @@ class CommandQueue:
 def validate_order(body: dict) -> dict:
     team = body.get("team")
     action = body.get("action")
-    if team not in TEAMS:
-        raise ValueError("team must be red, blue or gold")
     if action not in ACTIONS:
         raise ValueError(f"unknown action {action!r}")
+    if action == "request_team":
+        if team not in CALL_IN_TEAMS:
+            raise ValueError("team must be green or yellow")
+        return {"team": team, "action": action, "target": {}, "options": {}}
+    if team not in TEAMS:
+        raise ValueError("team must be red, blue or gold")
     order = {"team": team, "action": action}
 
     target = body.get("target") or {}
@@ -190,6 +198,8 @@ class Handler(SimpleHTTPRequestHandler):
                 return self.send_json(read_json(self.bridge / "rooms.json") or {"level": None, "rooms": []})
             if parts == ["api", "captures"]:
                 return self.send_json({"captures": self.captures()})
+            if parts == ["api", "maps"]:
+                return self.send_json({"levels": self.known_levels()})
             if len(parts) == 3 and parts[:2] == ["api", "maps"]:
                 return self.get_map(safe_name(parts[2]))
             if len(parts) == 3 and parts[0] == "maps":
@@ -248,6 +258,14 @@ class Handler(SimpleHTTPRequestHandler):
         state["age"] = round(age, 1)
         self.send_json(state)
 
+    def known_levels(self) -> list:
+        """Levels with a saved map (a folder in maps) or an in-game capture, for the map select."""
+        levels = set()
+        if MAPS_DIR.is_dir():
+            levels |= {p.name for p in MAPS_DIR.iterdir() if p.is_dir() and SAFE_NAME.match(p.name)}
+        levels |= {c["level"] for c in self.captures() if isinstance(c.get("level"), str) and SAFE_NAME.match(c["level"])}
+        return sorted(levels, key=str.lower)
+
     def get_map(self, level):
         data = read_json(MAPS_DIR / level / "map.json")
         if data is None:
@@ -277,7 +295,7 @@ class Handler(SimpleHTTPRequestHandler):
         self.send_json({"saved": True})
 
     def captures(self) -> list:
-        """Floor plans captured in game (F11), from the mod's bridge/captures.json,
+        """Floor plans captured in game (Home key), from the mod's bridge/captures.json,
         each with the number of traced wall segments (None while not traced)."""
         found = read_json(self.bridge / "captures.json")
         captures = [dict(c) for c in found if isinstance(c, dict) and c.get("file")] if isinstance(found, list) else []

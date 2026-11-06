@@ -6,8 +6,12 @@
   const DOOR_HIT_PX = 20;
   const DOOR_ROOM_LINK_UNITS = 120;
 
-  const TEAM_COLORS = { red: "#e53935", blue: "#1e88e5", gold: "#f9a825", unknown: "#9e9e9e" };
-  const TEAM_LABEL = { red: "RED", blue: "BLUE", gold: "GOLD" };
+  const TEAM_COLORS = { red: "#e53935", blue: "#1e88e5", gold: "#f9a825", green: "#2ecc71", yellow: "#ffe600", unknown: "#9e9e9e" };
+  const TEAM_LABEL = { red: "RED", blue: "BLUE", gold: "GOLD", green: "GREEN", yellow: "YELLOW" };
+  // Teams called in during a mission (the mod's config.reinforcements).
+  // [team, operators, stock team whose orders they also follow for now]
+  const CALL_IN_TEAMS = [["green", "Echo, Foxtrot", "blue"], ["yellow", "Golf, Hotel", "red"]];
+  const CALL_IN_SIZE = 2;
 
   const OPTION_CHOICES = {
     breach: [["kick", "Kick"], ["shotgun", "Shotgun"], ["c2", "C2"], ["ram", "Ram"], ["leader", "Leader"]],
@@ -87,8 +91,11 @@
     gameRooms: [], // rooms read from the game (rooms.json), see loadGameRooms()
     showGameRooms: loadSetting("showGameRooms") === "1", // off: their names are just "Room 5"
     showCameras: loadSetting("showCameras") !== "0", // helicopter, drone and CCTV view cones
-    showWalls: loadSetting("showWalls") !== "0", // walls traced in game (F11), drawn over the floor plan
+    showWalls: loadSetting("showWalls") !== "0", // walls traced in game (Home key), drawn over the floor plan
     planView: loadSetting("planView") || "picture", // picture | walls | blueprint (see PLAN_VIEWS)
+    pinnedLevel: null, // a level picked in the map select; null = Auto (the level in play)
+    liveState: null, // the game's state as received, also while another level's map is shown
+    knownLevels: [], // levels with a saved map or capture (map select)
     mapLoaded: false, // map.json of app.level has been read
     roomsVersion: null,
     pendingAnchor: null, // calibration: world position of the door tapped first
@@ -329,6 +336,7 @@
     if (!app.level) return alert("No level loaded yet. Start a mission first.");
     await api("PUT", `/api/maps/${encodeURIComponent(app.level)}`, { level: app.level, ...app.map });
     setHint("Map saved.");
+    loadMapList();
   }
 
   // ---------------------------------------------------------------- view
@@ -359,6 +367,9 @@
       (s.officers || []).forEach((o) => pts.push(o.pos));
       (s.doors || []).forEach((d) => pts.push(d.pos));
       app.gameRooms.forEach((r) => (r.polygon || []).forEach(([x, y]) => pts.push({ x, y })));
+      // A map shown without the game (another level, or offline): its walls and rooms.
+      ((f && f.walls) || []).forEach(([x1, y1, x2, y2]) => pts.push({ x: x1, y: y1 }, { x: x2, y: y2 }));
+      app.map.rooms.forEach((r) => (r.polygon || []).forEach(([x, y]) => pts.push({ x, y })));
       if (!pts.length) return;
       const t = transform();
       const px = pts.map((p) => Geo.apply(t, p.x, p.y));
@@ -1300,6 +1311,7 @@
   }
 
   async function execute() {
+    if (!viewingLiveLevel()) return alert("This map isn't the level in play. Pick Auto in Map to give orders.");
     fixOptions();
     const action = ACTION_BY_ID[app.action];
     if (!action || !actionAllowed(action)) return;
@@ -1457,7 +1469,10 @@
     const el = $("status");
     el.className = "status " + (s && s.connected ? "live" : s && s.level ? "stale" : "");
     $("status-text").textContent = !s ? "No server" : s.connected ? "Live" : s.level ? "Game paused / stale" : "Waiting for game";
-    $("level").textContent = (s && s.level) || "—";
+    const live = app.liveState && app.liveState.level;
+    $("level").textContent = !viewingLiveLevel() && app.level
+      ? `${prettyLevel(app.level)} · in play: ${live ? prettyLevel(live) : "—"}`
+      : (s && s.level) || "—";
   }
 
   // ---------------------------------------------------------------- calibration
@@ -1688,7 +1703,7 @@
     renderViewButton();
     const f = floor();
     if (app.planView !== "picture" && !(f && f.walls && f.walls.length)) {
-      setHint("No traced walls on this floor yet: press F11 in game, then Calibrate > In-game captures > Use.");
+      setHint("No traced walls on this floor yet: press Home in game, then Calibrate > In-game captures > Use.");
     }
     redraw();
   };
@@ -1786,7 +1801,7 @@
     redraw();
   }
 
-  // ---------------------------------------------------------------- in-game captures (F11)
+  // ---------------------------------------------------------------- in-game captures (Home key)
 
   let captures = [];
 
@@ -1834,7 +1849,7 @@
       }
       list.appendChild(li);
     }
-    if (!mine.length) list.innerHTML = "<li>None for this level yet: press F11 in game on each floor</li>";
+    if (!mine.length) list.innerHTML = "<li>None for this level yet: press Home in game on each floor</li>";
   }
 
   // Puts a capture on the floor it was taken on (floors come from door heights
@@ -1936,6 +1951,36 @@
     }
   }
   $("go").onclick = () => sendControl("go");
+
+  // Reinforcement buttons: call a team in, or show that it is coming / on scene.
+  function renderCallIns() {
+    const box = $("call-ins");
+    const s = app.state || {};
+    const live = Boolean(s.connected) && viewingLiveLevel();
+    const results = s.results || [];
+    const key = JSON.stringify([live, (s.officers || []).map((o) => [o.team, o.status]),
+      results.filter((r) => r.action === "request_team").slice(0, 4)]);
+    if (box.dataset.key === key) return;
+    box.dataset.key = key;
+    box.innerHTML = "";
+    for (const [team, names, joins] of CALL_IN_TEAMS) {
+      const alive = (s.officers || []).filter((o) => o.team === team && o.status !== "dead").length;
+      const last = results.find((r) => r.action === "request_team" && r.team === team);
+      const b = document.createElement("button");
+      b.className = "call-in";
+      b.style.borderColor = TEAM_COLORS[team];
+      const coming = last && last.status === "pending";
+      b.textContent = coming ? `${TEAM_LABEL[team]}: coming… ${last.done || 0}/${last.wanted || CALL_IN_SIZE}`
+        : alive >= CALL_IN_SIZE ? `${TEAM_LABEL[team]} on scene`
+        : `Call in ${TEAM_LABEL[team]} · ${names}`;
+      b.title = last && last.status === "error" ? `Last call-in failed: ${last.message}`
+        : `Spawn ${names} next to you. For now they also take ${TEAM_LABEL[joins]}'s orders.`;
+      b.disabled = !live || coming || alive >= CALL_IN_SIZE;
+      b.onclick = () => api("POST", "/api/command", { team, action: "request_team" })
+        .catch((e) => alert("Could not call in the team: " + e.message));
+      box.appendChild(b);
+    }
+  }
   $("clear-held").onclick = () => sendControl("clear_held");
 
   // Orders the mod is holding for GO (from state.json).
@@ -1975,21 +2020,96 @@
 
   // ---------------------------------------------------------------- polling
 
+  // ---------------------------------------------------------------- map select
+
+  // "RoN_Gas_BarricadedSuspects_Core" -> "Gas BarricadedSuspects"
+  function prettyLevel(level) {
+    return level.replace(/^RoN_/, "").replace(/_Core$/, "").replace(/_/g, " ");
+  }
+
+  // Showing the level the game is in (Auto, or that level picked by hand)?
+  function viewingLiveLevel() {
+    const live = app.liveState && app.liveState.level;
+    return !app.pinnedLevel || app.pinnedLevel === live;
+  }
+
+  // The game's state with everything about the level in play left out, for
+  // while another level's map is shown: no markers, no orders.
+  function viewOnlyState(s) {
+    return { connected: s.connected, level: s.level, time: s.time, configured_actions: s.configured_actions,
+      results: s.results || [], held: [], officers: [], doors: [], targets: [], player: null, cameras: null };
+  }
+
+  async function loadMapList() {
+    try {
+      app.knownLevels = (await api("GET", "/api/maps")).levels || [];
+    } catch (e) {
+      app.knownLevels = [];
+    }
+    renderMapSelect();
+  }
+
+  function renderMapSelect() {
+    const select = $("map-select");
+    const live = app.liveState && app.liveState.level;
+    const levels = [...new Set([...app.knownLevels, live, app.pinnedLevel].filter(Boolean))]
+      .sort((a, b) => prettyLevel(a).localeCompare(prettyLevel(b)));
+    const options = [["", live ? `Auto: ${prettyLevel(live)} (in play)` : "Auto: the level in play"]]
+      .concat(levels.map((l) => [l, prettyLevel(l) + (l === live ? " (in play)" : "")]));
+    const key = JSON.stringify(options);
+    if (select.dataset.key !== key) {
+      select.innerHTML = "";
+      for (const [value, text] of options) {
+        const o = document.createElement("option");
+        o.value = value;
+        o.textContent = text;
+        if (value) o.title = value;
+        select.appendChild(o);
+      }
+      select.dataset.key = key;
+    }
+    select.value = app.pinnedLevel || "";
+  }
+
+  $("map-select").onchange = async (e) => {
+    app.pinnedLevel = e.target.value || null;
+    app.target = null;
+    app.action = null;
+    await showLevel();
+    renderOrders();
+  };
+
+  // Shows the picked level's map, or the level in play (Auto).
+  async function showLevel() {
+    const s = app.liveState || {};
+    app.state = app.liveState && (viewingLiveLevel() ? s : viewOnlyState(s));
+    const level = app.pinnedLevel || s.level;
+    if (level && level !== app.level) {
+      app.level = level;
+      // The game's own room outlines belong to the level in play: reloaded when it's shown again.
+      app.gameRooms = [];
+      app.roomsVersion = null;
+      await loadMap(level);
+    }
+    renderMapSelect();
+    redraw();
+  }
+
   async function poll() {
     try {
       const s = await api("GET", "/api/state");
-      app.state = s;
-      if (s.level && s.level !== app.level) {
-        app.level = s.level;
-        await loadMap(s.level);
-      }
+      const liveChanged = !app.liveState || app.liveState.level !== s.level;
+      app.liveState = s;
+      if (liveChanged) loadMapList();
+      await showLevel();
       ensureAutoFloors();
       if (s.rooms_version && s.rooms_version !== app.roomsVersion) {
         app.roomsVersion = s.rooms_version;
         await loadGameRooms();
       }
-      if (app.autoFloor && app.map.floors.length && s.player && s.player.pos) {
-        const i = floorForZ(s.player.pos.z);
+      const shown = app.state;  // empty of live data while another level's map is shown
+      if (app.autoFloor && app.map.floors.length && shown.player && shown.player.pos) {
+        const i = floorForZ(shown.player.pos.z);
         if (i !== app.floorIndex) { app.floorIndex = i; renderCalibration(); }
       }
       if (!app.view.fitted) fitView();
@@ -2000,13 +2120,16 @@
         if (app.mode === "calibrate") loadCaptures();
       }
       if (app.mode === "orders") {
-        setHint(s.level && !app.map.floors.length ? "No floor plan for this level yet — use Calibrate to add one." : "");
+        setHint(!viewingLiveLevel()
+          ? `Showing ${prettyLevel(app.level)}, not the level in play: no live positions or orders. Pick Auto in Map to follow the game.`
+          : s.level && !app.map.floors.length ? "No floor plan for this level yet — use Calibrate to add one." : "");
       }
     } catch (e) {
       app.state = null;
     }
     renderStatus();
     renderRoster();
+    renderCallIns();
     const pos = app.state && app.state.player && app.state.player.pos;
     $("cal-pos").textContent = pos ? `X ${Math.round(pos.x)}  Y ${Math.round(pos.y)}  Z ${Math.round(pos.z)}` : "—";
     renderTasks();
