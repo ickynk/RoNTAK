@@ -563,10 +563,11 @@ class ModTest(unittest.TestCase):
             self.assertFalse(690 <= min(x1, x2) <= 730, (x1, y1, x2, y2))
         self.assertGreater(out["traces"], 500)
 
-    def add_reinforcement_world(self, equip_ok=True):
+    def add_reinforcement_world(self, equip_ok=True, returns_nothing=False):
         """A world that can spawn officers and items, a navigation mesh, and stock officers with gear."""
         self.lua.execute(f"""
             equip_ok = {str(equip_ok).lower()}
+            returns_nothing = {str(returns_nothing).lower()}  -- like UE4SS 3.0.1 in game: spawns, returns nothing
             local function obj(n, t)
                 t = t or {{}}
                 t.IsValid = function(self) return not self.destroyed end
@@ -617,9 +618,19 @@ class ModTest(unittest.TestCase):
                     end
                     gear_owner(o, {{}})
                     table.insert(objects.CyberneticsSwat_V2_C, o)
+                    if returns_nothing then return nil end
                     return o
                 end
-                return obj("Item_" .. spawned, {{ SetOwner = function(self, owner) self.owner = owner end }})
+                local item = obj("Item_" .. spawned, {{
+                    SetOwner = function(self, owner) self.owner = owner end,
+                    GetOwner = function(self) return self.owner end,
+                    K2_GetActorLocation = function() return {{ X = at.X, Y = at.Y, Z = at.Z }} end,
+                }})
+                local class_name = class.GetFName():ToString()
+                objects[class_name] = objects[class_name] or {{}}
+                table.insert(objects[class_name], item)
+                if returns_nothing then return nil end
+                return item
             end
             objects.PlayerController[1].GetWorld = function() return world end
             objects.SWATManager[1].SwatAI = list({{ objects.CyberneticsSwat_V2_C[1], objects.CyberneticsSwat_V2_C[2] }})
@@ -697,6 +708,23 @@ class ModTest(unittest.TestCase):
             state = self.tick()
         self.assertEqual(next(r for r in state["results"] if r["id"] == 2)["status"], "ok")
         self.assertEqual(self.spawned_positions(), [(100, 200), (150, 250)])
+
+    def test_call_in_when_spawn_returns_nothing(self):
+        """In game SpawnActor created the officer but returned nothing: it is looked up and finished."""
+        self.add_reinforcement_world(returns_nothing=True)
+        self.run_orders({"id": 1, "team": "green", "action": "request_team", "target": {}, "options": {}})
+        for _ in range(4):
+            state = self.tick()
+        result = next(r for r in state["results"] if r["id"] == 1)
+        self.assertEqual((result["status"], result["message"]), ("ok", "GREEN on scene"))
+        g = self.lua.globals()
+        self.assertEqual(g.finished, 2)
+        new = [o for o in g.objects.CyberneticsSwat_V2_C.values() if o.SquadPosition in (4, 5)]
+        self.assertEqual(sorted(o.SquadPosition for o in new), [4, 5])  # not left in slot 0 ("Alpha")
+        for o in new:
+            self.assertIsNotNone(o.InventoryComp.InventoryItems[2])  # rifle and flashbang found and added
+            self.assertEqual(o.InventoryComp.InventoryItems[1].owner.GetFName().ToString(), o.GetFName().ToString())
+        self.assertEqual(sorted(x["name"] for x in state["officers"] if x["team"] == "green"), ["Echo", "Foxtrot"])
 
     def test_failed_call_in_removes_what_it_spawned(self):
         self.add_reinforcement_world(equip_ok=False)

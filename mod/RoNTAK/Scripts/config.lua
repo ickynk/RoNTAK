@@ -162,6 +162,8 @@ config.reinforcements = {
                       { 120, 120 }, { -120, -120 }, { 120, -120 }, { -120, 120 } },
     clearance_cm = 90,        -- no other officer this close to a spawn spot...
     entry_clearance_cm = 50,  -- ...or to an exact entry position (officers stood there side by side)
+    -- When SpawnActor returns nothing usable, the new actor is looked for this close to the spot.
+    find_spawned_cm = 300,
     -- Where to try spawning around the player (cm), first free spot wins.
     spawn_offsets = { { 300, 0 }, { -300, 0 }, { 0, 300 }, { 0, -300 }, { 300, 300 }, { -300, 300 },
                       { 300, -300 }, { -300, -300 }, { 500, 0 }, { -500, 0 }, { 0, 500 }, { 0, -500 },
