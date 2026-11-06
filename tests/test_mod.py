@@ -644,7 +644,7 @@ class ModTest(unittest.TestCase):
     def test_call_in_green_team(self):
         self.add_reinforcement_world()
         self.run_orders({"id": 1, "team": "green", "action": "request_team", "target": {}, "options": {}})
-        for _ in range(4):
+        for _ in range(30):
             state = self.tick()
         g = self.lua.globals()
         result = next(r for r in state["results"] if r["id"] == 1)
@@ -685,7 +685,7 @@ class ModTest(unittest.TestCase):
         self.tick()  # mission start: entry point recorded where the squad stands
         self.move_squad_away()
         self.run_orders({"id": 1, "team": "green", "action": "request_team", "target": {}, "options": {}})
-        for _ in range(4):
+        for _ in range(30):
             self.tick()
         self.assertEqual(self.spawned_positions(), [(100, 200), (150, 250)])
 
@@ -704,7 +704,7 @@ class ModTest(unittest.TestCase):
         # Squad moved away: the entry positions themselves need no nav check.
         self.move_squad_away()
         self.send("A", [{"id": 2, "team": "green", "action": "request_team", "target": {}, "options": {}}])
-        for _ in range(4):
+        for _ in range(30):
             state = self.tick()
         self.assertEqual(next(r for r in state["results"] if r["id"] == 2)["status"], "ok")
         self.assertEqual(self.spawned_positions(), [(100, 200), (150, 250)])
@@ -713,7 +713,7 @@ class ModTest(unittest.TestCase):
         """In game SpawnActor created the officer but returned nothing: it is looked up and finished."""
         self.add_reinforcement_world(returns_nothing=True)
         self.run_orders({"id": 1, "team": "green", "action": "request_team", "target": {}, "options": {}})
-        for _ in range(4):
+        for _ in range(30):
             state = self.tick()
         result = next(r for r in state["results"] if r["id"] == 1)
         self.assertEqual((result["status"], result["message"]), ("ok", "GREEN on scene"))
@@ -726,10 +726,25 @@ class ModTest(unittest.TestCase):
             self.assertEqual(o.InventoryComp.InventoryItems[1].owner.GetFName().ToString(), o.GetFName().ToString())
         self.assertEqual(sorted(x["name"] for x in state["officers"] if x["team"] == "green"), ["Echo", "Foxtrot"])
 
+    def test_call_in_is_spread_over_ticks_and_logged(self):
+        self.add_reinforcement_world()
+        self.lua.execute("logged = {} print = function(s) logged[#logged + 1] = s end")
+        self.run_orders({"id": 1, "team": "green", "action": "request_team", "target": {}, "options": {}})
+        g = self.lua.globals()
+        # That tick took the request and spawned Echo; the gear and the rest come over the next ticks.
+        self.assertEqual((g.spawned, g.finished), (1, 0))
+        self.tick()
+        self.assertEqual(g.spawned, 3)  # two items per tick
+        for _ in range(30):
+            self.tick()
+        lines = [l for l in g.logged.values() if "Echo:" in l]
+        steps = [l.split("Echo: ")[1].split(" (")[0].strip() for l in lines]
+        self.assertEqual(steps, ["spawned", "copying RifleClass", "copying FlashClass", "geared up", "AI started"])
+
     def test_failed_call_in_removes_what_it_spawned(self):
         self.add_reinforcement_world(equip_ok=False)
         self.run_orders({"id": 1, "team": "yellow", "action": "request_team", "target": {}, "options": {}})
-        for _ in range(3):
+        for _ in range(30):
             state = self.tick()
         result = next(r for r in state["results"] if r["id"] == 1)
         self.assertEqual(result["status"], "error")
