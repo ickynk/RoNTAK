@@ -78,6 +78,8 @@ To change your phone answer later, start with `Start RoNTAK.bat --lan` (allow) o
   hide them. See [03-maps.md](03-maps.md#cameras-helicopter-drone-and-cctv).
 - **Roster:** each officer's health: **OK**, **INJURED** (with health %), **DOWN**, **INCAPACITATED** or **KIA**.
   On the map, injured officers get an orange ring and downed or dead officers an ✕.
+- **Map:** the box at the top of the side panel. **Auto** follows the level you're playing; pick another level
+  to look at its map (no live positions or orders then). See [03-maps.md](03-maps.md).
 - **Orders:** pick a team, tap a door, room, person or spot, choose an order and press the big button. See
   [04-orders.md](04-orders.md).
 - **No floor plan yet:** until you add one, markers sit on a dark grid. See [03-maps.md](03-maps.md).

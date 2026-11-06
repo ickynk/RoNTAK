@@ -29,6 +29,7 @@
     </div>
 
     <aside class="panel" id="panel">
+      <label class="map-bar">Map <select id="map-select" title="Follow the level in play, or look at another level's map"></select></label>
       <!-- Orders -->
       <section id="orders-panel">
         <div class="teams" id="teams">
@@ -68,7 +69,7 @@
       <section id="calibrate-panel" hidden>
         <div class="card captures-box">
           <div class="label">In-game captures</div>
-          <p class="steps">Exact floor plans from the game: stand on a floor in game and press <b>F11</b>. They line up
+          <p class="steps">Exact floor plans from the game: stand on a floor in game and press <b>Home</b>. They line up
             by themselves; no door anchors needed.</p>
           <ul class="rooms" id="capture-list"></ul>
           <label class="check"><input type="checkbox" id="show-walls"> Show walls traced in game</label>
@@ -117,7 +118,7 @@
           <button id="room-undo">Undo point</button>
           <button id="room-finish">Finish room</button>
         </div>
-        <button id="room-find" title="Needs walls traced in game (F11)">Find rooms from traced walls</button>
+        <button id="room-find" title="Needs walls traced in game (Home key)">Find rooms from traced walls</button>
         <p class="steps">Found rooms are called Room 1, Room 2…: tap a name in the list to rename it.</p>
         <label class="check"><input type="checkbox" id="show-game-rooms">
           Show the game's room outlines <span id="game-room-count"></span> as a rough guide</label>

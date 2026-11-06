@@ -190,6 +190,8 @@ class Handler(SimpleHTTPRequestHandler):
                 return self.send_json(read_json(self.bridge / "rooms.json") or {"level": None, "rooms": []})
             if parts == ["api", "captures"]:
                 return self.send_json({"captures": self.captures()})
+            if parts == ["api", "maps"]:
+                return self.send_json({"levels": self.known_levels()})
             if len(parts) == 3 and parts[:2] == ["api", "maps"]:
                 return self.get_map(safe_name(parts[2]))
             if len(parts) == 3 and parts[0] == "maps":
@@ -248,6 +250,14 @@ class Handler(SimpleHTTPRequestHandler):
         state["age"] = round(age, 1)
         self.send_json(state)
 
+    def known_levels(self) -> list:
+        """Levels with a saved map (a folder in maps) or an in-game capture, for the map select."""
+        levels = set()
+        if MAPS_DIR.is_dir():
+            levels |= {p.name for p in MAPS_DIR.iterdir() if p.is_dir() and SAFE_NAME.match(p.name)}
+        levels |= {c["level"] for c in self.captures() if isinstance(c.get("level"), str) and SAFE_NAME.match(c["level"])}
+        return sorted(levels, key=str.lower)
+
     def get_map(self, level):
         data = read_json(MAPS_DIR / level / "map.json")
         if data is None:
@@ -277,7 +287,7 @@ class Handler(SimpleHTTPRequestHandler):
         self.send_json({"saved": True})
 
     def captures(self) -> list:
-        """Floor plans captured in game (F11), from the mod's bridge/captures.json,
+        """Floor plans captured in game (Home key), from the mod's bridge/captures.json,
         each with the number of traced wall segments (None while not traced)."""
         found = read_json(self.bridge / "captures.json")
         captures = [dict(c) for c in found if isinstance(c, dict) and c.get("file")] if isinstance(found, list) else []

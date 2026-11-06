@@ -38,6 +38,14 @@ class ServerTest(unittest.TestCase):
         except urllib.error.HTTPError as e:
             return e.code, json.loads(e.read())
 
+    def test_known_levels_for_the_map_select(self):
+        (self.maps / "Level1").mkdir(exist_ok=True)
+        import mock
+        mock.write_capture(self.bridge)  # a capture of MockHouse, which has no map folder here
+        status, body = self.call("GET", "/api/maps")
+        self.assertIn("Level1", body["levels"])
+        self.assertIn("MockHouse", body["levels"])
+
     def test_in_game_captures(self):
         import mock
         mock.write_capture(self.bridge)

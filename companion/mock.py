@@ -387,7 +387,7 @@ def png_rgba(width, height, pixel):
 
 
 def write_capture(bridge: Path):
-    """An F11 floor capture of the house, saved with alpha 0 like the game does."""
+    """A floor capture (Home key) of the house, saved with alpha 0 like the game does."""
     side, size = 2400.0, 300
     centre = {"x": 750.0, "y": 1100.0}
     k = side / size

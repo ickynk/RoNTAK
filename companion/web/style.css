@@ -145,6 +145,8 @@ label.check input { width: auto; margin: 0; }
 .adjust-row input[type=number] { padding: 3px 6px; }
 #adjust-reset { width: 100%; margin-top: 10px; }
 #room-find { width: 100%; margin-top: 8px; }
+.map-bar { display: flex; align-items: center; gap: 8px; margin: 0 0 10px; color: var(--muted); font-size: 12px; }
+.map-bar select { flex: 1; min-width: 0; }
 .room-name { cursor: pointer; text-decoration: underline dotted; }
 .row > * { flex: 1; }
 

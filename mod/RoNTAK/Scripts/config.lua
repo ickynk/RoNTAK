@@ -26,7 +26,8 @@ config.keys = {
     discovery_dump = "F8",   -- write candidate classes/functions to bridge/discovery.txt
     sniff_toggle   = "F9",   -- start/stop logging calls to config.sniff functions
     test_order     = "F10",  -- send config.test_order through the normal order path
-    floor_capture  = "F11",  -- save a top-down floor plan of the floor you stand on (companion: Calibrate)
+    floor_capture  = "HOME", -- save a top-down floor plan of the floor you stand on (companion: Calibrate).
+                             -- Not F11: that is the game's fullscreen / borderless toggle.
 }
 
 ---------------------------------------------------------------------------

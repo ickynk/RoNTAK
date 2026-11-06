@@ -137,7 +137,7 @@ objects = {
 
 function FindAllOf(class) return objects[class] end
 function FindFirstOf(class) return objects[class] and objects[class][1] end
-Key = { F5 = "F5", F6 = "F6", F7 = "F7", F8 = "F8", F9 = "F9", F10 = "F10", F11 = "F11" }
+Key = { F5 = "F5", F6 = "F6", F7 = "F7", F8 = "F8", F9 = "F9", F10 = "F10", HOME = "HOME" }
 keybinds = {}
 function RegisterKeyBind(key, fn) keybinds[key] = fn end
 function ExecuteInGameThread(fn) fn() end
@@ -460,7 +460,7 @@ class ModTest(unittest.TestCase):
             objects.PlayerController[1].Pawn.K2_GetActorLocation = function() return { X = 100, Y = 50, Z = 90 } end
         """)
         self.tick()
-        self.lua.globals().keybinds["F11"]()
+        self.lua.globals().keybinds["HOME"]()
         g = self.lua.globals()
         self.assertEqual(list(g.exports.values()), ["capture_RiverwoodHouse_z0.png"])
         comp = g.made[1]["comp"]
@@ -479,9 +479,9 @@ class ModTest(unittest.TestCase):
         self.assertEqual(c["anchors"][0], {"world": [2270, -1975], "px": [0, 0]})
         self.assertEqual(c["anchors"][2], {"world": [-1730, -1975], "px": [0, 1334]})
         # Capturing the same floor again replaces the entry; another floor adds one.
-        g.keybinds["F11"]()
+        g.keybinds["HOME"]()
         self.lua.execute("objects.PlayerController[1].Pawn.K2_GetActorLocation = function() return { X = 100, Y = 50, Z = 390 } end")
-        g.keybinds["F11"]()
+        g.keybinds["HOME"]()
         floors = [c["floor_z"] for c in json.loads((self.bridge / "captures.json").read_text())]
         self.assertEqual(floors, [0, 300])
 
@@ -540,7 +540,7 @@ class ModTest(unittest.TestCase):
         """)
         self.lua.execute("objects.PlayerController[1].Pawn.K2_GetActorLocation = function() return { X = 100, Y = 50, Z = 90 } end")
         g = self.lua.globals()
-        g.keybinds["F11"]()  # the ground floor again: picture, then the wall trace
+        g.keybinds["HOME"]()  # the ground floor again: picture, then the wall trace
         state = self.tick()
         self.assertEqual(state["capture_progress"]["file"], "capture_RiverwoodHouse_z0.png")
         job = g.loops[len(g.loops)]

@@ -14,7 +14,7 @@ An ATAK-style tactical map and team orders mod for **Ready or Not**.
   cameras are wired (the feed you are watching highlighted), with suspects and civilians in a camera's view marked,
   then shown at their last known position
 - **Roster health**: OK / injured (with %) / down / KIA for each officer
-- **Floor plans from the game**: press F11 on each floor for an exact top-down plan and its walls (traced with
+- **Floor plans from the game**: press Home on each floor for an exact top-down plan and its walls (traced with
   the game's collision), lined up automatically; show the plan, or just the walls on white or blueprint blue
 - **Rooms found automatically** from the traced walls, ready to name
 - **Hold for GO**: set up orders for both teams and start them together (GO on screen, or F5 in game)
