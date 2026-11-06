@@ -154,7 +154,15 @@ config.reinforcements = {
         yellow = { slots = { 6, 7 }, kits = { 2, 3 }, joins = "red" },   -- Golf, Hotel
     },
     manager = "SWATManager",
-    -- Where to try spawning, around the player (cm), first free spot wins.
+    -- "entry": at the mission's entry point (where your squad stood when the
+    -- mission began), else near you. "player": always near you.
+    spawn_at = "entry",
+    -- Around each entry position (cm): the position itself first.
+    entry_offsets = { { 0, 0 }, { 120, 0 }, { -120, 0 }, { 0, 120 }, { 0, -120 },
+                      { 120, 120 }, { -120, -120 }, { 120, -120 }, { -120, 120 } },
+    clearance_cm = 90,        -- no other officer this close to a spawn spot...
+    entry_clearance_cm = 50,  -- ...or to an exact entry position (officers stood there side by side)
+    -- Where to try spawning around the player (cm), first free spot wins.
     spawn_offsets = { { 300, 0 }, { -300, 0 }, { 0, 300 }, { 0, -300 }, { 300, 300 }, { -300, 300 },
                       { 300, -300 }, { -300, -300 }, { 500, 0 }, { -500, 0 }, { 0, 500 }, { 0, -500 },
                       { 150, 0 }, { -150, 0 }, { 0, 150 }, { 0, -150 } },

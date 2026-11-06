@@ -657,6 +657,47 @@ class ModTest(unittest.TestCase):
         result = next(r for r in state["results"] if r["id"] == 2)
         self.assertEqual((result["status"], result["message"]), ("ok", "GREEN is already on scene"))
 
+    def move_squad_away(self):
+        """The squad (entry point recorded at 100,200 and 150,250) holds somewhere else, as in game."""
+        self.lua.execute(r"""
+            for i, o in ipairs(objects.CyberneticsSwat_V2_C) do
+                o.K2_GetActorLocation = function() return { X = 3000 + i * 50, Y = 3000, Z = 0 } end
+            end
+        """)
+
+    def spawned_positions(self):
+        return sorted((round(o.K2_GetActorLocation().X), round(o.K2_GetActorLocation().Y))
+                      for o in self.lua.globals().objects.CyberneticsSwat_V2_C.values() if o.SquadPosition in (4, 5, 6, 7))
+
+    def test_call_in_arrives_at_the_entry_point(self):
+        self.add_reinforcement_world()
+        self.tick()  # mission start: entry point recorded where the squad stands
+        self.move_squad_away()
+        self.run_orders({"id": 1, "team": "green", "action": "request_team", "target": {}, "options": {}})
+        for _ in range(4):
+            self.tick()
+        self.assertEqual(self.spawned_positions(), [(100, 200), (150, 250)])
+
+    def test_call_in_without_a_working_nav_check(self):
+        self.add_reinforcement_world()
+        self.lua.execute("StaticFindObject = function() return nil end")  # no navigation system
+        self.tick()
+        # Squad still standing on the entry point: no free spot, and the error says why.
+        self.run_orders({"id": 1, "team": "green", "action": "request_team", "target": {}, "options": {}})
+        state = self.tick()
+        result = next(r for r in state["results"] if r["id"] == 1)
+        self.assertEqual(result["status"], "error")
+        self.assertIn("entry known", result["message"])
+        self.assertIn("spots taken 2", result["message"])
+        self.assertIn("off the nav mesh", result["message"])
+        # Squad moved away: the entry positions themselves need no nav check.
+        self.move_squad_away()
+        self.send("A", [{"id": 2, "team": "green", "action": "request_team", "target": {}, "options": {}}])
+        for _ in range(4):
+            state = self.tick()
+        self.assertEqual(next(r for r in state["results"] if r["id"] == 2)["status"], "ok")
+        self.assertEqual(self.spawned_positions(), [(100, 200), (150, 250)])
+
     def test_failed_call_in_removes_what_it_spawned(self):
         self.add_reinforcement_world(equip_ok=False)
         self.run_orders({"id": 1, "team": "yellow", "action": "request_team", "target": {}, "options": {}})

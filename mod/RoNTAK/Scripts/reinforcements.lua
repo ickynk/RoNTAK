@@ -1,9 +1,10 @@
 -- Reinforcements: extra SWAT teams called in during a mission (stage 1).
 --
 -- Requesting a team (RoNTAK button or config.keys.request_<team>) spawns its
--- operators next to the player, one per tick:
---   1. a free spot near the player, on the AI navigation mesh and clear of
---      other officers;
+-- operators one per tick:
+--   1. a free spot at the mission's entry point (where the squad stood when
+--      the mission began), else near the player on the AI navigation mesh,
+--      clear of other officers;
 --   2. world:SpawnActor(<a stock officer's class>) there; squad slot and
 --      team set; an AI controller if it has none;
 --   3. a copy of a stock officer's gear (each item spawned and added, the
@@ -63,36 +64,91 @@ local function slot_taken(slot)
     return false
 end
 
--- A free spot on the navigation mesh near the player, or nil.
-local function spawn_spot(pawn, world_ctx)
+-- Where the squad stood when the mission began (the entry point), per level.
+local entry = { level = nil, spots = nil }
+
+-- Remembers the stock officers' first positions in a level.
+local function record_entry()
+    local level = game.level_name()
+    if entry.level ~= level then entry = { level = level, spots = nil } end
+    if entry.spots or not level then return end
+    local spots = {}
+    for _, o in ipairs(game.officer_actors()) do
+        if STOCK_SLOTS[slot_of(o.actor)] and o.pos then spots[#spots + 1] = o.pos end
+    end
+    if #spots > 0 then
+        entry.spots = spots
+        note(string.format("entry point recorded (%d positions)", #spots))
+    end
+end
+
+-- Projects a point onto the AI navigation mesh: the point on the floor, or nil.
+local function on_nav(nav, world_ctx, x, y, z)
+    if not valid(nav) then return nil end
+    local projected = {}
+    local ok, hit = pcall(function()
+        return nav:K2_ProjectPointToNavigation(world_ctx, { X = x, Y = y, Z = z }, projected, nil, nil, { X = 100, Y = 100, Z = 200 })
+    end)
+    if ok and hit and type(projected.X) == "number" then return { x = projected.X, y = projected.Y, z = projected.Z } end
+    return nil
+end
+
+-- A free spot to spawn at: { x, y, z, centre } where centre means z is a
+-- standing officer's centre (an entry position), else the floor. Tries the
+-- entry positions themselves, then around them, then around the player.
+-- Returns nil and the reasons spots were turned down.
+local function spawn_spot(pawn, world_ctx, half)
     local nav = StaticFindObject and StaticFindObject("/Script/NavigationSystem.Default__NavigationSystemV1")
     local here = game.location(pawn)
-    if not here then return nil end
     local taken = {}
     for _, o in ipairs(game.officer_actors()) do taken[#taken + 1] = o.pos end
-    for _, off in ipairs(c().spawn_offsets or {}) do
-        local want = { X = here.x + off[1], Y = here.y + off[2], Z = here.z }
-        local spot = nil
-        if valid(nav) then
-            local projected = {}
-            local ok, hit = pcall(function()
-                return nav:K2_ProjectPointToNavigation(world_ctx, want, projected, nil, nil, { X = 100, Y = 100, Z = 200 })
-            end)
-            if ok and hit and type(projected.X) == "number" and math.abs(projected.Z - here.z) < 150 then
-                spot = { x = projected.X, y = projected.Y, z = projected.Z }
+    local rejected = { occupied = 0, off_nav = 0, other_floor = 0 }
+    local function free(p)
+        -- Officers stood at the entry positions side by side, so those need less room.
+        local clearance = p.centre and (c().entry_clearance_cm or 50) or (c().clearance_cm or 90)
+        for _, q in ipairs(taken) do
+            if q and (q.x - p.x) ^ 2 + (q.y - p.y) ^ 2 < clearance ^ 2 then
+                rejected.occupied = rejected.occupied + 1
+                return false
             end
-        else
-            spot = { x = want.X, y = want.Y, z = here.z }
         end
-        if spot then
-            local clear = true
-            for _, p in ipairs(taken) do
-                if p and (p.x - spot.x) ^ 2 + (p.y - spot.y) ^ 2 < 140 ^ 2 then clear = false break end
+        return true
+    end
+    -- Around a point: the point itself (if it's a known standing spot), then offsets on the nav mesh.
+    local function around(centre, offsets, centre_ok)
+        for _, off in ipairs(offsets) do
+            local spot
+            if off[1] == 0 and off[2] == 0 and centre_ok then
+                spot = { x = centre.x, y = centre.y, z = centre.z, centre = true }
+            else
+                spot = on_nav(nav, world_ctx, centre.x + off[1], centre.y + off[2], centre.z)
+                if not spot then
+                    rejected.off_nav = rejected.off_nav + 1
+                elseif math.abs(spot.z + half - centre.z) > 150 then
+                    rejected.other_floor = rejected.other_floor + 1
+                    spot = nil
+                end
             end
-            if clear then return spot end
+            if spot and free(spot) then return spot end
+        end
+        return nil
+    end
+    if c().spawn_at ~= "player" then
+        -- Every entry position itself first, then around each of them.
+        for _, p in ipairs(entry.spots or {}) do
+            local spot = around(p, { { 0, 0 } }, true)
+            if spot then return spot end
+        end
+        for _, p in ipairs(entry.spots or {}) do
+            local spot = around(p, c().entry_offsets or {}, false)
+            if spot then return spot end
         end
     end
-    return nil
+    if here then
+        local spot = around(here, c().spawn_offsets or {}, false)
+        if spot then return spot end
+    end
+    return nil, rejected
 end
 
 -- Spawned objects of one operator, removed again if a step fails.
@@ -160,13 +216,19 @@ local function spawn_operator(job)
     local stock = stock_by_slot()
     local donor = stock[job.kit] or stock[0] or stock[1] or stock[2] or stock[3]
     check(donor, "no ready stock officer to copy")
-    local spot = spawn_spot(pawn, donor)
-    check(spot, "no free spot near you")
+    local half = 90
+    pcall(function() half = donor.CapsuleComponent:GetScaledCapsuleHalfHeight() end)
+    local spot, rejected = spawn_spot(pawn, donor, half)
+    if not spot then
+        error(string.format("no free spot at the entry point or near you (%s; entry point %s; spots taken %d, off the nav mesh %d, other floor %d)",
+            entry.spots and "entry known" or "entry not recorded", entry.spots and #entry.spots .. " positions" or "-",
+            rejected.occupied, rejected.off_nav, rejected.other_floor), 0)
+    end
     local made = {}
     local ok, err = pcall(function()
-        local half = 90
-        pcall(function() half = donor.CapsuleComponent:GetScaledCapsuleHalfHeight() end)
-        local op = world:SpawnActor(donor:GetClass(), { X = spot.x, Y = spot.y, Z = spot.z + half + 10 }, ZERO_ROT)
+        -- An entry position is a standing officer's centre; a nav-mesh point is the floor.
+        local z = spot.centre and spot.z + 10 or spot.z + half + 10
+        local op = world:SpawnActor(donor:GetClass(), { X = spot.x, Y = spot.y, Z = z }, ZERO_ROT)
         check(valid(op), "operator spawn failed")
         made[#made + 1] = op
         op.SquadPosition = job.slot
@@ -225,6 +287,7 @@ end
 
 -- Spawns the next queued operator; called once per mod tick.
 function reinforcements.tick()
+    record_entry()
     local job = table.remove(queue, 1)
     if not job then return end
     local result = results[job.id]
