@@ -180,6 +180,14 @@ class ModTest(unittest.TestCase):
         c = self.lua.globals().calls[i]
         return c.fn, [c[k] for k in range(1, c.n + 1)]
 
+    def test_native_mod_not_installed(self):
+        self.assertNotIn("native", self.tick())
+
+    def test_native_mod_reported(self):
+        # RoNTAKNative registers its functions after the script starts, before the first tick.
+        self.lua.execute('RoNTAK_NativeVersion = function() return "0.1.0" end')
+        self.assertEqual(self.tick()["native"], "0.1.0")
+
     def test_state_contents(self):
         state = self.tick()
         self.assertEqual(state["level"], "RiverwoodHouse")
