@@ -166,6 +166,13 @@ config.reinforcements = {
     find_spawned_cm = 300,
     items_per_tick = 2,   -- gear items copied per mod tick (4 ticks a second)
     log_steps = true,     -- log each step of setting up an operator (for troubleshooting)
+    -- Appearance copied from the gear source (AReadyOrNotCharacter): fields of
+    -- Customization, character fields, then the functions that rebuild the look.
+    customization_fields = { "Character", "Voice", "Helmet", "Shirt", "Pants", "Shoes", "Eyewear", "Belt", "Gloves",
+                             "Watch", "Tattoo", "PrimarySkin", "SecondarySkin", "ArmorSkin", "HelmetSkin",
+                             "HelmetMountSkin", "FacewearSkin" },
+    look_fields = { "Rep_BodyMesh", "Rep_FaceMesh", "Rep_CharacterLookOverride" },
+    look_updates = { "OnRep_Customization", "OnRep_CharacterLookOverride" },
     -- Add called-in operators to the squad manager's list from Lua. Crashed
     -- the game a moment later in testing: leave off.
     add_to_squad_list = false,
