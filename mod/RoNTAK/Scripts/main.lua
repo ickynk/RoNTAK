@@ -180,5 +180,5 @@ LoopAsync(config.tick_ms, function()
     return false -- keep looping
 end)
 
-log.info("loaded, bridge folder: " .. bridge.dir)
+log.info("loaded (" .. tostring(config.build or "?") .. "), bridge folder: " .. bridge.dir)
 log.info("CreateInvalidObject available: " .. tostring(CreateInvalidObject ~= nil))

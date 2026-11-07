@@ -12,6 +12,9 @@ local config = {}
 config.tick_ms = 250
 
 -- Folder used to exchange files with the ATAK companion app.
+-- Which RoNTAK this is (shown in the UE4SS log when the mod loads).
+config.build = "2026-11-07 wheel label 2"
+
 -- nil = the "bridge" folder inside this mod (recommended).
 config.bridge_dir = nil
 

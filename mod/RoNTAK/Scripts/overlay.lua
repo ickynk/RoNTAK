@@ -46,9 +46,27 @@ local function step(what, fn)
     if not ok then error({ step = what, err = err }, 0) end
 end
 
-local function build()
+local waiting_noted = false
+
+local function player_controller()
     local pc = game.player_controller()
-    if not valid(pc) then return false end
+    if valid(pc) then return pc end
+    local pawn = game.player_pawn()
+    local ok, ctrl = pcall(function() return pawn.Controller end)
+    if ok and valid(ctrl) then return ctrl end
+    return nil
+end
+
+local function build()
+    local pc = player_controller()
+    if not valid(pc) then
+        if not waiting_noted then
+            waiting_noted = true
+            note("no player controller found yet; the label will be built when there is one")
+        end
+        return false
+    end
+    note("building the on-screen label")
     local ok, err = pcall(function()
         local w = construct("/Script/UMG.UserWidget", pc)
         if not w then error({ step = "widget" }, 0) end
@@ -94,8 +112,17 @@ end
 
 -- Shows text in color ({ R, G, B } 0-1), or hides the label with nil.
 -- Called every mod tick by its owner; only touches the widget on a change.
+local disabled_noted = false
+
 function overlay.show(text, color)
-    if broken or c().enabled == false then return end
+    if c().enabled == false then
+        if text and not disabled_noted then
+            disabled_noted = true
+            note("the on-screen label is off (config.overlay.enabled = false)")
+        end
+        return
+    end
+    if broken then return end
     text = text or ""
     color = color or { R = 1, G = 1, B = 1 }
     if not (valid(widget) and valid(text_block)) then
@@ -104,7 +131,10 @@ function overlay.show(text, color)
         if not build() then return end
     end
     if shown and shown.text == text and shown.r == color.R and shown.g == color.G and shown.b == color.B then return end
-    if apply(text, color) then shown = { text = text, r = color.R, g = color.G, b = color.B } end
+    if apply(text, color) then
+        shown = { text = text, r = color.R, g = color.G, b = color.B }
+        if text ~= "" then note("showing \"" .. text .. "\"") end
+    end
 end
 
 return overlay
