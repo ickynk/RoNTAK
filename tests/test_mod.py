@@ -650,7 +650,8 @@ class ModTest(unittest.TestCase):
         result = next(r for r in state["results"] if r["id"] == 1)
         self.assertEqual((result["status"], result["message"]), ("ok", "GREEN on scene"))
         self.assertEqual(g.finished, 2)
-        self.assertEqual(self.lua.eval("#objects.SWATManager[1].SwatAI"), 4)  # 2 stock + Echo + Foxtrot
+        # Not added to the squad list from Lua (that crashed the game): still the 2 stock officers.
+        self.assertEqual(self.lua.eval("#objects.SWATManager[1].SwatAI"), 2)
         green = sorted((o["name"], o["team"]) for o in state["officers"] if o["team"] == "green")
         self.assertEqual(green, [("Echo", "green"), ("Foxtrot", "green")])
         new = [o for o in g.objects.CyberneticsSwat_V2_C.values() if o.SquadPosition in (4, 5)]
@@ -739,7 +740,44 @@ class ModTest(unittest.TestCase):
             self.tick()
         lines = [l for l in g.logged.values() if "Echo:" in l]
         steps = [l.split("Echo: ")[1].split(" (")[0].strip() for l in lines]
-        self.assertEqual(steps, ["spawned", "copying RifleClass", "copying FlashClass", "geared up", "AI started"])
+        self.assertEqual(steps, ["spawned", "copying RifleClass", "copying FlashClass", "geared up", "AI started",
+                                 "not in the squad list"])
+
+    def test_squad_list_only_touched_when_asked(self):
+        # The game adding the officer itself when its AI starts: noticed, nothing appended.
+        self.add_reinforcement_world()
+        self.lua.execute(r"""
+            logged = {} print = function(s) logged[#logged + 1] = s end
+            local spawn = objects.PlayerController[1].GetWorld().SpawnActor
+            objects.PlayerController[1].GetWorld().SpawnActor = function(self, class, at, rot)
+                local o = spawn(self, class, at, rot)
+                if o and o.SpawnDefaultController then
+                    local make = o.SpawnDefaultController
+                    o.SpawnDefaultController = function(op)
+                        make(op)
+                        op.Controller.OnAIFinishSpawning = function()
+                            finished = finished + 1
+                            table.insert(objects.SWATManager[1].SwatAI, op)
+                        end
+                    end
+                end
+                return o
+            end
+        """)
+        self.run_orders({"id": 1, "team": "green", "action": "request_team", "target": {}, "options": {}})
+        for _ in range(30):
+            self.tick()
+        self.assertEqual(self.lua.eval("#objects.SWATManager[1].SwatAI"), 4)
+        lines = " ".join(self.lua.globals().logged.values())
+        self.assertIn("Echo: in the squad list (the game added it; 3 officers)", lines)
+
+    def test_squad_list_append_setting(self):
+        self.add_reinforcement_world()
+        self.lua.execute('require("config").reinforcements.add_to_squad_list = true')
+        self.run_orders({"id": 1, "team": "yellow", "action": "request_team", "target": {}, "options": {}})
+        for _ in range(30):
+            self.tick()
+        self.assertEqual(self.lua.eval("#objects.SWATManager[1].SwatAI"), 4)
 
     def test_failed_call_in_removes_what_it_spawned(self):
         self.add_reinforcement_world(equip_ok=False)

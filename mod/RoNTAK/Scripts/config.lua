@@ -166,6 +166,9 @@ config.reinforcements = {
     find_spawned_cm = 300,
     items_per_tick = 2,   -- gear items copied per mod tick (4 ticks a second)
     log_steps = true,     -- log each step of setting up an operator (for troubleshooting)
+    -- Add called-in operators to the squad manager's list from Lua. Crashed
+    -- the game a moment later in testing: leave off.
+    add_to_squad_list = false,
     -- Where to try spawning around the player (cm), first free spot wins.
     spawn_offsets = { { 300, 0 }, { -300, 0 }, { 0, 300 }, { 0, -300 }, { 300, 300 }, { -300, 300 },
                       { 300, -300 }, { -300, -300 }, { 500, 0 }, { -500, 0 }, { 0, 500 }, { 0, -500 },

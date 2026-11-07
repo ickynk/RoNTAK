@@ -317,14 +317,28 @@ function STEPS.finish(job)
     return "register"
 end
 
--- Joins the squad manager's list, so squad orders reach the operator.
+-- The squad manager's officer list (SwatAI), which squad orders go to.
+-- Growing it from Lua crashed the game a moment later (in game, Nov 2026):
+-- the list's memory is the engine's, and a Lua append replaces it with
+-- memory the engine can't free. So the operator is only added if the game
+-- hasn't added it itself and config.add_to_squad_list is on (testing only).
 function STEPS.register(job)
     check(valid(job.op), "operator gone")
     local manager = game.resolve_target(c().manager or "SWATManager")
     check(valid(manager), "no squad manager")
-    local n = 0
-    manager.SwatAI:ForEach(function() n = n + 1 end)
-    manager.SwatAI[n + 1] = job.op
+    local n, listed = 0, false
+    manager.SwatAI:ForEach(function(_, element)
+        n = n + 1
+        if object_name(element:get()) == object_name(job.op) then listed = true end
+    end)
+    if listed then
+        step_note(job, string.format("in the squad list (the game added it; %d officers)", n))
+    elseif c().add_to_squad_list then
+        manager.SwatAI[n + 1] = job.op
+        step_note(job, string.format("added to the squad list (%d officers)", n + 1))
+    else
+        step_note(job, string.format("not in the squad list (%d officers): squad orders may not reach it", n))
+    end
     game.forget_officers()
     return "done"
 end
