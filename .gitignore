@@ -3,3 +3,8 @@ mod/RoNTAK/bridge/*
 !mod/RoNTAK/bridge/.keep
 companion/settings.json
 dist/
+
+# Native mod build (native/README.md)
+native/RE-UE4SS/
+native/build/
+native/pinned/

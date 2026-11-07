@@ -238,6 +238,15 @@ end
 
 local officers_this_tick = { tick = nil, list = {} }
 
+-- Team and name for officers the squad slot doesn't describe (called-in
+-- operators share their gear source's slot): actor name -> { team, name }.
+local officer_overrides = {}
+
+function game.set_officer_override(name, info)
+    officer_overrides[name] = info
+    officers_this_tick.tick = nil
+end
+
 -- After an officer is added (reinforcements): rescan on the next scan slot.
 function game.forget_officers()
     officer_cache.at = -math.huge
@@ -253,7 +262,9 @@ function game.officer_actors()
         if valid(o.actor) then
             local pos = location(o.actor)
             if pos then
-                result[#result + 1] = { actor = o.actor, name = o.name, team = o.team, pos = pos, display_name = o.display_name }
+                local override = officer_overrides[o.name] or {}
+                result[#result + 1] = { actor = o.actor, name = o.name, team = override.team or o.team, pos = pos,
+                                        display_name = override.name or o.display_name }
             end
         end
     end

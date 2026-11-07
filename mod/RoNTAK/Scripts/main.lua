@@ -23,6 +23,19 @@ pcall(collectgarbage, "generational")
 local seq = 0
 local results = {}
 local busy = false
+-- RoNTAKNative (native/) registers its functions into this script's Lua
+-- states after it starts, so it's looked for on the first tick.
+local native_version = nil
+local native_checked = false
+
+local function check_native()
+    if native_checked then return end
+    native_checked = true
+    local fn = rawget(_G, "RoNTAK_NativeVersion")
+    local ok, version = pcall(function() return fn and fn() end)
+    native_version = ok and version or nil
+    log.info("native: " .. (native_version and ("version " .. tostring(native_version)) or "not installed"))
+end
 
 local function remember(result)
     table.insert(results, 1, result)
@@ -39,6 +52,7 @@ local function configured_actions()
 end
 
 local function tick()
+    check_native()
     game.begin_tick()
     local level = game.level_name()
     for _, cmd in ipairs(bridge.new_commands()) do
@@ -76,6 +90,7 @@ local function tick()
         results = results,
         configured_actions = configured_actions(),
         capture_progress = walls.progress(),
+        native = native_version,
     })
 end
 

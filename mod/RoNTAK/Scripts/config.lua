@@ -46,14 +46,11 @@ config.officers = {
     team_property = "SquadPosition",
     -- Which squad slot belongs to which team (checked in game: Alpha and Beta
     -- are BLUE, Charlie and Delta are RED).
-    team_values = { [0] = "blue", [1] = "blue", [2] = "red", [3] = "red",
-                    -- Called-in teams (config.reinforcements), in the game's spare slots 4-7.
-                    [4] = "green", [5] = "green", [6] = "yellow", [7] = "yellow" },
+    team_values = { [0] = "blue", [1] = "blue", [2] = "red", [3] = "red" },
     -- Officer names: RosterCharacter.FirstName / LastName. The roster entry
     -- can be empty (it is checked before use); then the squad slot name is used.
     roster_property = "RosterCharacter",
-    squad_names = { [0] = "Alpha", [1] = "Beta", [2] = "Charlie", [3] = "Delta",
-                    [4] = "Echo", [5] = "Foxtrot", [6] = "Golf", [7] = "Hotel" },
+    squad_names = { [0] = "Alpha", [1] = "Beta", [2] = "Charlie", [3] = "Delta" },
     -- Health shown in the roster: GetHealthStatus() returns an
     -- EPlayerHealthStatus, and GetCurrentHealth() / GetMaxHealth() the
     -- health points (AReadyOrNotCharacter, from the header dump).
@@ -143,15 +140,14 @@ config.targets = {
 }
 
 -- Extra SWAT teams called in during a mission (reinforcements.lua). Each
--- team's operators take the game's spare squad slots 4-7 (named in
--- config.officers.squad_names) and copy the gear of the stock officer in
--- the matching "kits" slot (0 Alpha, 1 Beta, 2 Charlie, 3 Delta). In game,
+-- operator copies the gear, look and squad slot of the stock officer in the
+-- matching "kits" slot (0 Alpha, 1 Beta, 2 Charlie, 3 Delta). In game,
 -- orders go by RED / BLUE / GOLD only: "joins" is the stock team whose
 -- orders the team follows until it can be commanded on its own.
 config.reinforcements = {
     teams = {
-        green = { slots = { 4, 5 }, kits = { 0, 1 }, joins = "blue" },   -- Echo, Foxtrot
-        yellow = { slots = { 6, 7 }, kits = { 2, 3 }, joins = "red" },   -- Golf, Hotel
+        green = { names = { "Echo", "Foxtrot" }, kits = { 0, 1 }, joins = "blue" },
+        yellow = { names = { "Golf", "Hotel" }, kits = { 2, 3 }, joins = "red" },
     },
     manager = "SWATManager",
     -- "entry": at the mission's entry point (where your squad stood when the
@@ -162,20 +158,19 @@ config.reinforcements = {
                       { 120, 120 }, { -120, -120 }, { 120, -120 }, { -120, 120 } },
     clearance_cm = 90,        -- no other officer this close to a spawn spot...
     entry_clearance_cm = 50,  -- ...or to an exact entry position (officers stood there side by side)
-    -- When SpawnActor returns nothing usable, the new actor is looked for this close to the spot.
-    find_spawned_cm = 300,
-    items_per_tick = 2,   -- gear items copied per mod tick (4 ticks a second)
     log_steps = true,     -- log each step of setting up an operator (for troubleshooting)
-    -- Appearance copied from the gear source (AReadyOrNotCharacter): fields of
-    -- Customization, character fields, then the functions that rebuild the look.
+    -- Appearance copied from the gear source (AReadyOrNotCharacter) before the
+    -- game finishes building the operator: fields of Customization and
+    -- character fields; then, once it is running, the functions that rebuild
+    -- the look.
     customization_fields = { "Character", "Voice", "Helmet", "Shirt", "Pants", "Shoes", "Eyewear", "Belt", "Gloves",
                              "Watch", "Tattoo", "PrimarySkin", "SecondarySkin", "ArmorSkin", "HelmetSkin",
                              "HelmetMountSkin", "FacewearSkin" },
     look_fields = { "Rep_BodyMesh", "Rep_FaceMesh", "Rep_CharacterLookOverride" },
     look_updates = { "OnRep_Customization", "OnRep_CharacterLookOverride" },
-    -- Add called-in operators to the squad manager's list from Lua. Crashed
-    -- the game a moment later in testing: leave off.
-    add_to_squad_list = false,
+    -- Add called-in operators to the squad manager's list (SwatAI), so squad
+    -- orders reach them. Done by RoNTAKNative (a Lua append crashed the game).
+    add_to_squad_list = true,
     -- Where to try spawning around the player (cm), first free spot wins.
     spawn_offsets = { { 300, 0 }, { -300, 0 }, { 0, 300 }, { 0, -300 }, { 300, 300 }, { -300, 300 },
                       { 300, -300 }, { -300, -300 }, { 500, 0 }, { -500, 0 }, { 0, 500 }, { 0, -500 },
