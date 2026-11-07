@@ -1,18 +1,25 @@
--- Reinforcements: extra SWAT teams called in during a mission (stage 1).
+-- Reinforcements: extra SWAT teams called in during a mission (stage 2).
 --
--- Requesting a team (RoNTAK button or config.keys.request_<team>) spawns its
--- operators one after another, each set up a step per tick (see STEPS):
+-- Requesting a team (RoNTAK button or config.keys.request_<team>) sets up its
+-- operators one per tick, each completely in that tick (see STEPS), so the
+-- game never runs a half-built operator:
 --   1. a free spot at the mission's entry point (where the squad stood when
---      the mission began), else near the player on the AI navigation mesh,
---      clear of other officers;
---   2. world:SpawnActor(<a stock officer's class>) there; squad slot and
---      team set (the slot is the gear source's: the game's tables only
---      have slots 0-3, and slots 4-7 crashed it); an AI controller;
---   3. a copy of a stock officer's gear (each item spawned and added, the
---      gear slots pointed at the copies, the primary weapon put in hand);
---   4. the game's own OnAIFinishSpawning, then the operator is added to the
---      squad manager's SwatAI list, so squad orders reach it.
+--      the mission began), else near the player on the AI navigation mesh;
+--   2. a deferred spawn of a stock officer's class there (RoNTAKNative): the
+--      squad slot, team and look are set before the game finishes building
+--      it, then an AI controller;
+--   3. a copy of that officer's gear (each item spawned and added, the gear
+--      record pointed at the copies, the primary weapon put in hand);
+--   4. the game's own OnAIFinishSpawning, the look refreshed, and the
+--      operator added to the squad manager's SwatAI list, so squad orders
+--      reach it.
 -- A step that fails removes what was spawned for that operator.
+--
+-- Needs RoNTAKNative 0.2 or newer: on UE4SS 3.0.1, Lua's World:SpawnActor
+-- returns a broken object on this game, and a Lua write one past the end of
+-- an array doesn't grow it but writes past it into game memory (the cause of
+-- the crashes in stage 1). The native mod spawns through the game's own
+-- GameplayStatics functions and grows arrays with the engine's allocator.
 --
 -- Called-in operators are known by name (members below, and the officer
 -- override in game.lua gives RoNTAK their team and call sign). In-game
@@ -29,7 +36,6 @@ local log = require("log")
 local reinforcements = {}
 
 local valid, object_name = game.valid, game.object_name
-local ZERO_ROT = { Pitch = 0, Yaw = 0, Roll = 0 }
 local STOCK_SLOTS = { [0] = true, [1] = true, [2] = true, [3] = true }
 
 local queue = {}        -- operators still to set up: { team, index, call_sign, kit, ... }
@@ -154,36 +160,61 @@ local function spawn_spot(pawn, world_ctx, half)
     return nil, rejected
 end
 
--- How a call's return value looks, for the log.
-local function describe(v)
-    if type(v) ~= "userdata" then return type(v) .. " " .. tostring(v) end
-    if not valid(v) then return "an invalid object" end
-    return "object " .. object_name(v)
+-- The native functions this needs (RoNTAKNative 0.2+), or nil.
+local NATIVE_FUNCTIONS = { "RoNTAK_BeginSpawn", "RoNTAK_FinishSpawn", "RoNTAK_AppendObject" }
+local function native()
+    local out = {}
+    for _, name in ipairs(NATIVE_FUNCTIONS) do
+        local fn = rawget(_G, name)
+        if type(fn) ~= "function" then return nil end
+        out[name] = fn
+    end
+    return out
+end
+reinforcements.native = native
+
+-- An object's path, which the native functions take ("<Class> <path>" -> path).
+local function path_of(obj)
+    local ok, full = pcall(function() return obj:GetFullName() end)
+    if not ok or type(full) ~= "string" then return nil end
+    return full:match("^%S+%s+(.+)$") or full
 end
 
-local reported_returns = {}
+local function find(path)
+    if not path or not StaticFindObject then return nil end
+    local ok, obj = pcall(StaticFindObject, path)
+    if ok and valid(obj) then return obj end
+    return nil
+end
 
--- Spawns an actor of class at a spot. Some UE4SS builds spawn it but return
--- nothing usable from SpawnActor; then the new actor is looked up: an actor
--- of that class at the spot that is_new() accepts.
-local function spawn_actor(world, class, at, is_new)
-    local ok, made = pcall(function() return world:SpawnActor(class, at, ZERO_ROT) end)
-    if ok and valid(made) then return made end
-    local class_name = object_name(class)
-    if not reported_returns[class_name] then
-        reported_returns[class_name] = true
-        note(string.format("SpawnActor(%s) returned %s; looking the new actor up instead", class_name,
-            ok and describe(made) or ("an error: " .. tostring(made))))
-    end
-    local best, best_d = nil, (c().find_spawned_cm or 300) ^ 2
-    for _, a in ipairs(FindAllOf(class_name) or {}) do
-        if valid(a) and is_new(a) then
-            local p = game.location(a)
-            local d = p and (p.x - at.X) ^ 2 + (p.y - at.Y) ^ 2
-            if d and d < best_d then best, best_d = a, d end
-        end
-    end
-    return best
+local COLLISION_ALWAYS, COLLISION_ADJUST = 1, 2
+
+-- Starts spawning an actor of class at a spot (deferred: not built yet).
+-- Returns the actor, or nil and why.
+local function begin_spawn(fns, context, class, at, yaw, collision, owner)
+    local ok, path, err = pcall(fns.RoNTAK_BeginSpawn, path_of(context) or "", path_of(class) or "",
+        at.X, at.Y, at.Z, yaw or 0, collision, owner and path_of(owner) or "")
+    if not ok then return nil, tostring(path) end
+    if not path then return nil, tostring(err) end
+    local actor = find(path)
+    if not actor then return nil, "spawned " .. tostring(path) .. " but could not find it" end
+    return actor
+end
+
+local function finish_spawn(fns, actor, at, yaw)
+    local ok, done, err = pcall(fns.RoNTAK_FinishSpawn, path_of(actor) or "", at.X, at.Y, at.Z, yaw or 0)
+    if not ok then return false, tostring(done) end
+    if not done then return false, tostring(err) end
+    return true
+end
+
+-- Appends element to an object array (property may go through structs:
+-- "SpawnedGear.Grenades"). Returns the new count (0: was already in it).
+local function append(fns, owner, property, element)
+    local ok, count, err = pcall(fns.RoNTAK_AppendObject, path_of(owner) or "", property, path_of(element) or "")
+    if not ok then return nil, tostring(count) end
+    if not count then return nil, tostring(err) end
+    return count
 end
 
 -- Spawned objects of one operator, removed again if a step fails.
@@ -203,17 +234,38 @@ local function step_note(job, line)
     if c().log_steps ~= false then note(job.name .. ": " .. line) end
 end
 
--- Setting up one operator, a step per tick (the gear a few items per tick),
--- so the game never stalls on it and a log line names every step:
---   spawn -> items -> gear -> finish -> look -> register.
+-- Setting up one operator. All steps run in the same tick (see
+-- reinforcements.tick), and a log line names each one:
+--   spawn -> items -> gear -> finish -> register.
 local STEPS = {}
+
+-- Copies the donor's appearance onto the operator: the customization
+-- choices and the body / face meshes. Done before the spawn is finished, so
+-- the game builds the operator with them (a spawned officer has no head
+-- otherwise). Returns how many fields were copied and which failed.
+local function copy_look(op, donor)
+    local copied, failed = 0, {}
+    for _, field in ipairs(c().customization_fields or {}) do
+        if pcall(function() op.Customization[field] = donor.Customization[field] end) then
+            copied = copied + 1
+        else
+            failed[#failed + 1] = field
+        end
+    end
+    for _, field in ipairs(c().look_fields or {}) do
+        if pcall(function() op[field] = donor[field] end) then
+            copied = copied + 1
+        else
+            failed[#failed + 1] = field
+        end
+    end
+    return copied, failed
+end
 
 function STEPS.spawn(job)
     local pc = game.player_controller()
     local pawn = game.player_pawn()
     check(pc and valid(pawn), "no player")
-    local world = pc:GetWorld()
-    check(valid(world), "no world")
     local stock = stock_by_slot()
     local donor = stock[job.kit] or stock[0] or stock[1] or stock[2] or stock[3]
     check(donor, "no ready stock officer to copy")
@@ -227,17 +279,19 @@ function STEPS.spawn(job)
     end
     -- An entry position is a standing officer's centre; a nav-mesh point is the floor.
     local z = spot.centre and spot.z + 10 or spot.z + half + 10
-    -- A new officer isn't one the mod already knows (nor the player).
-    local known = {}
-    for _, o in ipairs(game.officer_actors()) do known[o.name] = true end
-    local op = spawn_actor(world, donor:GetClass(), { X = spot.x, Y = spot.y, Z = z }, function(a)
-        return not known[object_name(a)] and object_name(a) ~= object_name(pawn)
-    end)
-    check(valid(op), "operator spawn failed")
+    local at = { X = spot.x, Y = spot.y, Z = z }
+    local yaw = 0
+    pcall(function() yaw = donor:K2_GetActorRotation().Yaw or 0 end)
+    local op, err = begin_spawn(job.fns, donor, donor:GetClass(), at, yaw, COLLISION_ADJUST, nil)
+    check(op, "operator spawn failed: " .. tostring(err))
     job.made[#job.made + 1] = op
-    -- The donor's slot: the game's tables only have slots 0-3.
+    -- Before the game builds it: the donor's slot (the game's tables only
+    -- have slots 0-3), the team it joins, and the donor's look.
     op.SquadPosition = slot_of(donor) or 0
     op.DefaultTeam = (config.team_args or {})[job.team_def.joins] or donor.DefaultTeam
+    local copied, failed = copy_look(op, donor)
+    local done, finish_err = finish_spawn(job.fns, op, at, yaw)
+    check(done, "operator not finished: " .. tostring(finish_err))
     job.op_name = object_name(op)
     members[job.op_name] = { team = job.team, call_sign = job.name }
     game.set_officer_override(job.op_name, { team = job.team, name = job.name })
@@ -245,7 +299,7 @@ function STEPS.spawn(job)
     check(valid(op.Controller), "no AI controller")
     job.made[#job.made + 1] = op.Controller
     check(valid(op.InventoryComp) and valid(donor.InventoryComp), "no inventory")
-    job.op, job.donor, job.world = op, donor, world
+    job.op, job.donor = op, donor
     job.at = { X = spot.x, Y = spot.y, Z = spot.z + 50 }
     job.items, job.copies = {}, {}
     donor.InventoryComp.InventoryItems:ForEach(function(_, element)
@@ -256,35 +310,31 @@ function STEPS.spawn(job)
         local primary = donor:GetEquippedWeapon()
         job.primary = valid(primary) and object_name(primary) or nil
     end)
-    step_note(job, string.format("spawned (%s, gear of %s: %d items)", object_name(op), object_name(donor), #job.items))
+    step_note(job, string.format("spawned (%s, look and gear of %s: %d look fields%s, %d items)", object_name(op),
+        object_name(donor), copied, #failed > 0 and (" (failed: " .. table.concat(failed, ", ") .. ")") or "", #job.items))
     return "items"
 end
 
--- Copies a few of the donor's items.
+-- Copies the donor's items: each spawned, owned by the operator and added
+-- to its inventory.
 function STEPS.items(job)
     check(valid(job.op) and valid(job.donor), "operator or gear source gone")
-    for _ = 1, c().items_per_tick or 2 do
-        local item = table.remove(job.items, 1)
-        if not item then return "gear" end
+    for _, item in ipairs(job.items) do
         if valid(item) then
             local class_name = object_name(item:GetClass())
-            step_note(job, "copying " .. class_name)
-            -- A new item has no owner yet and isn't one of this operator's copies.
-            local copy = spawn_actor(job.world, item:GetClass(), job.at, function(a)
-                for _, m in ipairs(job.made) do if object_name(m) == object_name(a) then return false end end
-                local owned = false
-                pcall(function() owned = valid(a:GetOwner()) end)
-                return not owned
-            end)
-            check(valid(copy), "item spawn failed (" .. class_name .. ")")
+            local copy, err = begin_spawn(job.fns, job.op, item:GetClass(), job.at, 0, COLLISION_ALWAYS, job.op)
+            check(copy, "item spawn failed (" .. class_name .. "): " .. tostring(err))
             job.made[#job.made + 1] = copy
+            local done, finish_err = finish_spawn(job.fns, copy, job.at, 0)
+            check(done, "item not finished (" .. class_name .. "): " .. tostring(finish_err))
             copy:SetOwner(job.op)
             check(job.op.InventoryComp:AddInventoryItem(copy), "item not accepted (" .. class_name .. ")")
             job.copies[object_name(item)] = copy
             if object_name(item) == job.primary then job.in_hand = copy end
         end
     end
-    return #job.items > 0 and "items" or "gear"
+    step_note(job, string.format("%d items copied", #job.items))
+    return "gear"
 end
 
 -- Points the gear record at the copies and puts the primary weapon in hand.
@@ -297,83 +347,55 @@ function STEPS.gear(job)
         if valid(item) and copies[object_name(item)] then to[slot] = copies[object_name(item)] end
     end
     pcall(function() to.Character = from.Character end)
+    -- The lists (grenades, devices...) are grown natively: a fresh operator's are empty.
+    local listed, problems = 0, {}
     for _, list in ipairs(c().gear_lists or {}) do
+        local wanted = {}
         pcall(function()
-            local out = to[list]
-            out:Empty()
-            local n = 0
             from[list]:ForEach(function(_, element)
                 local copy = copies[object_name(element:get())]
-                if copy then n = n + 1; out[n] = copy end
+                if copy then wanted[#wanted + 1] = copy end
             end)
         end)
+        for _, copy in ipairs(wanted) do
+            local count, err = append(job.fns, inv, "SpawnedGear." .. list, copy)
+            if count then listed = listed + 1 else problems[#problems + 1] = list .. ": " .. tostring(err) end
+        end
     end
     pcall(function() inv:RefreshItemCategories() end)
     pcall(function() inv:OnRep_SpawnedGear() end)
     check(valid(job.in_hand), "no primary weapon to copy")
     check(inv:PutItemInHands(job.in_hand, true, true, true), "primary weapon not equipped")
-    step_note(job, "geared up")
+    step_note(job, string.format("geared up (%d listed%s)", listed,
+        #problems > 0 and ("; not listed: " .. table.concat(problems, ", ")) or ""))
     return "finish"
 end
 
--- The game's own end of spawning an AI officer.
+-- The game's own end of spawning an AI officer, then the look refreshed
+-- (config.look_updates).
 function STEPS.finish(job)
     check(valid(job.op) and valid(job.op.Controller), "operator gone")
     job.op.Controller:OnAIFinishSpawning()
-    step_note(job, "AI started")
-    return "look"
-end
-
--- Copies the donor's appearance (a spawned officer has no head otherwise):
--- the customization choices and body / face meshes, then the game rebuilds
--- the look from them.
-function STEPS.look(job)
-    check(valid(job.op) and valid(job.donor), "operator or look source gone")
-    local copied, failed = 0, {}
-    for _, field in ipairs(c().customization_fields or {}) do
-        if pcall(function() job.op.Customization[field] = job.donor.Customization[field] end) then
-            copied = copied + 1
-        else
-            failed[#failed + 1] = field
-        end
-    end
-    for _, field in ipairs(c().look_fields or {}) do
-        if pcall(function() job.op[field] = job.donor[field] end) then
-            copied = copied + 1
-        else
-            failed[#failed + 1] = field
-        end
-    end
+    local failed = {}
     for _, fn in ipairs(c().look_updates or {}) do
         local ok, err = pcall(function() job.op[fn](job.op) end)
         if not ok then failed[#failed + 1] = fn .. " (" .. tostring(err) .. ")" end
     end
-    step_note(job, string.format("look copied (%d fields%s)", copied,
-        #failed > 0 and ("; failed: " .. table.concat(failed, ", ")) or ""))
+    step_note(job, "AI started" .. (#failed > 0 and ("; look refresh failed: " .. table.concat(failed, ", ")) or ""))
     return "register"
 end
 
 -- The squad manager's officer list (SwatAI), which squad orders go to.
--- Growing it from Lua crashed the game a moment later (in game, Nov 2026):
--- the list's memory is the engine's, and a Lua append replaces it with
--- memory the engine can't free. So the operator is only added if the game
--- hasn't added it itself and config.add_to_squad_list is on (testing only).
 function STEPS.register(job)
     check(valid(job.op), "operator gone")
     local manager = game.resolve_target(c().manager or "SWATManager")
     check(valid(manager), "no squad manager")
-    local n, listed = 0, false
-    manager.SwatAI:ForEach(function(_, element)
-        n = n + 1
-        if object_name(element:get()) == object_name(job.op) then listed = true end
-    end)
-    if listed then
-        step_note(job, string.format("in the squad list (the game added it; %d officers)", n))
-    elseif c().add_to_squad_list then
-        manager.SwatAI[n + 1] = job.op
-        step_note(job, string.format("added to the squad list (%d officers)", n + 1))
+    if c().add_to_squad_list == false then
+        step_note(job, "not added to the squad list (config.reinforcements.add_to_squad_list = false)")
     else
-        step_note(job, string.format("not in the squad list (%d officers): squad orders may not reach it", n))
+        local count, err = append(job.fns, manager, "SwatAI", job.op)
+        check(count, "not added to the squad list: " .. tostring(err))
+        step_note(job, count == 0 and "already in the squad list" or string.format("added to the squad list (%d officers)", count))
     end
     game.forget_officers()
     return "done"
@@ -390,6 +412,11 @@ function reinforcements.request(cmd)
     end
     if not game.player_pawn() then
         result.message = "no mission running"
+        return result
+    end
+    if not native() then
+        result.message = "needs RoNTAKNative 0.2 or newer (see native/README.md)"
+        note(string.format("%s not called in: %s", string.upper(team), result.message))
         return result
     end
     local wanted = 0
@@ -413,18 +440,23 @@ function reinforcements.request(cmd)
     return result
 end
 
--- Advances the operator being set up by one step; called once per mod tick.
+-- Sets up the next operator, completely; called once per mod tick.
 function reinforcements.tick()
     record_entry()
     local job = queue[1]
     if not job then return end
     job.step = job.step or "spawn"
     job.made = job.made or {}
+    job.fns = job.fns or native()
     local result = results[job.id]
-    local ok, next_step = pcall(STEPS[job.step], job)
-    if ok and next_step ~= "done" then
+    local ok, next_step = true, nil
+    if not job.fns then
+        ok, next_step = false, "RoNTAKNative is no longer loaded"
+    end
+    while ok do
+        ok, next_step = pcall(STEPS[job.step], job)
+        if not ok or next_step == "done" then break end
         job.step = next_step
-        return
     end
     table.remove(queue, 1)
     if ok then

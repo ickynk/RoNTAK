@@ -571,28 +571,35 @@ class ModTest(unittest.TestCase):
             self.assertFalse(690 <= min(x1, x2) <= 730, (x1, y1, x2, y2))
         self.assertGreater(out["traces"], 500)
 
-    def add_reinforcement_world(self, equip_ok=True, returns_nothing=False):
-        """A world that can spawn officers and items, a navigation mesh, and stock officers with gear."""
+    def add_reinforcement_world(self, equip_ok=True, native=True):
+        """A world that can spawn officers and items (through stand-ins for RoNTAKNative's functions),
+        a navigation mesh, and stock officers with gear."""
         self.lua.execute(f"""
             equip_ok = {str(equip_ok).lower()}
-            returns_nothing = {str(returns_nothing).lower()}  -- like UE4SS 3.0.1 in game: spawns, returns nothing
+            by_path = {{}}
+            local function named(o, path)  -- objects are passed to the native functions by path
+                o.GetFullName = function() return "Class " .. path end
+                by_path[path] = o
+                return o
+            end
             local function obj(n, t)
                 t = t or {{}}
                 t.IsValid = function(self) return not self.destroyed end
                 t.GetFName = function() return {{ ToString = function() return n end }} end
                 t.K2_DestroyActor = function(self) self.destroyed = true destroyed[#destroyed + 1] = n end
-                return t
+                return named(t, "/Game/" .. n)
             end
-            function list(values)  -- a TArray stand-in that can grow and be emptied
+            function list(values)  -- a TArray stand-in
                 local a = values or {{}}
                 a.ForEach = function(self, fn) for i, v in ipairs(self) do fn(i, {{ get = function() return v end }}) end end
                 a.Empty = function(self) for i = #self, 1, -1 do self[i] = nil end end
                 return a
             end
-            destroyed, spawned, finished, in_hand = {{}}, 0, 0, {{}}
+            destroyed, spawned, finished, in_hand, unfinished_spawns = {{}}, 0, 0, {{}}, 0
             local officer_class = obj("CyberneticsSwat_V2_C")
             local function gear_owner(o, items)
                 local inv = {{ InventoryItems = list(items), SpawnedGear = {{ Grenades = list(), TacticalDevices = list(), Miscelaneous = list() }} }}
+                named(inv, "/Game/Inventory_" .. o.GetFName():ToString())
                 inv.IsValid = function() return true end
                 inv.AddInventoryItem = function(self, item) table.insert(self.InventoryItems, item) return true end
                 inv.RefreshItemCategories = function() end
@@ -601,6 +608,7 @@ class ModTest(unittest.TestCase):
                 o.InventoryComp = inv
             end
             for i, donor in ipairs(objects.CyberneticsSwat_V2_C) do
+                by_path[donor.GetFullName():match(" (.+)$")] = donor
                 donor.GetClass = function() return officer_class end
                 donor.DefaultTeam = donor.SquadPosition == 0 and 2 or 1
                 donor.IsDeadOrUnconscious = function() return false end
@@ -614,43 +622,65 @@ class ModTest(unittest.TestCase):
                 donor.Customization = {{ Character = "Char_" .. i, Shirt = "Shirt_" .. i }}
                 donor.Rep_FaceMesh = "Face_" .. i
             end
-            local world = {{ IsValid = function() return true end, GetFName = function() return {{ ToString = function() return "RiverwoodHouse" end }} end }}
-            world.SpawnActor = function(self, class, at, rot)
+            local manager = objects.SWATManager[1]
+            named(manager, "/Game/SWATManager_0")
+            manager.SwatAI = list({{ objects.CyberneticsSwat_V2_C[1], objects.CyberneticsSwat_V2_C[2] }})
+            local nav = obj("Nav", {{ K2_ProjectPointToNavigation = function(self, ctx, want, out)
+                out.X, out.Y, out.Z = want.X, want.Y, want.Z
+                return true
+            end }})
+            function StaticFindObject(path)
+                if path:find("NavigationSystemV1") then return nav end
+                return by_path[path]
+            end
+            if not {str(native).lower()} then return end
+            -- RoNTAKNative 0.2 stand-ins: a deferred spawn, its finish, an array append.
+            function RoNTAK_BeginSpawn(context, class_path, x, y, z, yaw, collision, owner)
+                assert(by_path[context], "unknown context " .. context)
+                local class = by_path[class_path]
+                if not class then return nil, "class not found: " .. class_path end
                 spawned = spawned + 1
+                unfinished_spawns = unfinished_spawns + 1
                 if class == officer_class then
-                    local o = actor("Swat_New_" .. spawned, at.X, at.Y, at.Z - 100, 0, {{}})
-                    local base_valid = o.IsValid
+                    local o = actor("Swat_New_" .. spawned, x, y, z - 100, yaw, {{}})
+                    by_path["Swat_New_" .. spawned] = o
                     o.IsValid = function(self) return not self.destroyed end
                     o.K2_DestroyActor = function(self) self.destroyed = true destroyed[#destroyed + 1] = "officer" end
                     o.IsDeadOrUnconscious = function() return false end
                     o.Customization = {{}}
                     o.OnRep_Customization = function(self) self.look_rebuilt = true end
+                    o.OnRep_CharacterLookOverride = function() end
                     o.SpawnDefaultController = function(self)
                         self.Controller = obj("Controller_" .. spawned, {{ OnAIFinishSpawning = function() finished = finished + 1 end }})
                     end
                     gear_owner(o, {{}})
                     table.insert(objects.CyberneticsSwat_V2_C, o)
-                    if returns_nothing then return nil end
-                    return o
+                    return "Swat_New_" .. spawned
                 end
                 local item = obj("Item_" .. spawned, {{
-                    SetOwner = function(self, owner) self.owner = owner end,
+                    SetOwner = function(self, o) self.owner = o end,
                     GetOwner = function(self) return self.owner end,
-                    K2_GetActorLocation = function() return {{ X = at.X, Y = at.Y, Z = at.Z }} end,
+                    spawn_owner = by_path[owner],
                 }})
-                local class_name = class.GetFName():ToString()
-                objects[class_name] = objects[class_name] or {{}}
-                table.insert(objects[class_name], item)
-                if returns_nothing then return nil end
-                return item
+                return "/Game/Item_" .. spawned
             end
-            objects.PlayerController[1].GetWorld = function() return world end
-            objects.SWATManager[1].SwatAI = list({{ objects.CyberneticsSwat_V2_C[1], objects.CyberneticsSwat_V2_C[2] }})
-            local nav = obj("Nav", {{ K2_ProjectPointToNavigation = function(self, ctx, want, out)
-                out.X, out.Y, out.Z = want.X, want.Y, want.Z
+            function RoNTAK_FinishSpawn(path, x, y, z, yaw)
+                local o = by_path[path]
+                if not o then return nil, "actor not found: " .. path end
+                unfinished_spawns = unfinished_spawns - 1
+                o.finished_with_look = o.Customization and o.Customization.Character  -- set before the game builds it?
+                o.finished_with_slot = o.SquadPosition
                 return true
-            end }})
-            function StaticFindObject(path) if path:find("NavigationSystemV1") then return nav end end
+            end
+            function RoNTAK_AppendObject(owner_path, property, element_path)
+                local target, element = by_path[owner_path], by_path[element_path]
+                if not target then return nil, "owner not found: " .. owner_path end
+                if not element then return nil, "element not found: " .. element_path end
+                for part in property:gmatch("[^.]+") do target = target[part] end
+                for _, v in ipairs(target) do if v == element then return 0 end end
+                table.insert(target, element)
+                return #target
+            end
         """)
 
     def test_call_in_green_team(self):
@@ -662,24 +692,29 @@ class ModTest(unittest.TestCase):
         result = next(r for r in state["results"] if r["id"] == 1)
         self.assertEqual((result["status"], result["message"]), ("ok", "GREEN on scene"))
         self.assertEqual(g.finished, 2)
-        # Not added to the squad list from Lua (that crashed the game): still the 2 stock officers.
-        self.assertEqual(self.lua.eval("#objects.SWATManager[1].SwatAI"), 2)
+        self.assertEqual(g.unfinished_spawns, 0)  # every deferred spawn finished
+        # Added to the squad list (natively), so squad orders reach them.
+        self.assertEqual(self.lua.eval("#objects.SWATManager[1].SwatAI"), 4)
         green = sorted((o["name"], o["team"]) for o in state["officers"] if o["team"] == "green")
         self.assertEqual(green, [("Echo", "green"), ("Foxtrot", "green")])
         new = [o for o in g.objects.CyberneticsSwat_V2_C.values() if o.GetFName().ToString().startswith("Swat_New_")]
         self.assertEqual(len(new), 2)
         # They keep their gear source's squad slot (the game's tables only have 0-3; 4-7 crashed it).
         self.assertEqual({o.SquadPosition for o in new}, {0})  # Alpha's gear (Beta isn't in this squad)
-        self.assertEqual({o.DefaultTeam for o in new}, {2})  # follows BLUE orders until stage 2
+        self.assertEqual({o.finished_with_slot for o in new}, {0})  # set before the game built it
+        self.assertEqual({o.DefaultTeam for o in new}, {2})  # follows BLUE orders until the teams get their own
         for o in new:
             items = [o.InventoryComp.InventoryItems[i] for i in (1, 2)]
             self.assertIsNone(o.InventoryComp.InventoryItems[3])  # rifle and flashbang copied, nothing else
             self.assertEqual(o.InventoryComp.SpawnedGear.Primary.GetFName().ToString(), items[0].GetFName().ToString())
-            self.assertIsNotNone(o.InventoryComp.SpawnedGear.Grenades[1])
+            self.assertEqual(o.InventoryComp.SpawnedGear.Grenades[1].GetFName().ToString(), items[1].GetFName().ToString())
+            self.assertIsNone(o.InventoryComp.SpawnedGear.Grenades[2])
+            self.assertEqual(items[0].owner.GetFName().ToString(), o.GetFName().ToString())
         self.assertEqual(self.lua.eval("#in_hand"), 2)
-        # The look (head and face) copied from the gear source and rebuilt.
+        # The look (head and face) copied from the gear source before the game built the operator, then rebuilt.
         for o in new:
             self.assertTrue(o.look_rebuilt)
+            self.assertEqual(o.finished_with_look, o.Customization.Character)
             self.assertIn(o.Rep_FaceMesh, ("Face_1", "Face_2"))
             self.assertEqual(o.Customization.Character, "Char_" + o.Rep_FaceMesh[-1])
         # Asking again while both are alive: nothing new.
@@ -712,7 +747,7 @@ class ModTest(unittest.TestCase):
 
     def test_call_in_without_a_working_nav_check(self):
         self.add_reinforcement_world()
-        self.lua.execute("StaticFindObject = function() return nil end")  # no navigation system
+        self.lua.execute("StaticFindObject = function(path) return by_path[path] end")  # no navigation system
         self.tick()
         # Squad still standing on the entry point: no free spot, and the error says why.
         self.run_orders({"id": 1, "team": "green", "action": "request_team", "target": {}, "options": {}})
@@ -730,47 +765,40 @@ class ModTest(unittest.TestCase):
         self.assertEqual(next(r for r in state["results"] if r["id"] == 2)["status"], "ok")
         self.assertEqual(self.spawned_positions(), [(100, 200), (150, 250)])
 
-    def test_call_in_when_spawn_returns_nothing(self):
-        """In game SpawnActor created the officer but returned nothing: it is looked up and finished."""
-        self.add_reinforcement_world(returns_nothing=True)
+    def test_call_in_needs_the_native_mod(self):
+        """Without RoNTAKNative 0.2 nothing is spawned (the Lua-only way corrupted game memory)."""
+        self.add_reinforcement_world(native=False)
+        self.lua.execute("world_spawns = 0")
         self.run_orders({"id": 1, "team": "green", "action": "request_team", "target": {}, "options": {}})
-        for _ in range(30):
-            state = self.tick()
+        state = self.tick()
         result = next(r for r in state["results"] if r["id"] == 1)
-        self.assertEqual((result["status"], result["message"]), ("ok", "GREEN on scene"))
-        g = self.lua.globals()
-        self.assertEqual(g.finished, 2)
-        new = [o for o in g.objects.CyberneticsSwat_V2_C.values() if o.GetFName().ToString().startswith("Swat_New_")]
-        self.assertEqual(len(new), 2)
-        for o in new:
-            self.assertIsNotNone(o.InventoryComp.InventoryItems[2])  # rifle and flashbang found and added
-            self.assertEqual(o.InventoryComp.InventoryItems[1].owner.GetFName().ToString(), o.GetFName().ToString())
-        self.assertEqual(sorted(x["name"] for x in state["officers"] if x["team"] == "green"), ["Echo", "Foxtrot"])
+        self.assertEqual(result["status"], "error")
+        self.assertIn("needs RoNTAKNative 0.2", result["message"])
+        self.assertEqual(self.lua.globals().spawned, 0)
+        self.assertFalse(any(o["team"] == "green" for o in state["officers"]))
 
-    def test_call_in_is_spread_over_ticks_and_logged(self):
+    def test_call_in_builds_one_operator_per_tick_and_logs_it(self):
         self.add_reinforcement_world()
         self.lua.execute("logged = {} print = function(s) logged[#logged + 1] = s end")
         self.run_orders({"id": 1, "team": "green", "action": "request_team", "target": {}, "options": {}})
         g = self.lua.globals()
-        # That tick took the request and spawned Echo; the gear and the rest come over the next ticks.
-        self.assertEqual((g.spawned, g.finished), (1, 0))
+        # That tick took the request and set Echo up completely (the officer and its 2 items).
+        self.assertEqual((g.spawned, g.finished, g.unfinished_spawns), (3, 1, 0))
         self.tick()
-        self.assertEqual(g.spawned, 3)  # two items per tick
-        for _ in range(30):
-            self.tick()
+        self.assertEqual((g.spawned, g.finished), (6, 2))  # Foxtrot
         lines = [l for l in g.logged.values() if "Echo:" in l]
         steps = [l.split("Echo: ")[1].split(" (")[0].strip() for l in lines]
-        self.assertEqual(steps, ["spawned", "copying RifleClass", "copying FlashClass", "geared up", "AI started",
-                                 "look copied", "not in the squad list"])
+        self.assertEqual(steps, ["spawned", "2 items copied", "geared up", "AI started", "added to the squad list"])
 
-    def test_squad_list_only_touched_when_asked(self):
+    def test_squad_list_not_appended_twice(self):
         # The game adding the officer itself when its AI starts: noticed, nothing appended.
         self.add_reinforcement_world()
         self.lua.execute(r"""
             logged = {} print = function(s) logged[#logged + 1] = s end
-            local spawn = objects.PlayerController[1].GetWorld().SpawnActor
-            objects.PlayerController[1].GetWorld().SpawnActor = function(self, class, at, rot)
-                local o = spawn(self, class, at, rot)
+            local begin = RoNTAK_BeginSpawn
+            RoNTAK_BeginSpawn = function(...)
+                local path = begin(...)
+                local o = by_path[path]
                 if o and o.SpawnDefaultController then
                     local make = o.SpawnDefaultController
                     o.SpawnDefaultController = function(op)
@@ -781,23 +809,24 @@ class ModTest(unittest.TestCase):
                         end
                     end
                 end
-                return o
+                return path
             end
         """)
         self.run_orders({"id": 1, "team": "green", "action": "request_team", "target": {}, "options": {}})
-        for _ in range(30):
+        for _ in range(5):
             self.tick()
         self.assertEqual(self.lua.eval("#objects.SWATManager[1].SwatAI"), 4)
         lines = " ".join(self.lua.globals().logged.values())
-        self.assertIn("Echo: in the squad list (the game added it; 3 officers)", lines)
+        self.assertIn("Echo: already in the squad list", lines)
 
-    def test_squad_list_append_setting(self):
+    def test_squad_list_setting_off(self):
         self.add_reinforcement_world()
-        self.lua.execute('require("config").reinforcements.add_to_squad_list = true')
+        self.lua.execute('require("config").reinforcements.add_to_squad_list = false')
         self.run_orders({"id": 1, "team": "yellow", "action": "request_team", "target": {}, "options": {}})
-        for _ in range(30):
-            self.tick()
-        self.assertEqual(self.lua.eval("#objects.SWATManager[1].SwatAI"), 4)
+        for _ in range(5):
+            state = self.tick()
+        self.assertEqual(next(r for r in state["results"] if r["id"] == 1)["status"], "ok")
+        self.assertEqual(self.lua.eval("#objects.SWATManager[1].SwatAI"), 2)
 
     def test_failed_call_in_removes_what_it_spawned(self):
         self.add_reinforcement_world(equip_ok=False)
