@@ -2,7 +2,7 @@
 //
 // Gives RoNTAK's Lua mod the few things Lua can't do safely on UE4SS 3.0.1:
 //
-//   RoNTAK_NativeVersion() -> "0.2.0"
+//   RoNTAK_NativeVersion() -> "0.3.0"
 //
 //   RoNTAK_BeginSpawn(context, class, x, y, z, yaw, collision, owner)
 //       -> actor path | nil, error
@@ -25,6 +25,10 @@
 //     grow a non-empty array and write past its end.)
 //
 //   RoNTAK_ArrayCount(owner, property) -> count | nil, error
+//
+//   RoNTAK_CreateWidget(class, owner) -> widget path | nil, error
+//     UWidgetBlueprintLibrary::Create(owner, class, owner): a widget made the
+//     game's way (a widget constructed from Lua never showed).
 //
 // Objects are passed as object paths (obj:GetFullName() without the class
 // name), never as raw addresses, and every one is looked up and type-checked
@@ -59,7 +63,7 @@ using namespace RC::Unreal;
 
 namespace
 {
-    constexpr const char* NATIVE_VERSION = "0.2.0";
+    constexpr const char* NATIVE_VERSION = "0.3.0";
     constexpr const RC::CharType* LUA_MOD_NAME = STR("RoNTAK");
 
     // ---- Lua arguments ------------------------------------------------------
@@ -285,13 +289,13 @@ namespace
         alignas(16) uint8_t params[PARAMS_SIZE]{};
         std::string error{};
 
-        explicit Call(const wchar_t* function_path)
+        explicit Call(const wchar_t* function_path, const wchar_t* target_path = STR("/Script/Engine.Default__GameplayStatics"))
         {
-            target = UObjectGlobals::StaticFindObject<UObject*>(nullptr, nullptr, STR("/Script/Engine.Default__GameplayStatics"));
+            target = UObjectGlobals::StaticFindObject<UObject*>(nullptr, nullptr, target_path);
             function = UObjectGlobals::StaticFindObject<UFunction*>(nullptr, nullptr, function_path);
             if (!target || !function)
             {
-                error = "GameplayStatics function not found: " + to_string(std::wstring(function_path));
+                error = "function not found: " + to_string(std::wstring(function_path));
             }
         }
 
@@ -433,6 +437,32 @@ namespace
         return 1;
     }
 
+    // UWidgetBlueprintLibrary::Create, the game's own way to make a widget
+    // (initialised, ready for AddToViewport). Lua can't pass its class argument.
+    auto create_widget(const LuaMadeSimple::Lua& lua) -> int
+    {
+        Args args{lua};
+        auto class_path = args.string("class");
+        auto owner_path = args.string("owner");
+        if (!args.error.empty()) return fail(lua, args.error);
+
+        UObject* class_object = find_object(class_path);
+        if (!class_object || !class_object->IsA<UClass>()) return fail(lua, "class not found: " + class_path);
+        UObject* owner = find_object(owner_path);
+        if (!owner) return fail(lua, "owner not found: " + owner_path);
+
+        Call call{STR("/Script/UMG.WidgetBlueprintLibrary:Create"), STR("/Script/UMG.Default__WidgetBlueprintLibrary")};
+        call.set_object(STR("WorldContextObject"), owner, true);
+        call.set_object(STR("WidgetType"), class_object, true);
+        call.set_object(STR("OwningPlayer"), owner, false);
+        if (!call.error.empty()) return fail(lua, call.error);
+        call.run();
+        UObject* widget = call.result_object();
+        if (!widget) return fail(lua, "the game did not create " + class_path);
+        lua.set_string(path_of(widget));
+        return 1;
+    }
+
     auto append_object(const LuaMadeSimple::Lua& lua) -> int
     {
         Args args{lua};
@@ -492,6 +522,7 @@ namespace
         lua.register_function("RoNTAK_FinishSpawn", &finish_spawn);
         lua.register_function("RoNTAK_AppendObject", &append_object);
         lua.register_function("RoNTAK_ArrayCount", &array_count);
+        lua.register_function("RoNTAK_CreateWidget", &create_widget);
     }
 } // namespace
 
@@ -501,10 +532,10 @@ class RoNTAKNative : public CppUserModBase
     RoNTAKNative() : CppUserModBase()
     {
         ModName = STR("RoNTAKNative");
-        ModVersion = STR("0.2.0");
+        ModVersion = STR("0.3.0");
         ModDescription = STR("Native helpers for the RoNTAK mod");
         ModAuthors = STR("RoNTAK");
-        Output::send<LogLevel::Verbose>(STR("[RoNTAKNative] loaded, version 0.2.0\n"));
+        Output::send<LogLevel::Verbose>(STR("[RoNTAKNative] loaded, version 0.3.0\n"));
     }
 
     ~RoNTAKNative() override = default;
