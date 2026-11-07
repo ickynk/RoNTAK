@@ -30,7 +30,7 @@ config.keys = {
                              -- Not F11: that is the game's fullscreen / borderless toggle.
     request_green  = "PAGE_UP",   -- call in GREEN team (config.reinforcements)
     request_yellow = "PAGE_DOWN", -- call in YELLOW team
-    select_team    = "INSERT", -- command wheel orders go to: stock teams -> GREEN -> YELLOW (squads.lua)
+    select_team    = "INS",  -- Insert: the command wheel commands stock teams -> GREEN -> YELLOW (squads.lua)
     team_probe     = "END",  -- team analysis for GREEN / YELLOW orders: press, give orders, press again
                              -- -> bridge/team_report.txt (teamprobe.lua)
 }
@@ -186,12 +186,18 @@ config.reinforcements = {
 -- Orders for the called-in teams on their own (squads.lua).
 config.squads = {
     enabled = true,
-    -- How long the officers' team settings stay arranged for an order (ms).
+    -- The team called-in operators rest on while not commanded by the wheel:
+    -- GOLD (5) is the squad-wide team, so RED / BLUE wheel orders miss them
+    -- and GOLD orders reach them.
+    rest_team = 5,
+    -- How long a RoNTAK order's team arrangement lasts (ms).
     restore_ms = 500,
-    -- With no team selected, GOLD orders also reach GREEN and YELLOW.
-    gold_reaches_called_in = true,
-    wheel_hook = "/Script/ReadyOrNot.SwatCommandWidget:OnCommandIssued",
-    wheel_team_properties = { "ExecutionTeamType", "ActiveTeamType" },
+    -- Which team the wheel shows (the selected team takes it).
+    wheel_class = "SwatCommandWidget",
+    wheel_team_property = "ActiveTeamType",
+    -- Show a message on screen when the selection changes.
+    announce = true,
+    announce_seconds = 3,
     log_routes = true,
 }
 

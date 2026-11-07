@@ -95,18 +95,18 @@ They join the squad's officer list and take orders **as their own teams**:
 
 - **On the ATAK screen:** the **GREEN** and **YELLOW** team buttons appear next to RED / BLUE / GOLD while the
   team is on scene. Orders sent with them go to that team only.
-- **With the in-game command wheel:** press **Insert** to choose which officers the wheel commands:
-  stock teams (RED / BLUE / GOLD, as in the plain game) → **GREEN** → **YELLOW** → stock teams. With GREEN
-  selected, every wheel order goes to Echo and Foxtrot only, whatever team the wheel shows. The ATAK screen's
-  **Command wheel** buttons do the same, and show what is selected.
-- With the stock teams selected, RED and BLUE orders reach only the original squad, and **GOLD reaches everyone**,
-  the called-in teams included (`gold_reaches_called_in` in `config.squads`).
+- **With the in-game command wheel:** press **Insert** to choose what the wheel commands: the stock teams
+  (as in the plain game) → **GREEN** → **YELLOW** → the stock teams. A message on screen says which (if the
+  game shows it), and so do the **Command wheel** buttons on the ATAK screen, which select it too.
+  - Stock teams selected: RED and BLUE reach the original squad only; **GOLD reaches everyone**.
+  - GREEN selected: RED or BLUE on the wheel (either) commands **Echo and Foxtrot only**; GOLD still reaches
+    everyone. The same for YELLOW.
 
-How it works: the game itself only knows RED, BLUE and GOLD. For the half second an order goes out, RoNTAK
-arranges the officers' team settings so exactly the chosen officers receive it, then puts them back
-(`squads.lua`). Orders queued in game to start later (the game's own "hold for execute") are sent when you start
-them, with whatever team is selected then. Teams, names, gear and keys are set in `config.lua`
-(`config.reinforcements`, `config.squads`, `request_green`, `request_yellow`, `select_team`).
+How it works: the game itself only knows RED, BLUE and GOLD, and picks who gets a wheel order from each
+officer's team. RoNTAK keeps those teams arranged for the current selection: the called-in operators rest on
+GOLD (the squad-wide team) unless selected, and while a team is selected everyone else rests on GOLD
+(`squads.lua`, `config.squads`). Teams, names, gear and keys are set in `config.lua` (`config.reinforcements`,
+`config.squads`, `request_green`, `request_yellow`, `select_team`).
 
 Single player only.
 

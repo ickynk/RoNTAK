@@ -137,7 +137,7 @@ objects = {
 
 function FindAllOf(class) return objects[class] end
 function FindFirstOf(class) return objects[class] and objects[class][1] end
-Key = { F5 = "F5", F6 = "F6", F7 = "F7", F8 = "F8", F9 = "F9", F10 = "F10", HOME = "HOME", END = "END", INSERT = "INSERT" }
+Key = { F5 = "F5", F6 = "F6", F7 = "F7", F8 = "F8", F9 = "F9", F10 = "F10", HOME = "HOME", END = "END", INS = "INS" }
 keybinds = {}
 function RegisterKeyBind(key, fn) keybinds[key] = fn end
 function ExecuteInGameThread(fn) fn() end
@@ -702,7 +702,7 @@ class ModTest(unittest.TestCase):
         # They keep their gear source's squad slot (the game's tables only have 0-3; 4-7 crashed it).
         self.assertEqual({o.SquadPosition for o in new}, {0})  # Alpha's gear (Beta isn't in this squad)
         self.assertEqual({o.finished_with_slot for o in new}, {0})  # set before the game built it
-        self.assertEqual({o.DefaultTeam for o in new}, {2})  # follows BLUE orders until the teams get their own
+        self.assertEqual({o.DefaultTeam for o in new}, {5})  # rest on GOLD: only GOLD or GREEN orders reach them (squads.lua)
         for o in new:
             items = [o.InventoryComp.InventoryItems[i] for i in (1, 2)]
             self.assertIsNone(o.InventoryComp.InventoryItems[3])  # rifle and flashbang copied, nothing else
@@ -796,59 +796,57 @@ class ModTest(unittest.TestCase):
 
     def call_in_both_teams(self):
         self.add_reinforcement_world()
-        self.lua.execute("clock = 100 os.clock = function() return clock end")
-        self.run_orders({"id": 1, "team": "green", "action": "request_team", "target": {}, "options": {}},
-                        {"id": 2, "team": "yellow", "action": "request_team", "target": {}, "options": {}})
-        for _ in range(6):
-            self.tick()
-        # Two stock officers (RED, BLUE), Echo / Foxtrot (joined BLUE), Golf / Hotel (joined RED).
         self.lua.execute(r"""
+            clock = 100 os.clock = function() return clock end
+            wheel = { IsValid = function() return true end, ActiveTeamType = 1 }
+            objects.SwatCommandWidget = { wheel }
+            objects.PlayerController[1].ClientMessage = function(self, text) announced = text end
             function teams_now()
                 local out = {}
                 for _, a in ipairs(objects.SWATManager[1].SwatAI) do out[#out + 1] = a.DefaultTeam end
                 return table.concat(out, ",")
             end
-            function wheel_order(team)
-                local widget = { IsValid = function() return true end, ExecutionTeamType = team, ActiveTeamType = team }
-                hooks["/Script/ReadyOrNot.SwatCommandWidget:OnCommandIssued"][1]({ get = function() return widget end })
-            end
         """)
-        self.assertEqual(self.lua.eval("teams_now()"), "1,2,2,2,1,1")
+        self.run_orders({"id": 1, "team": "green", "action": "request_team", "target": {}, "options": {}},
+                        {"id": 2, "team": "yellow", "action": "request_team", "target": {}, "options": {}})
+        for _ in range(6):
+            self.tick()
+        # Stock RED and BLUE keep their teams; Echo, Foxtrot, Golf and Hotel rest on GOLD (5),
+        # so the wheel's RED / BLUE orders reach the original squad only and GOLD reaches everyone.
+        self.assertEqual(self.lua.eval("teams_now()"), "1,2,5,5,5,5")
 
-    def test_wheel_orders_reach_the_selected_team_only(self):
+    def test_wheel_commands_the_selected_team(self):
         self.call_in_both_teams()
         g = self.lua.globals()
-        # Nothing selected: a RED order reaches the stock RED officer only (Golf and Hotel step out).
-        self.lua.execute("wheel_order(1)")
-        self.assertEqual(self.lua.eval("teams_now()"), "1,2,2,2,0,0")
-        self.lua.execute("clock = clock + 1")
-        self.tick()
-        self.assertEqual(self.lua.eval("teams_now()"), "1,2,2,2,1,1")  # put back
-        # GOLD reaches everyone, called-in teams included: nothing to change.
-        self.lua.execute("wheel_order(5)")
-        self.assertEqual(self.lua.eval("teams_now()"), "1,2,2,2,1,1")
-        # Insert selects GREEN: a RED order on the wheel goes to Echo and Foxtrot only.
-        g.keybinds["INSERT"]()
+        # Insert selects GREEN: Echo and Foxtrot take the wheel's team (RED), everyone else rests on GOLD.
+        g.keybinds["INS"]()
         self.assertEqual(self.tick()["selected_team"], "green")
-        self.lua.execute("wheel_order(1)")
-        self.assertEqual(self.lua.eval("teams_now()"), "0,2,1,1,0,0")
-        self.lua.execute("clock = clock + 1")
+        self.assertEqual(self.lua.eval("teams_now()"), "5,5,1,1,5,5")
+        self.assertIn("GREEN", g.announced)
+        # Scrolling the wheel to BLUE: GREEN follows.
+        self.lua.execute("wheel.ActiveTeamType = 2")
         self.tick()
-        self.assertEqual(self.lua.eval("teams_now()"), "1,2,2,2,1,1")
-        # Insert again: YELLOW. A GOLD order goes to Golf and Hotel only.
-        g.keybinds["INSERT"]()
-        self.lua.execute("wheel_order(5)")
-        self.assertEqual(self.lua.eval("teams_now()"), "0,0,0,0,1,1")
-        self.lua.execute("clock = clock + 1")
+        self.assertEqual(self.lua.eval("teams_now()"), "5,5,2,2,5,5")
+        # Insert again: YELLOW.
+        g.keybinds["INS"]()
+        self.tick()
+        self.assertEqual(self.lua.eval("teams_now()"), "5,5,5,5,2,2")
         # Insert again: back to the stock teams.
-        g.keybinds["INSERT"]()
+        g.keybinds["INS"]()
+        self.assertNotIn("selected_team", self.tick())
+        self.assertEqual(self.lua.eval("teams_now()"), "1,2,5,5,5,5")
+        self.assertIn("RED / BLUE / GOLD", g.announced)
+
+    def test_selection_skips_teams_not_on_scene(self):
+        self.add_reinforcement_world()
+        self.tick()
+        self.lua.globals().keybinds["INS"]()  # nobody called in: stays on the stock teams
         self.assertNotIn("selected_team", self.tick())
 
     def test_companion_orders_for_a_called_in_team(self):
         self.call_in_both_teams()
         self.lua.execute(r"""
-            local manager = objects.SWATManager[1]
-            manager.GiveMoveCommand = function(self, team, location)
+            objects.SWATManager[1].GiveMoveCommand = function(self, team, location)
                 move_call = { team = team, teams = teams_now() }
             end
         """)
@@ -858,10 +856,17 @@ class ModTest(unittest.TestCase):
         self.assertEqual(next(r for r in state["results"] if r["id"] == 9)["status"], "ok")
         # Sent as RED (the team YELLOW joined), with only Golf and Hotel on RED at that moment.
         self.assertEqual(self.lua.eval("move_call.team"), 1)
-        self.assertEqual(self.lua.eval("move_call.teams"), "0,2,2,2,1,1")
-        # The companion selects the wheel's team too.
+        self.assertEqual(self.lua.eval("move_call.teams"), "0,2,5,5,1,1")
+        self.lua.execute("clock = clock + 1")
+        self.tick()
+        self.assertEqual(self.lua.eval("teams_now()"), "1,2,5,5,5,5")  # arranged for the wheel again
+        # A stock RED order from the companion while GREEN is selected still reaches the stock RED officer only.
         self.send("A", [{"id": 10, "team": "green", "action": "select_team", "target": {}, "options": {}}])
         self.assertEqual(self.tick()["selected_team"], "green")
+        self.send("A", [{"id": 11, "team": "red", "action": "move_to",
+                         "target": {"location": {"x": 1, "y": 2, "z": 0}}, "options": {}}])
+        self.tick()
+        self.assertEqual(self.lua.eval("move_call.teams"), "1,5,0,0,5,5")
 
     def test_call_in_needs_the_native_mod(self):
         """Without RoNTAKNative 0.2 nothing is spawned (the Lua-only way corrupted game memory)."""

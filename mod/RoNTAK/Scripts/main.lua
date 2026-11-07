@@ -174,7 +174,6 @@ end
 orders.install_class_hooks()
 cameras.install_hooks()
 squads.set_member_lookup(reinforcements.team_of)
-squads.install_hooks()
 
 LoopAsync(config.tick_ms, function()
     ExecuteInGameThread(safe_tick)

@@ -2,25 +2,25 @@
 --
 -- The game sends a squad order to the officers in its squad list whose
 -- DefaultTeam is the order's team (RED 1, BLUE 2), or to all of them (GOLD
--- 5). It has no other teams, and the command wheel's orders go straight into
--- the game's own code. What the team analysis showed (Nov 2026): the wheel's
--- OnCommandIssued runs before any officer gets the new job.
+-- 5). It has no other teams.
 --
--- So for the moment an order goes out, the officers' DefaultTeam is
--- arranged so that exactly the wanted officers receive it, and put back
--- shortly after (config.squads.restore_ms):
---   * the officers who should get it, but wouldn't, take the order's team;
---   * the others who would get it step out (DefaultTeam 0, no team).
--- Which officers should get it:
---   * a team selected with config.keys.select_team (GREEN / YELLOW): only
---     that team's operators, whatever team the wheel shows;
---   * no team selected: the stock officers of the wheel's team, as in the
---     plain game; GOLD also reaches the called-in teams
---     (config.squads.gold_reaches_called_in).
--- RoNTAK's own orders (the companion) are routed the same way.
+-- The command wheel picks who gets an order inside the game's own code,
+-- before anything RoNTAK can hook (tested Nov 2026: changing DefaultTeam in
+-- the wheel's OnCommandIssued came too late). So the officers' DefaultTeam is
+-- kept arranged all the time, for whatever the wheel sends next:
 --
--- At rest every operator keeps the DefaultTeam it joined with (BLUE / RED),
--- so the rest of the game (friend or foe, team lights) treats it as SWAT.
+--   * stock teams selected (the plain game): the original squad keeps its
+--     teams; the called-in operators rest on config.squads.rest_team (GOLD),
+--     so RED / BLUE orders reach the original squad only and GOLD reaches
+--     everyone;
+--   * GREEN (or YELLOW) selected with config.keys.select_team: that team's
+--     operators take the wheel's current team (RED or BLUE, followed every
+--     mod tick), everyone else rests on GOLD. RED / BLUE orders on the wheel
+--     go to GREEN only; GOLD still reaches everyone.
+--
+-- RoNTAK's own orders (the companion) don't depend on the wheel: for the
+-- moment one goes out, DefaultTeam is arranged so exactly its team gets it,
+-- then put back (config.squads.restore_ms).
 
 local config = require("config")
 local game = require("game")
@@ -31,22 +31,26 @@ local squads = {}
 local valid, object_name = game.valid, game.object_name
 
 local NO_TEAM = 0
-local GOLD = 5
+local RED, BLUE, GOLD = 1, 2, 5
 
 local selected = nil        -- nil (stock teams) or a called-in team name
-local swapped = nil         -- { until_clock, list = { { actor, team } } }
+local swapped = nil         -- a RoNTAK order's arrangement: { until_clock, list = { { actor, team } } }
+local home = {}             -- actor name -> the stock team it had (stock officers only)
 local member_team = function() return nil end   -- actor name -> called-in team, set by reinforcements
-local last_route = nil      -- for the log / tests
+local wheel_team = RED      -- the command wheel's current team (RED or BLUE)
+local last_route = nil
 
 local function c() return config.squads or {} end
 local function note(line) log.info("squads: " .. line) end
+local function rest_team() return c().rest_team or GOLD end
 
--- reinforcements tells which actor belongs to which called-in team.
 function squads.set_member_lookup(fn) member_team = fn end
+
+local function team_defs() return (config.reinforcements or {}).teams or {} end
 
 local function called_in_teams()
     local out = {}
-    for name in pairs((config.reinforcements or {}).teams or {}) do out[#out + 1] = name end
+    for name in pairs(team_defs()) do out[#out + 1] = name end
     table.sort(out)
     return out
 end
@@ -66,14 +70,47 @@ end
 
 local function team_of(actor)
     local ok, t = pcall(function() return actor.DefaultTeam end)
-    return ok and t or nil
+    return ok and tonumber(t) or nil
 end
 
 local function set_team(actor, value)
     return pcall(function() actor.DefaultTeam = value end)
 end
 
--- Puts back the DefaultTeam of every officer changed for the last order.
+-- The team an officer really belongs to: a stock officer's own, a called-in
+-- operator's joined team.
+local function home_team(actor, name, own)
+    if own then
+        local def = team_defs()[own]
+        return def and (config.team_args or {})[def.joins] or BLUE
+    end
+    if home[name] == nil then home[name] = team_of(actor) end
+    return home[name]
+end
+
+-- The DefaultTeam an officer should have right now, for the wheel.
+local function arranged_team(actor, name, own)
+    if selected then
+        return own == selected and wheel_team or rest_team()
+    end
+    if own then return rest_team() end
+    return home_team(actor, name, own)
+end
+
+-- Keeps every officer's DefaultTeam arranged; called every mod tick (and
+-- right away when the selection changes).
+function squads.arrange()
+    if swapped or c().enabled == false then return end
+    for _, actor in ipairs(squad_list()) do
+        local name = object_name(actor)
+        local own = member_team(name)
+        if not own then home_team(actor, name, own) end   -- remember before changing it
+        local want = arranged_team(actor, name, own)
+        if want and team_of(actor) ~= want then set_team(actor, want) end
+    end
+end
+
+-- Puts back the DefaultTeam of every officer changed for a RoNTAK order.
 function squads.restore()
     if not swapped then return end
     for _, entry in ipairs(swapped.list) do
@@ -82,28 +119,30 @@ function squads.restore()
     swapped = nil
 end
 
--- Arranges DefaultTeam so an order for wheel_team reaches exactly the
--- officers of `team` (a called-in team, or nil for the stock teams).
--- Returns how many officers will get it and how many were changed.
-function squads.route(team, wheel_team)
+-- For a RoNTAK order sent as order_team: arranges DefaultTeam so it reaches
+-- exactly the officers of `team` (a called-in team, or nil for the stock
+-- team order_team). Returns how many get it and how many were changed.
+function squads.route(team, order_team)
     squads.restore()
-    wheel_team = tonumber(wheel_team)
-    if not wheel_team or wheel_team == NO_TEAM then return 0, 0 end
+    squads.arrange()
+    order_team = tonumber(order_team)
+    if not order_team or order_team == NO_TEAM then return 0, 0 end
     local list, reach, changed = {}, 0, 0
     for _, actor in ipairs(squad_list()) do
+        local name = object_name(actor)
+        local own = member_team(name)
         local current = team_of(actor)
-        local own = member_team(object_name(actor))
         local wanted
         if team then
             wanted = own == team
-        elseif own then
-            wanted = wheel_team == GOLD and c().gold_reaches_called_in ~= false
+        elseif order_team == GOLD then
+            wanted = true
         else
-            wanted = wheel_team == GOLD or current == wheel_team
+            wanted = not own and home_team(actor, name, own) == order_team
         end
-        local would = wheel_team == GOLD or current == wheel_team
+        local would = order_team == GOLD or current == order_team
         local new = nil
-        if wanted and not would then new = wheel_team end
+        if wanted and not would then new = order_team end
         if not wanted and would then new = NO_TEAM end
         if new ~= nil and current ~= nil and set_team(actor, new) then
             list[#list + 1] = { actor = actor, team = current }
@@ -114,20 +153,17 @@ function squads.route(team, wheel_team)
     if #list > 0 then
         swapped = { until_clock = os.clock() + (c().restore_ms or 500) / 1000, list = list }
     end
-    last_route = { team = team or "stock", wheel_team = wheel_team, reach = reach, changed = changed }
+    last_route = { team = team or "stock", order_team = order_team, reach = reach, changed = changed }
     if c().log_routes ~= false then
-        note(string.format("order for %s (wheel team %d): %d officer(s), %d team setting(s) changed for %d ms",
-            team and string.upper(team) or "the stock team", wheel_team, reach, changed, c().restore_ms or 500))
+        note(string.format("RoNTAK order for %s (sent as team %d): %d officer(s), %d team setting(s) changed for %d ms",
+            team and string.upper(team) or "the stock team", order_team, reach, changed, c().restore_ms or 500))
     end
     return reach, changed
 end
 
 function squads.last_route() return last_route end
-
--- The selected team, for RoNTAK's state.
 function squads.selected() return selected end
 
--- Has a called-in team operators alive?
 local function has_members(team)
     for _, actor in ipairs(squad_list()) do
         if member_team(object_name(actor)) == team then
@@ -136,6 +172,25 @@ local function has_members(team)
         end
     end
     return false
+end
+
+-- A short message on screen (the game's player message), if it shows one.
+local function announce(text)
+    if c().announce == false then return end
+    local pc = game.player_controller()
+    if not valid(pc) then return end
+    pcall(function() pc:ClientMessage(text, FName and FName("None") or "None", c().announce_seconds or 3) end)
+end
+
+function squads.select(team)
+    if team ~= nil and not team_defs()[team] then return false end
+    selected = team
+    local text = selected and string.format("Command wheel: %s (RED / BLUE orders go to %s only)", string.upper(selected),
+        string.upper(selected)) or "Command wheel: RED / BLUE / GOLD"
+    note(text)
+    announce(text)
+    squads.arrange()
+    return true
 end
 
 -- Selects which team the command wheel commands: stock -> GREEN -> YELLOW ->
@@ -155,45 +210,31 @@ function squads.cycle()
     return selected
 end
 
-function squads.select(team)
-    if team ~= nil and not ((config.reinforcements or {}).teams or {})[team] then return false end
-    selected = team
-    note(selected and ("command wheel orders now go to " .. string.upper(selected) .. " only (whatever team the wheel shows)")
-        or "command wheel orders go to the stock teams again")
-    return true
+-- The command wheel's current team: the selected team takes it, so RED and
+-- BLUE on the wheel both command it.
+local function read_wheel_team()
+    local widget = FindFirstOf(c().wheel_class or "SwatCommandWidget")
+    if not valid(widget) then return end
+    local ok, v = pcall(function() return widget[c().wheel_team_property or "ActiveTeamType"] end)
+    v = ok and tonumber(v) or nil
+    if v == RED or v == BLUE then wheel_team = v end
 end
 
--- The command wheel's team for the order being issued.
-local function wheel_team_of(widget)
-    for _, prop in ipairs(c().wheel_team_properties or { "ExecutionTeamType", "ActiveTeamType" }) do
-        local ok, v = pcall(function() return widget[prop] end)
-        if ok and tonumber(v) and tonumber(v) ~= NO_TEAM then return tonumber(v) end
-    end
-    return nil
-end
-
-local hooked = false
-function squads.install_hooks()
-    if hooked or c().enabled == false then return end
-    local path = c().wheel_hook or "/Script/ReadyOrNot.SwatCommandWidget:OnCommandIssued"
-    local ok, err = pcall(RegisterHook, path, function(context)
-        local widget = nil
-        pcall(function() widget = context:get() end)
-        if not valid(widget) then widget = FindFirstOf("SwatCommandWidget") end
-        if not valid(widget) then return end
-        local wheel_team = wheel_team_of(widget)
-        if wheel_team then squads.route(selected, wheel_team) end
-    end)
-    if ok then
-        hooked = true
-    else
-        log.error("squads: could not hook " .. path .. ": " .. tostring(err))
-    end
-end
-
--- Puts the team settings back once the order has gone out; every mod tick.
+-- Every mod tick: put back a RoNTAK order's arrangement when its time is up,
+-- follow the wheel, keep the officers arranged.
 function squads.tick()
     if swapped and os.clock() >= swapped.until_clock then squads.restore() end
+    if selected and not has_members(selected) then
+        note(string.upper(selected) .. " is no longer on scene")
+        squads.select(nil)
+    end
+    if selected then read_wheel_team() end
+    squads.arrange()
+end
+
+-- When the mission changes, forget the old officers.
+function squads.reset()
+    home, selected, swapped, wheel_team = {}, nil, nil, RED
 end
 
 return squads
