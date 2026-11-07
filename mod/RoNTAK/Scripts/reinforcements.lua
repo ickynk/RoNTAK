@@ -32,6 +32,7 @@
 local config = require("config")
 local game = require("game")
 local log = require("log")
+local squads = require("squads")
 
 local reinforcements = {}
 
@@ -481,6 +482,8 @@ function reinforcements.tick()
     job.step = job.step or "spawn"
     job.made = job.made or {}
     job.fns = job.fns or native()
+    -- Everyone on their real team while the game takes the new operator in.
+    squads.pause()
     local result = results[job.id]
     local ok, next_step = true, nil
     if not job.fns then

@@ -13,7 +13,7 @@ config.tick_ms = 250
 
 -- Folder used to exchange files with the ATAK companion app.
 -- Which RoNTAK this is (shown in the UE4SS log when the mod loads).
-config.build = "2026-11-07 wheel label 3 (HUD)"
+config.build = "2026-11-07 wheel label 3 (HUD), spawn pause"
 
 -- nil = the "bridge" folder inside this mod (recommended).
 config.bridge_dir = nil
@@ -193,6 +193,9 @@ config.squads = {
     -- GOLD (5) is the squad-wide team, so RED / BLUE wheel orders miss them
     -- and GOLD orders reach them.
     rest_team = 5,
+    -- While operators are called in, and this long after, everyone stays on
+    -- their real team (the game's spawning may expect RED / BLUE only).
+    pause_after_spawn_s = 3,
     -- How long a RoNTAK order's team arrangement lasts (ms).
     restore_ms = 500,
     -- Which team the wheel shows (the selected team takes it).

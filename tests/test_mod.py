@@ -576,6 +576,7 @@ class ModTest(unittest.TestCase):
         a navigation mesh, and stock officers with gear."""
         self.lua.execute(f"""
             equip_ok = {str(equip_ok).lower()}
+            require("config").squads.pause_after_spawn_s = 0  -- tests below look at teams right after a call-in
             by_path = {{}}
             local function named(o, path)  -- objects are passed to the native functions by path
                 o.GetFullName = function() return "Class " .. path end
@@ -852,6 +853,51 @@ class ModTest(unittest.TestCase):
         self.assertNotIn("selected_team", self.tick())
         self.assertEqual(self.lua.eval("teams_now()"), "1,2,5,5,5,5")
         self.assertIsNone(self.lua.eval("draw_frame()"))  # nothing on screen with the stock teams
+
+    def test_teams_are_real_while_operators_arrive(self):
+        """GREEN selected, then YELLOW called in: everyone is on their real team until it is in (crash in game)."""
+        self.add_reinforcement_world()
+        self.lua.execute(r"""
+            clock = 100 os.clock = function() return clock end
+            require("config").squads.pause_after_spawn_s = 3
+            objects.SwatCommandWidget = { { IsValid = function() return true end, ActiveTeamType = 1 } }
+            function teams_now()
+                local out = {}
+                for _, a in ipairs(objects.SWATManager[1].SwatAI) do out[#out + 1] = a.DefaultTeam end
+                return table.concat(out, ",")
+            end
+            -- The game's own end of spawning looks at the teams.
+            local begin = RoNTAK_BeginSpawn
+            RoNTAK_BeginSpawn = function(...)
+                local path = begin(...)
+                local o = by_path[path]
+                if o and o.SpawnDefaultController then
+                    local make = o.SpawnDefaultController
+                    o.SpawnDefaultController = function(op)
+                        make(op)
+                        op.Controller.OnAIFinishSpawning = function() teams_at_finish = teams_now() end
+                    end
+                end
+                return path
+            end
+        """)
+        self.run_orders({"id": 1, "team": "green", "action": "request_team", "target": {}, "options": {}})
+        self.tick()  # Foxtrot
+        self.lua.execute("clock = clock + 5")
+        self.tick()
+        self.lua.globals().keybinds["INS"]()  # GREEN
+        self.tick()
+        self.assertEqual(self.lua.eval("teams_now()"), "5,5,1,1")
+        self.send("A", [{"id": 2, "team": "yellow", "action": "request_team", "target": {}, "options": {}}])
+        self.tick()
+        # Golf was taken in with everyone on RED / BLUE (no one parked on GOLD).
+        self.assertEqual(self.lua.eval("teams_at_finish"), "1,2,2,2")
+        self.lua.execute("clock = clock + 1")
+        self.tick()  # Hotel
+        self.assertEqual(self.lua.eval("teams_at_finish"), "1,2,2,2,1")
+        self.lua.execute("clock = clock + 5")
+        self.tick()
+        self.assertEqual(self.lua.eval("teams_now()"), "5,5,1,1,5,5")  # arranged for GREEN again
 
     def test_selection_skips_teams_not_on_scene(self):
         self.add_reinforcement_world()

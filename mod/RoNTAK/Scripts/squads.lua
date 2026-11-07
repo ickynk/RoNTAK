@@ -98,10 +98,33 @@ local function arranged_team(actor, name, own)
     return home_team(actor, name, own)
 end
 
+-- While operators are being called in, everyone is on their real team
+-- (config.squads.pause_after_spawn_s after the last one): the game's own
+-- spawning code may expect every officer on RED or BLUE.
+local paused_until = nil
+
+local function homes()
+    for _, actor in ipairs(squad_list()) do
+        local name = object_name(actor)
+        local want = home_team(actor, name, member_team(name))
+        if want and team_of(actor) ~= want then set_team(actor, want) end
+    end
+end
+
+-- Called by reinforcements before it sets up an operator.
+function squads.pause()
+    squads.restore()
+    homes()
+    paused_until = os.clock() + (c().pause_after_spawn_s or 3)
+end
+
+function squads.paused() return paused_until ~= nil and os.clock() < paused_until end
+
 -- Keeps every officer's DefaultTeam arranged; called every mod tick (and
 -- right away when the selection changes).
 function squads.arrange()
     if swapped or c().enabled == false then return end
+    if squads.paused() then return end
     for _, actor in ipairs(squad_list()) do
         local name = object_name(actor)
         local own = member_team(name)
