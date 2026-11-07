@@ -96,8 +96,8 @@ They join the squad's officer list and take orders **as their own teams**:
 - **On the ATAK screen:** the **GREEN** and **YELLOW** team buttons appear next to RED / BLUE / GOLD while the
   team is on scene. Orders sent with them go to that team only.
 - **With the in-game command wheel:** press **Insert** to choose what the wheel commands: the stock teams
-  (as in the plain game) → **GREEN** → **YELLOW** → the stock teams. While GREEN or YELLOW is selected, a label at the top of the
-  screen says so (**WHEEL: GREEN**, in the team's colour; `config.overlay`). The **Command wheel** buttons on the
+  (as in the plain game) → **GREEN** → **YELLOW** → the stock teams. While GREEN or YELLOW is selected, a line at the top of the
+  screen says so (**WHEEL: GREEN**, in the team's colour, drawn on the game's HUD; `config.overlay`). The **Command wheel** buttons on the
   ATAK screen show and change the selection too.
   - Stock teams selected: RED and BLUE reach the original squad only; **GOLD reaches everyone**.
   - GREEN selected: RED or BLUE on the wheel (either) commands **Echo and Foxtrot only**; GOLD still reaches
