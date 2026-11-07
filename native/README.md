@@ -1,7 +1,17 @@
 # RoNTAK native mod
 
 A small C++ UE4SS mod that gives RoNTAK's Lua mod the things Lua can't do
-safely (the first: proving it's loaded, `RoNTAK_NativeVersion()`).
+safely on UE4SS 3.0.1. Calling in reinforcement teams needs it.
+
+| Function | What it does |
+| --- | --- |
+| `RoNTAK_NativeVersion()` | `"0.2.0"`: shows the native mod is loaded |
+| `RoNTAK_BeginSpawn(context, class, x, y, z, yaw, collision, owner)` | starts a deferred spawn through the game's `GameplayStatics` (Lua's `World:SpawnActor` returns a broken object on this game); gives the actor's path |
+| `RoNTAK_FinishSpawn(actor, x, y, z, yaw)` | finishes it, after Lua set the actor up |
+| `RoNTAK_AppendObject(owner, property, element)` | appends to an object array (`"SwatAI"`, `"SpawnedGear.Grenades"`) with the engine's allocator (a Lua write past the end of an array writes into game memory) |
+| `RoNTAK_ArrayCount(owner, property)` | an object array's length |
+
+Objects are passed as object paths, never as raw addresses, and checked.
 
 It must be built against the UE4SS source **of the exact UE4SS version
 players run** (currently v3.0.1), and that source pulls in a private
@@ -39,4 +49,4 @@ cmake --build native/build --target RoNTAKNative
 
 The mod folder goes next to RoNTAK in UE4SS's Mods folder:
 `Mods\RoNTAKNative\dlls\main.dll` plus `Mods\RoNTAKNative\enabled.txt`.
-RoNTAK's UE4SS console line `native: version 0.1.0` shows it's working.
+RoNTAK's UE4SS console line `native: version 0.2.0` shows it's working.

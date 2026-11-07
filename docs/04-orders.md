@@ -82,14 +82,17 @@ Two extra teams can be called in during a mission:
 | **GREEN** | Echo, Foxtrot | Alpha, Beta | **Call in GREEN** on the ATAK screen, or **Page Up** in game |
 | **YELLOW** | Golf, Hotel | Charlie, Delta | **Call in YELLOW**, or **Page Down** in game |
 
+Calling in needs the native part of RoNTAK, **RoNTAKNative** (version 0.2 or newer: see `native/README.md`);
+without it the button says so and nothing is spawned.
+
 They arrive one per second at the mission's **entry point**, where your squad stood when the mission began
 (or next to you if that's full, or with `spawn_at = "player"` in `config.reinforcements`), and show up on the map
 and roster in their colour. Calling a team
 again only replaces operators who are dead or missing. If a call-in fails, hover over its button to see why (the
 UE4SS console also says `reinforcements: …`).
 
-For now the game itself only has RED, BLUE and GOLD orders, so GREEN also follows **BLUE**'s orders and YELLOW
-follows **RED**'s (and GOLD reaches everyone). Ordering GREEN and YELLOW on their own is the next step. Teams,
+They join the squad's officer list, so they take in-game orders. For now the game itself only has RED, BLUE and
+GOLD orders, so GREEN also follows **BLUE**'s orders and YELLOW follows **RED**'s (and GOLD reaches everyone). Ordering GREEN and YELLOW on their own is the next step. Teams,
 names, gear and keys are set in `config.lua` (`config.reinforcements`, `request_green`, `request_yellow`).
 
 Single player only.
