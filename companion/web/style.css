@@ -81,7 +81,7 @@ button.danger { color: var(--err); }
 }
 
 .teams { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 6px; }
-.team { font-weight: 800; letter-spacing: 0.5px; padding: 10px 0; border-width: 2px; min-width: 0; overflow: hidden; }
+.team { font-weight: 800; letter-spacing: 0; font-size: 13px; padding: 10px 0; border-width: 2px; min-width: 0; overflow: hidden; }
 .team.red { color: var(--red); }
 .team.blue { color: var(--blue); }
 .team.gold { color: var(--gold); }
