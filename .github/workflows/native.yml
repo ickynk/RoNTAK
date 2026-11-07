@@ -53,9 +53,19 @@ jobs:
       - name: Set up Ninja
         uses: seanmiddleditch/gha-setup-ninja@v4
 
+      # UE4SS builds a small Rust library (patternsleuth). 1.76 is the Rust of
+      # UE4SS 3.0.1's release (Feb 2024), so its Cargo.lock builds unchanged.
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.76.0"
+
       - name: Build
+        shell: pwsh
         run: |
-          cmake -S native -B native/build -G Ninja -DCMAKE_BUILD_TYPE=Game__Shipping__Win64
+          $rustc = (rustup which --toolchain 1.76.0 rustc).Trim()
+          Write-Host "rustc: $rustc"
+          cmake -S native -B native/build -G Ninja -DCMAKE_BUILD_TYPE=Game__Shipping__Win64 "-DRust_COMPILER=$rustc"
           cmake --build native/build --target RoNTAKNative
 
       - name: Package the mod folder
