@@ -1,0 +1,85 @@
+name: Native mod
+
+# Builds RoNTAK's C++ UE4SS mod (native/) on Windows against the UE4SS
+# source of the UE4SS version players run, and uploads the mod folder.
+# Needs the repository secret UEPSEUDO_SSH_KEY: see native/README.md.
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "native/**"
+      - ".github/workflows/native.yml"
+
+permissions:
+  contents: read
+
+env:
+  UE4SS_TAG: v3.0.1   # must match the UE4SS players run (Install RoNTAK.bat installs 3.0.x)
+
+jobs:
+  build:
+    runs-on: windows-2022
+    steps:
+      - name: Check the secret
+        shell: bash
+        env:
+          KEY: ${{ secrets.UEPSEUDO_SSH_KEY }}
+        run: |
+          if [ -z "$KEY" ]; then
+            echo "::error::The repository secret UEPSEUDO_SSH_KEY is missing. See native/README.md."
+            exit 1
+          fi
+
+      - name: Set up SSH (UEPseudo is private to Epic-linked GitHub accounts)
+        uses: shimataro/ssh-key-action@v2
+        with:
+          key: ${{ secrets.UEPSEUDO_SSH_KEY }}
+          known_hosts: unnecessary
+
+      - name: Checkout RoNTAK
+        uses: actions/checkout@v4
+
+      - name: Checkout UE4SS ${{ env.UE4SS_TAG }}
+        shell: bash
+        run: |
+          git clone --depth 1 --branch "$UE4SS_TAG" https://github.com/UE4SS-RE/RE-UE4SS.git native/RE-UE4SS
+          cd native/RE-UE4SS
+          git -c core.sshCommand="ssh -o StrictHostKeyChecking=accept-new" submodule update --init --recursive --depth 1
+
+      - name: Set up MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Set up Ninja
+        uses: seanmiddleditch/gha-setup-ninja@v4
+
+      # UE4SS builds a small Rust library (patternsleuth). 1.76 is the Rust of
+      # UE4SS 3.0.1's release (Feb 2024), so its Cargo.lock builds unchanged.
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.76.0"
+
+      - name: Build
+        shell: pwsh
+        run: |
+          $rustc = (rustup which --toolchain 1.76.0 rustc).Trim()
+          Write-Host "rustc: $rustc"
+          cmake -S native -B native/build -G Ninja -DCMAKE_BUILD_TYPE=Game__Shipping__Win64 "-DRust_COMPILER=$rustc"
+          cmake --build native/build --target RoNTAKNative
+
+      - name: Package the mod folder
+        shell: bash
+        run: |
+          dll=$(find native/build -name RoNTAKNative.dll | head -1)
+          test -n "$dll" || { echo "::error::RoNTAKNative.dll not found"; exit 1; }
+          mkdir -p package/RoNTAKNative/dlls
+          cp "$dll" package/RoNTAKNative/dlls/main.dll
+          echo "" > package/RoNTAKNative/enabled.txt
+          cp native/README.md package/RoNTAKNative/README.md
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: RoNTAKNative
+          path: package/

@@ -6,17 +6,18 @@
 --      the mission began), else near the player on the AI navigation mesh,
 --      clear of other officers;
 --   2. world:SpawnActor(<a stock officer's class>) there; squad slot and
---      team set; an AI controller if it has none;
+--      team set (the slot is the gear source's: the game's tables only
+--      have slots 0-3, and slots 4-7 crashed it); an AI controller;
 --   3. a copy of a stock officer's gear (each item spawned and added, the
 --      gear slots pointed at the copies, the primary weapon put in hand);
 --   4. the game's own OnAIFinishSpawning, then the operator is added to the
 --      squad manager's SwatAI list, so squad orders reach it.
 -- A step that fails removes what was spawned for that operator.
 --
--- The game has squad slots 4-7 (Foxtrot, Golf, Hotel, India) that single
--- player leaves empty; the teams use those, named as in config. In-game
+-- Called-in operators are known by name (members below, and the officer
+-- override in game.lua gives RoNTAK their team and call sign). In-game
 -- orders follow DefaultTeam (RED / BLUE / GOLD only), so until the teams can
--- be commanded on their own (stage 2) each joins the stock team set in config.
+-- be commanded on their own each joins the stock team set in config.
 --
 -- The way to spawn and equip an operator follows what the Extra SWAT Teams
 -- mod showed works in this game; this is RoNTAK's own implementation.
@@ -31,7 +32,8 @@ local valid, object_name = game.valid, game.object_name
 local ZERO_ROT = { Pitch = 0, Yaw = 0, Roll = 0 }
 local STOCK_SLOTS = { [0] = true, [1] = true, [2] = true, [3] = true }
 
-local queue = {}        -- operators still to spawn: { team, slot, kit }
+local queue = {}        -- operators still to set up: { team, index, call_sign, kit, ... }
+local members = {}      -- called-in operators: actor name -> { team, call_sign }
 local results = {}      -- per request: result table shown in RoNTAK's order list
 
 local function c() return config.reinforcements or {} end
@@ -46,20 +48,21 @@ local function slot_of(o)
     return ok and v or nil
 end
 
--- Stock officers (squad slots 0-3), by slot.
+-- Stock officers (not called in), by squad slot.
 local function stock_by_slot()
     local out = {}
     for _, o in ipairs(game.officer_actors()) do
         local s = slot_of(o.actor)
-        if STOCK_SLOTS[s] and ready(o.actor) then out[s] = o.actor end
+        if STOCK_SLOTS[s] and not members[o.name] and ready(o.actor) then out[s] = o.actor end
     end
     return out
 end
 
--- Live operators in a slot (any officer, stock or called in).
-local function slot_taken(slot)
+-- Is a team's operator with this call sign alive?
+local function on_scene(team, call_sign)
     for _, o in ipairs(game.officer_actors()) do
-        if slot_of(o.actor) == slot and ready(o.actor) then return true end
+        local m = members[o.name]
+        if m and m.team == team and m.call_sign == call_sign and ready(o.actor) then return true end
     end
     return false
 end
@@ -74,7 +77,7 @@ local function record_entry()
     if entry.spots or not level then return end
     local spots = {}
     for _, o in ipairs(game.officer_actors()) do
-        if STOCK_SLOTS[slot_of(o.actor)] and o.pos then spots[#spots + 1] = o.pos end
+        if STOCK_SLOTS[slot_of(o.actor)] and not members[o.name] and o.pos then spots[#spots + 1] = o.pos end
     end
     if #spots > 0 then
         entry.spots = spots
@@ -232,8 +235,12 @@ function STEPS.spawn(job)
     end)
     check(valid(op), "operator spawn failed")
     job.made[#job.made + 1] = op
-    op.SquadPosition = job.slot
+    -- The donor's slot: the game's tables only have slots 0-3.
+    op.SquadPosition = slot_of(donor) or 0
     op.DefaultTeam = (config.team_args or {})[job.team_def.joins] or donor.DefaultTeam
+    job.op_name = object_name(op)
+    members[job.op_name] = { team = job.team, call_sign = job.name }
+    game.set_officer_override(job.op_name, { team = job.team, name = job.name })
     if not valid(op.Controller) then op:SpawnDefaultController() end
     check(valid(op.Controller), "no AI controller")
     job.made[#job.made + 1] = op.Controller
@@ -386,11 +393,11 @@ function reinforcements.request(cmd)
         return result
     end
     local wanted = 0
-    for i, slot in ipairs(def.slots) do
+    for i, call_sign in ipairs(def.names or {}) do
         local queued = false
-        for _, job in ipairs(queue) do if job.slot == slot then queued = true end end
-        if not slot_taken(slot) and not queued then
-            queue[#queue + 1] = { team = team, team_def = def, slot = slot, kit = (def.kits or {})[i] or 0, id = cmd.id }
+        for _, job in ipairs(queue) do if job.team == team and job.name == call_sign then queued = true end end
+        if not on_scene(team, call_sign) and not queued then
+            queue[#queue + 1] = { team = team, team_def = def, name = call_sign, kit = (def.kits or {})[i] or 0, id = cmd.id }
             wanted = wanted + 1
         end
     end
@@ -413,7 +420,6 @@ function reinforcements.tick()
     if not job then return end
     job.step = job.step or "spawn"
     job.made = job.made or {}
-    job.name = job.name or ((config.officers or {}).squad_names or {})[job.slot] or ("slot " .. job.slot)
     local result = results[job.id]
     local ok, next_step = pcall(STEPS[job.step], job)
     if ok and next_step ~= "done" then
@@ -431,6 +437,10 @@ function reinforcements.tick()
         end
     else
         discard(job.made)
+        if job.op_name then
+            members[job.op_name] = nil
+            game.set_officer_override(job.op_name, nil)
+        end
         note(string.format("%s (%s) could not be called in (step %s): %s", job.name, string.upper(job.team),
             job.step, tostring(next_step)))
         if result then result.status, result.message = "error", job.name .. ": " .. tostring(next_step) end

@@ -180,6 +180,14 @@ class ModTest(unittest.TestCase):
         c = self.lua.globals().calls[i]
         return c.fn, [c[k] for k in range(1, c.n + 1)]
 
+    def test_native_mod_not_installed(self):
+        self.assertNotIn("native", self.tick())
+
+    def test_native_mod_reported(self):
+        # RoNTAKNative registers its functions after the script starts, before the first tick.
+        self.lua.execute('RoNTAK_NativeVersion = function() return "0.1.0" end')
+        self.assertEqual(self.tick()["native"], "0.1.0")
+
     def test_state_contents(self):
         state = self.tick()
         self.assertEqual(state["level"], "RiverwoodHouse")
@@ -658,8 +666,10 @@ class ModTest(unittest.TestCase):
         self.assertEqual(self.lua.eval("#objects.SWATManager[1].SwatAI"), 2)
         green = sorted((o["name"], o["team"]) for o in state["officers"] if o["team"] == "green")
         self.assertEqual(green, [("Echo", "green"), ("Foxtrot", "green")])
-        new = [o for o in g.objects.CyberneticsSwat_V2_C.values() if o.SquadPosition in (4, 5)]
-        self.assertEqual(sorted(o.SquadPosition for o in new), [4, 5])
+        new = [o for o in g.objects.CyberneticsSwat_V2_C.values() if o.GetFName().ToString().startswith("Swat_New_")]
+        self.assertEqual(len(new), 2)
+        # They keep their gear source's squad slot (the game's tables only have 0-3; 4-7 crashed it).
+        self.assertEqual({o.SquadPosition for o in new}, {0})  # Alpha's gear (Beta isn't in this squad)
         self.assertEqual({o.DefaultTeam for o in new}, {2})  # follows BLUE orders until stage 2
         for o in new:
             items = [o.InventoryComp.InventoryItems[i] for i in (1, 2)]
@@ -688,7 +698,8 @@ class ModTest(unittest.TestCase):
 
     def spawned_positions(self):
         return sorted((round(o.K2_GetActorLocation().X), round(o.K2_GetActorLocation().Y))
-                      for o in self.lua.globals().objects.CyberneticsSwat_V2_C.values() if o.SquadPosition in (4, 5, 6, 7))
+                      for o in self.lua.globals().objects.CyberneticsSwat_V2_C.values()
+                      if o.GetFName().ToString().startswith("Swat_New_"))
 
     def test_call_in_arrives_at_the_entry_point(self):
         self.add_reinforcement_world()
@@ -729,8 +740,8 @@ class ModTest(unittest.TestCase):
         self.assertEqual((result["status"], result["message"]), ("ok", "GREEN on scene"))
         g = self.lua.globals()
         self.assertEqual(g.finished, 2)
-        new = [o for o in g.objects.CyberneticsSwat_V2_C.values() if o.SquadPosition in (4, 5)]
-        self.assertEqual(sorted(o.SquadPosition for o in new), [4, 5])  # not left in slot 0 ("Alpha")
+        new = [o for o in g.objects.CyberneticsSwat_V2_C.values() if o.GetFName().ToString().startswith("Swat_New_")]
+        self.assertEqual(len(new), 2)
         for o in new:
             self.assertIsNotNone(o.InventoryComp.InventoryItems[2])  # rifle and flashbang found and added
             self.assertEqual(o.InventoryComp.InventoryItems[1].owner.GetFName().ToString(), o.GetFName().ToString())
