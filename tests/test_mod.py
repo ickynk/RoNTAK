@@ -137,7 +137,7 @@ objects = {
 
 function FindAllOf(class) return objects[class] end
 function FindFirstOf(class) return objects[class] and objects[class][1] end
-Key = { F5 = "F5", F6 = "F6", F7 = "F7", F8 = "F8", F9 = "F9", F10 = "F10", HOME = "HOME" }
+Key = { F5 = "F5", F6 = "F6", F7 = "F7", F8 = "F8", F9 = "F9", F10 = "F10", HOME = "HOME", END = "END" }
 keybinds = {}
 function RegisterKeyBind(key, fn) keybinds[key] = fn end
 function ExecuteInGameThread(fn) fn() end
@@ -840,6 +840,63 @@ class ModTest(unittest.TestCase):
         self.assertIn("officer", list(g.destroyed.values()))
         self.assertEqual(self.lua.eval("#objects.SWATManager[1].SwatAI"), 2)  # nothing registered
         self.assertFalse(any(o["team"] == "yellow" for o in state["officers"]))
+
+    def test_team_probe_reports_who_an_order_reached(self):
+        self.lua.execute(r"""
+            clock = 100
+            os.clock = function() return clock end
+            local function n(s) return { ToString = function() return s end } end
+            local function prop(pname, ptype, enum)
+                return { GetFName = function() return n(pname) end,
+                         GetClass = function() return { GetFName = function() return n(ptype) end } end,
+                         GetEnum = function() return { GetFName = function() return n(enum) end } end }
+            end
+            local function uobj(kind, full, name, props)
+                return { GetClass = function() return { GetFName = function() return n(kind) end } end,
+                         GetFullName = function() return full end,
+                         GetFName = function() return n(name) end,
+                         ForEachProperty = function(self, fn) for _, p in ipairs(props) do fn(p) end end }
+            end
+            local uobjects = {
+                uobj("Function", "Function /Script/ReadyOrNot.SWATManager:GiveMoveCommand", "GiveMoveCommand",
+                     { prop("Team", "EnumProperty", "ETeamType"), prop("Location", "StructProperty") }),
+                uobj("Function", "Function /Script/Engine.Actor:K2_DestroyActor", "K2_DestroyActor", {}),
+                uobj("Class", "Class /Script/ReadyOrNot.ReadyOrNotPlayerController", "ReadyOrNotPlayerController",
+                     { prop("SelectedTeam", "EnumProperty", "ETeamType"), prop("Health", "FloatProperty") }),
+            }
+            function ForEachUObject(fn) for _, o in ipairs(uobjects) do fn(o) end end
+            local enum = { IsValid = function() return true end,
+                           ForEachName = function(self, fn) fn(n("RED"), 1) fn(n("BLUE"), 2) fn(n("GOLD"), 5) end }
+            StaticFindObject = function(path) if path:find("ETeamType") then return enum end end
+            objects.ReadyOrNotPlayerController = { { IsValid = function() return true end, SelectedTeam = 2,
+                                                     GetFName = function() return n("PC_0") end } }
+            local officer = objects.CyberneticsSwat_V2_C[1]
+            officer.DefaultTeam = 2
+            officer.Controller = { IsValid = function() return true end,
+                                   GetClass = function() return { GetFName = function() return n("SwatAIController") end } end }
+        """)
+        self.tick()
+        g = self.lua.globals()
+        g.keybinds["END"]()
+        self.assertIsNotNone(g.hooks["/Script/ReadyOrNot.SWATManager:GiveMoveCommand"])
+        self.assertIsNone(g.hooks["/Script/Engine.Actor:K2_DestroyActor"])
+        # A BLUE move order from the command wheel; the first officer gets a new job.
+        self.lua.execute(r"""
+            hooks["/Script/ReadyOrNot.SWATManager:GiveMoveCommand"][1](nil, { get = function() return 2 end }, {})
+            local job = { IsValid = function() return true end,
+                          GetFName = function() return { ToString = function() return "MoveTo_1" end } end,
+                          GetClass = function() return { GetFName = function() return { ToString = function() return "MoveActivity" end } end } end }
+            objects.CyberneticsSwat_V2_C[1].Controller.CurrentActivity = job
+            clock = clock + 2
+        """)
+        self.tick()
+        g.keybinds["END"]()
+        report = (self.bridge / "team_report.txt").read_text()
+        self.assertIn("SWATManager:GiveMoveCommand  Team=2", report)
+        self.assertIn("none -> MoveActivity#MoveTo_1", report)
+        self.assertIn("2 = BLUE", report)
+        self.assertIn("ReadyOrNotPlayerController PC_0: SelectedTeam=2", report)
+        self.assertIn("/Script/ReadyOrNot.SWATManager:GiveMoveCommand   [watched]   team = param 1 (Team)", report)
 
     def add_people(self):
         self.lua.execute(r"""

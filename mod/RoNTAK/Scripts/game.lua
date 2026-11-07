@@ -247,6 +247,10 @@ function game.set_officer_override(name, info)
     officers_this_tick.tick = nil
 end
 
+function game.officer_override(name)
+    return officer_overrides[name]
+end
+
 -- After an officer is added (reinforcements): rescan on the next scan slot.
 function game.forget_officers()
     officer_cache.at = -math.huge

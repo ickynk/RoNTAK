@@ -30,6 +30,8 @@ config.keys = {
                              -- Not F11: that is the game's fullscreen / borderless toggle.
     request_green  = "PAGE_UP",   -- call in GREEN team (config.reinforcements)
     request_yellow = "PAGE_DOWN", -- call in YELLOW team
+    team_probe     = "END",  -- team analysis for GREEN / YELLOW orders: press, give orders, press again
+                             -- -> bridge/team_report.txt (teamprobe.lua)
 }
 
 ---------------------------------------------------------------------------
@@ -178,6 +180,15 @@ config.reinforcements = {
     -- The parts of InventoryComp.SpawnedGear that point at items.
     gear_slots = { "Primary", "Secondary", "Armor", "Helmet", "HelmetMount", "Facewear", "RandomGear", "LongTactical" },
     gear_lists = { "Grenades", "TacticalDevices", "Miscelaneous" },  -- (sic: the game's spelling)
+}
+
+-- Team analysis (End key, teamprobe.lua): read-only.
+config.team_probe = {
+    team_enum = "ETeamType",
+    team_enum_path = "/Script/ReadyOrNot.ETeamType",
+    -- Team functions of classes whose name has one of these are watched.
+    watch_classes = { "SWATManager", "PlayerController", "Command", "Squad", "Swat", "Team", "HUD", "Order" },
+    max_live_instances = 12,
 }
 
 -- Helicopter, drone and CCTV cameras, drawn on the map as view cones

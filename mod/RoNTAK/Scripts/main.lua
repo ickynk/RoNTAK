@@ -8,6 +8,7 @@ local config = require("config")
 local discovery = require("discovery")
 local floorplan = require("floorplan")
 local reinforcements = require("reinforcements")
+local teamprobe = require("teamprobe")
 local game = require("game")
 local log = require("log")
 local mapinfo = require("mapinfo")
@@ -64,6 +65,7 @@ local function tick()
     end
     orders.run_checks()
     reinforcements.tick()
+    teamprobe.tick()
 
     local doors = level and game.doors(level) or {}
     local rooms_version = rooms.update(level)
@@ -155,6 +157,7 @@ bind(config.keys.discovery_dump, discovery.dump)
 bind(config.keys.sniff_toggle, discovery.toggle_sniff)
 bind(config.keys.test_order, test_order)
 bind(config.keys.floor_capture, floorplan.capture)
+bind(config.keys.team_probe, teamprobe.toggle)
 for team in pairs((config.reinforcements or {}).teams or {}) do
     bind(config.keys["request_" .. team], function() remember(reinforcements.request_from_key(team)) end)
 end
