@@ -800,7 +800,31 @@ class ModTest(unittest.TestCase):
             clock = 100 os.clock = function() return clock end
             wheel = { IsValid = function() return true end, ActiveTeamType = 1 }
             objects.SwatCommandWidget = { wheel }
-            objects.PlayerController[1].ClientMessage = function(self, text) announced = text end
+            -- UMG stand-ins for the on-screen label (overlay.lua).
+            label = { text = nil, visible = false, built = 0 }
+            local umg = {}
+            for _, n in ipairs({ "UserWidget", "WidgetTree", "CanvasPanel", "TextBlock" }) do
+                umg["/Script/UMG." .. n] = { IsValid = function() return true end, kind = n }
+            end
+            local find = StaticFindObject
+            StaticFindObject = function(path) return umg[path] or find(path) end
+            function FText(s) return s end
+            function StaticConstructObject(class, outer)
+                local o = { IsValid = function() return true end, Font = {} }
+                if class.kind == "UserWidget" then
+                    label.built = label.built + 1
+                    o.AddToViewport = function() end
+                    o.SetVisibility = function(self, v) label.visible = v == 3 end
+                elseif class.kind == "CanvasPanel" then
+                    o.AddChildToCanvas = function()
+                        return { SetAnchors = function() end, SetAlignment = function() end, SetAutoSize = function() end }
+                    end
+                elseif class.kind == "TextBlock" then
+                    o.SetText = function(self, t) label.text = t end
+                    o.SetColorAndOpacity = function(self, c) label.color = c.SpecifiedColor end
+                end
+                return o
+            end
             function teams_now()
                 local out = {}
                 for _, a in ipairs(objects.SWATManager[1].SwatAI) do out[#out + 1] = a.DefaultTeam end
@@ -822,7 +846,9 @@ class ModTest(unittest.TestCase):
         g.keybinds["INS"]()
         self.assertEqual(self.tick()["selected_team"], "green")
         self.assertEqual(self.lua.eval("teams_now()"), "5,5,1,1,5,5")
-        self.assertIn("GREEN", g.announced)
+        # On screen: "WHEEL: GREEN", in green.
+        self.assertEqual((g.label.text, g.label.visible), ("WHEEL: GREEN", True))
+        self.assertGreater(g.label.color.G, g.label.color.R)
         # Scrolling the wheel to BLUE: GREEN follows.
         self.lua.execute("wheel.ActiveTeamType = 2")
         self.tick()
@@ -831,11 +857,13 @@ class ModTest(unittest.TestCase):
         g.keybinds["INS"]()
         self.tick()
         self.assertEqual(self.lua.eval("teams_now()"), "5,5,5,5,2,2")
+        self.assertEqual(g.label.text, "WHEEL: YELLOW")
         # Insert again: back to the stock teams.
         g.keybinds["INS"]()
         self.assertNotIn("selected_team", self.tick())
         self.assertEqual(self.lua.eval("teams_now()"), "1,2,5,5,5,5")
-        self.assertIn("RED / BLUE / GOLD", g.announced)
+        self.assertFalse(g.label.visible)  # hidden with the stock teams
+        self.assertEqual(g.label.built, 1)  # built once, reused
 
     def test_selection_skips_teams_not_on_scene(self):
         self.add_reinforcement_world()

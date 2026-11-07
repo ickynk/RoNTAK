@@ -25,6 +25,7 @@
 local config = require("config")
 local game = require("game")
 local log = require("log")
+local overlay = require("overlay")
 
 local squads = {}
 
@@ -230,6 +231,13 @@ function squads.tick()
     end
     if selected then read_wheel_team() end
     squads.arrange()
+    -- On screen while a called-in team is selected.
+    if selected then
+        local colors = c().colors or {}
+        overlay.show(string.format(c().label or "WHEEL: %s", string.upper(selected)), colors[selected])
+    else
+        overlay.show(nil)
+    end
 end
 
 -- When the mission changes, forget the old officers.

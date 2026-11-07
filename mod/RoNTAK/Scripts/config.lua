@@ -195,10 +195,21 @@ config.squads = {
     -- Which team the wheel shows (the selected team takes it).
     wheel_class = "SwatCommandWidget",
     wheel_team_property = "ActiveTeamType",
-    -- Show a message on screen when the selection changes.
-    announce = true,
+    -- While GREEN / YELLOW is selected, a label on screen says so (config.overlay).
+    label = "WHEEL: %s",
+    colors = { green = { R = 0.18, G = 0.8, B = 0.44 }, yellow = { R = 1, G = 0.9, B = 0 } },
+    -- Also send the game's player message (Ready or Not didn't show it in testing).
+    announce = false,
     announce_seconds = 3,
     log_routes = true,
+}
+
+-- RoNTAK's on-screen label (overlay.lua), e.g. which team the wheel commands.
+config.overlay = {
+    enabled = true,
+    x = 0.5, y = 0.12,   -- where on screen (fractions of its width / height): top centre
+    font_size = 22,
+    z_order = 50,
 }
 
 -- Team analysis (End key, teamprobe.lua): read-only.
