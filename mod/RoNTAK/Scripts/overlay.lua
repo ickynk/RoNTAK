@@ -1,16 +1,18 @@
--- A short line of text on the game screen, drawn by RoNTAK.
+-- A short line of text on the game screen, shown by RoNTAK.
 --
 -- Used to show which team the command wheel commands while GREEN or YELLOW
 -- is selected (squads.lua).
 --
--- How: every frame the game's HUD runs its ReceiveDrawHUD event; a hook on
--- it draws the text with the HUD's own DrawText (the standard Unreal way to
--- put text on screen). Tried before and not used (Nov 2026): the game didn't
--- show PlayerController messages, and a UMG widget built from Lua was
--- created but never appeared.
+-- How: RoNTAKNative (0.3+) creates a CommonUserWidget the game's way
+-- (WidgetBlueprintLibrary::Create); Lua gives it a TextBlock, places it with
+-- SetPositionInViewport and adds it to the viewport above the game's HUD.
+-- What didn't work in game (Nov 2026): PlayerController messages aren't
+-- shown, a widget constructed from Lua never appeared, and this game's HUD
+-- doesn't run ReceiveDrawHUD. (The Extra SWAT Teams mod showed the
+-- Create + CommonUserWidget route works in this game.)
 --
--- The hook is installed the first time there is something to show and stays
--- (UE4SS can't safely remove hooks); with nothing to show it returns at once.
+-- Every step is checked; a failure turns the text off for the session and the
+-- log says which step.
 
 local config = require("config")
 local game = require("game")
@@ -20,105 +22,144 @@ local overlay = {}
 
 local valid = game.valid
 
-local current = nil       -- { text, color } to draw, or nil
-local hooked, broken = false, false
-local drawn_once, draw_errors = false, 0
-local hooked_at = nil
-local warned_not_drawn = false
-local font = nil
+local widget, text_block, world_name = nil, nil, nil
+local broken = false
+local shown = nil
+local noted = {}
 
 local function c() return config.overlay or {} end
 local function note(line) log.info("overlay: " .. line) end
+local function note_once(key, line)
+    if noted[key] then return end
+    noted[key] = true
+    note(line)
+end
 
-local function no_object()
-    if CreateInvalidObject then return CreateInvalidObject() end
-    local ok, obj = pcall(FindFirstOf, "RoNTAK_NoSuchClass")
-    if ok then return obj end
+local function path_of(obj)
+    local ok, full = pcall(function() return obj:GetFullName() end)
+    if not ok or type(full) ~= "string" then return nil end
+    return full:match("^%S+%s+(.+)$") or full
+end
+
+local function find(path)
+    local obj = StaticFindObject and StaticFindObject(path)
+    return valid(obj) and obj or nil
+end
+
+local function player_controller()
+    local pc = game.player_controller()
+    if valid(pc) then return pc end
+    local ok, ctrl = pcall(function() return game.player_pawn().Controller end)
+    if ok and valid(ctrl) then return ctrl end
     return nil
 end
 
--- A font to draw with (nil: the HUD falls back to the engine's medium font).
-local function pick_font()
-    if valid(font) then return font end
-    for _, path in ipairs(c().fonts or { "/Engine/EngineFonts/Roboto.Roboto" }) do
-        local f = StaticFindObject and StaticFindObject(path)
-        if valid(f) then font = f return f end
+local function fail(step, err)
+    broken = true
+    widget, text_block = nil, nil
+    note(string.format("could not show the on-screen text (%s%s); it stays off this session",
+        step, err ~= nil and (": " .. tostring(err)) or ""))
+    return false
+end
+
+local function to_text(s)
+    local lib = find("/Script/Engine.Default__KismetTextLibrary")
+    if lib then
+        local ok, t = pcall(function() return lib:Conv_StringToText(s) end)
+        if ok and t ~= nil then return t end
     end
-    local ok, f = pcall(FindFirstOf, "Font")
-    if ok and valid(f) then font = f return f end
-    return no_object()
+    return FText and FText(s) or s
 end
 
-local function draw(hud, width, height)
-    local text, color = current.text, current.color
-    local scale = c().scale or 1.6
-    -- Centre the text on (x, y): its width estimated from its length.
-    local char_px = (c().char_width_px or 9) * scale
-    local x = width * (c().x or 0.5) - #text * char_px / 2
-    local y = height * (c().y or 0.12)
-    local f = pick_font()
-    local shadow = { R = 0, G = 0, B = 0, A = 0.85 }
-    hud:DrawText(text, shadow, x + 2, y + 2, f, scale, false)
-    hud:DrawText(text, { R = color.R, G = color.G, B = color.B, A = 1 }, x, y, f, scale, false)
-end
+local function build(pc)
+    local create = rawget(_G, "RoNTAK_CreateWidget")
+    if type(create) ~= "function" then
+        note_once("native", "needs RoNTAKNative 0.3 or newer to show text on screen")
+        return false
+    end
+    note("building the on-screen text")
+    local ok, path, err = pcall(create, c().widget_class or "/Script/CommonUI.CommonUserWidget", path_of(pc) or "")
+    if not ok then return fail("create widget", path) end
+    if not path then return fail("create widget", err) end
+    local w = find(path)
+    if not w then return fail("find widget", path) end
 
-local function install()
-    if hooked or broken then return end
-    local path = c().hud_hook or "/Script/Engine.HUD:ReceiveDrawHUD"
-    local ok, err = pcall(RegisterHook, path, function(context, size_x, size_y)
-        if not current then return end
-        local done, problem = pcall(function()
-            local hud = context:get()
-            local w, h = size_x:get(), size_y:get()
-            draw(hud, w, h)
-        end)
-        if done then
-            if not drawn_once then
-                drawn_once = true
-                note("drawing on the HUD")
-            end
-        else
-            draw_errors = draw_errors + 1
-            if draw_errors == 1 then note("drawing failed: " .. tostring(problem)) end
-            if draw_errors >= 30 then
-                broken, current = true, nil
-                note("drawing kept failing; the on-screen text stays off this session")
-            end
+    local step = "widget tree"
+    local built, problem = pcall(function()
+        local tree = w.WidgetTree
+        if not valid(tree) then
+            tree = StaticConstructObject(find("/Script/UMG.WidgetTree"), w)
+            w.WidgetTree = tree
         end
+        step = "text"
+        local text = StaticConstructObject(find("/Script/UMG.TextBlock"), tree)
+        assert(valid(text), "no TextBlock")
+        tree.RootWidget = text
+        step = "font"
+        pcall(function()
+            local font = text.Font
+            font.Size = c().font_size or 22
+            text:SetFont(font)
+        end)
+        pcall(function()
+            text:SetShadowOffset({ X = 2, Y = 2 })
+            text:SetShadowColorAndOpacity({ R = 0, G = 0, B = 0, A = 0.9 })
+        end)
+        step = "place"
+        local size = c().size or { X = 520, Y = 48 }
+        w:SetDesiredSizeInViewport(size)
+        w:SetPositionInViewport(c().position or { X = 24, Y = 110 }, true)
+        step = "show"
+        w:SetVisibility(3)   -- HitTestInvisible: visible, never takes the mouse
+        w:AddToViewport(c().z_order or 1200)
+        widget, text_block = w, text
     end)
-    if ok then
-        hooked, hooked_at = true, os.clock()
-        note("hooked " .. path)
-    else
-        broken = true
-        note("could not hook " .. path .. ": " .. tostring(err) .. "; the on-screen text stays off this session")
-    end
+    if not built then return fail(step, problem) end
+    local ok_world, wname = pcall(function() return pc:GetWorld():GetFName():ToString() end)
+    world_name = ok_world and wname or nil
+    note("on-screen text ready")
+    return true
 end
 
-local disabled_noted = false
-
--- Shows text in color ({ R, G, B } 0-1) from the next frame, or nothing with nil.
+-- Shows text in color ({ R, G, B } 0-1), or hides it with nil. Called every
+-- mod tick by its owner; only touches the widget on a change.
 function overlay.show(text, color)
     if c().enabled == false then
-        if text and not disabled_noted then
-            disabled_noted = true
-            note("the on-screen text is off (config.overlay.enabled = false)")
-        end
+        if text then note_once("off", "the on-screen text is off (config.overlay.enabled = false)") end
         return
     end
     if broken then return end
-    if not text or text == "" then
-        current = nil
-        return
+    text = text or ""
+    color = color or { R = 1, G = 1, B = 1 }
+    -- A new mission has a new world: build again.
+    if valid(widget) and world_name then
+        local pc = player_controller()
+        local ok, wname = pcall(function() return pc:GetWorld():GetFName():ToString() end)
+        if ok and wname ~= world_name then widget, text_block, shown = nil, nil, nil end
     end
-    if not current or current.text ~= text then note("showing \"" .. text .. "\"") end
-    current = { text = text, color = color or { R = 1, G = 1, B = 1 } }
-    install()
-    -- If the HUD never draws, say so once (the game may not run ReceiveDrawHUD).
-    if hooked and not drawn_once and not warned_not_drawn and os.clock() - hooked_at > 3 then
-        warned_not_drawn = true
-        note("the game's HUD hasn't run ReceiveDrawHUD yet; the text can't be drawn this way")
+    if not (valid(widget) and valid(text_block)) then
+        widget, text_block, shown = nil, nil, nil
+        if text == "" then return end
+        local pc = player_controller()
+        if not pc then
+            note_once("pc", "no player controller found yet")
+            return
+        end
+        if not build(pc) then return end
     end
+    if shown and shown.text == text and shown.r == color.R and shown.g == color.G and shown.b == color.B then return end
+    local ok, err = pcall(function()
+        if text ~= "" then
+            text_block:SetText(to_text(text))
+            text_block:SetColorAndOpacity({ SpecifiedColor = { R = color.R, G = color.G, B = color.B, A = 1 }, ColorUseRule = 0 })
+            widget:SetVisibility(3)
+        else
+            widget:SetVisibility(1)   -- Collapsed
+        end
+    end)
+    if not ok then return fail("set text", err) end
+    shown = { text = text, r = color.R, g = color.G, b = color.B }
+    if text ~= "" then note("showing \"" .. text .. "\"") end
 end
 
 return overlay

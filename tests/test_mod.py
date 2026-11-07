@@ -801,19 +801,36 @@ class ModTest(unittest.TestCase):
             clock = 100 os.clock = function() return clock end
             wheel = { IsValid = function() return true end, ActiveTeamType = 1 }
             objects.SwatCommandWidget = { wheel }
-            -- The HUD the on-screen text is drawn on (overlay.lua).
-            label = { text = nil }
-            hud = { IsValid = function() return true end,
-                    DrawText = function(self, text, color, x, y, font, scale, scale_position)
-                        if color.A == 1 then label.text, label.color, label.x = text, color, x end
-                    end }
-            function draw_frame()
-                label.text = nil
-                local hook = hooks["/Script/Engine.HUD:ReceiveDrawHUD"]
-                if hook then hook[1]({ get = function() return hud end }, { get = function() return 1920 end },
-                                     { get = function() return 1080 end }) end
-                return label.text
+            -- The on-screen text (overlay.lua): a widget made by RoNTAKNative 0.3, set up from Lua.
+            label = { text = nil, visible = false, built = 0 }
+            local classes = {}
+            for _, n in ipairs({ "WidgetTree", "TextBlock" }) do
+                classes["/Script/UMG." .. n] = { IsValid = function() return true end, kind = n }
             end
+            local find = StaticFindObject
+            StaticFindObject = function(path) return classes[path] or find(path) end
+            function RoNTAK_CreateWidget(class, owner)
+                assert(class == "/Script/CommonUI.CommonUserWidget", class)
+                label.built = label.built + 1
+                local w = { IsValid = function() return true end }
+                w.SetDesiredSizeInViewport = function() end
+                w.SetPositionInViewport = function(self, p) label.position = p end
+                w.AddToViewport = function(self, z) label.z = z end
+                w.SetVisibility = function(self, v) label.visible = v == 3 end
+                by_path["/Engine/Transient.Widget_" .. label.built] = w
+                return "/Engine/Transient.Widget_" .. label.built
+            end
+            function FText(s) return s end
+            function StaticConstructObject(class, outer)
+                local o = { IsValid = function() return true end, Font = {} }
+                if class.kind == "TextBlock" then
+                    o.SetFont = function() end
+                    o.SetText = function(self, t) label.text = t end
+                    o.SetColorAndOpacity = function(self, c) label.color = c.SpecifiedColor end
+                end
+                return o
+            end
+            function draw_frame() return label.visible and label.text or nil end
             function teams_now()
                 local out = {}
                 for _, a in ipairs(objects.SWATManager[1].SwatAI) do out[#out + 1] = a.DefaultTeam end
@@ -835,10 +852,10 @@ class ModTest(unittest.TestCase):
         g.keybinds["INS"]()
         self.assertEqual(self.tick()["selected_team"], "green")
         self.assertEqual(self.lua.eval("teams_now()"), "5,5,1,1,5,5")
-        # On screen, drawn on the HUD every frame: "WHEEL: GREEN", in green, around the top centre.
+        # On screen: "WHEEL: GREEN", in green, above the game's HUD.
         self.assertEqual(self.lua.eval("draw_frame()"), "WHEEL: GREEN")
         self.assertGreater(g.label.color.G, g.label.color.R)
-        self.assertTrue(800 < g.label.x < 960)
+        self.assertEqual(g.label.z, 1200)
         # Scrolling the wheel to BLUE: GREEN follows.
         self.lua.execute("wheel.ActiveTeamType = 2")
         self.tick()
@@ -853,6 +870,7 @@ class ModTest(unittest.TestCase):
         self.assertNotIn("selected_team", self.tick())
         self.assertEqual(self.lua.eval("teams_now()"), "1,2,5,5,5,5")
         self.assertIsNone(self.lua.eval("draw_frame()"))  # nothing on screen with the stock teams
+        self.assertEqual(g.label.built, 1)  # made once, reused
 
     def test_teams_are_real_while_operators_arrive(self):
         """GREEN selected, then YELLOW called in: everyone is on their real team until it is in (crash in game)."""

@@ -13,7 +13,7 @@ config.tick_ms = 250
 
 -- Folder used to exchange files with the ATAK companion app.
 -- Which RoNTAK this is (shown in the UE4SS log when the mod loads).
-config.build = "2026-11-07 wheel label 3 (HUD), spawn pause"
+config.build = "2026-11-07 wheel label 4 (native widget), spawn pause"
 
 -- nil = the "bridge" folder inside this mod (recommended).
 config.bridge_dir = nil
@@ -211,14 +211,14 @@ config.squads = {
 }
 
 -- RoNTAK's on-screen text (overlay.lua), e.g. which team the wheel commands.
--- Drawn on the game's HUD every frame (HUD:ReceiveDrawHUD).
+-- Needs RoNTAKNative 0.3+ (it creates the widget the game's way).
 config.overlay = {
     enabled = true,
-    x = 0.5, y = 0.12,     -- centre of the text, as fractions of the screen: top centre
-    scale = 1.6,           -- text size
-    char_width_px = 9,     -- average character width at scale 1 (for centring)
-    fonts = { "/Engine/EngineFonts/Roboto.Roboto" },
-    hud_hook = "/Script/Engine.HUD:ReceiveDrawHUD",
+    position = { X = 24, Y = 110 },  -- top-left corner of the text, in screen pixels
+    size = { X = 520, Y = 48 },
+    font_size = 22,
+    z_order = 1200,                  -- above the game's HUD
+    widget_class = "/Script/CommonUI.CommonUserWidget",
 }
 
 -- Team analysis (End key, teamprobe.lua): read-only.
