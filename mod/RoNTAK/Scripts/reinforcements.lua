@@ -202,7 +202,7 @@ end
 
 -- Setting up one operator, a step per tick (the gear a few items per tick),
 -- so the game never stalls on it and a log line names every step:
---   spawn -> items -> gear -> finish -> register.
+--   spawn -> items -> gear -> finish -> look -> register.
 local STEPS = {}
 
 function STEPS.spawn(job)
@@ -314,6 +314,35 @@ function STEPS.finish(job)
     check(valid(job.op) and valid(job.op.Controller), "operator gone")
     job.op.Controller:OnAIFinishSpawning()
     step_note(job, "AI started")
+    return "look"
+end
+
+-- Copies the donor's appearance (a spawned officer has no head otherwise):
+-- the customization choices and body / face meshes, then the game rebuilds
+-- the look from them.
+function STEPS.look(job)
+    check(valid(job.op) and valid(job.donor), "operator or look source gone")
+    local copied, failed = 0, {}
+    for _, field in ipairs(c().customization_fields or {}) do
+        if pcall(function() job.op.Customization[field] = job.donor.Customization[field] end) then
+            copied = copied + 1
+        else
+            failed[#failed + 1] = field
+        end
+    end
+    for _, field in ipairs(c().look_fields or {}) do
+        if pcall(function() job.op[field] = job.donor[field] end) then
+            copied = copied + 1
+        else
+            failed[#failed + 1] = field
+        end
+    end
+    for _, fn in ipairs(c().look_updates or {}) do
+        local ok, err = pcall(function() job.op[fn](job.op) end)
+        if not ok then failed[#failed + 1] = fn .. " (" .. tostring(err) .. ")" end
+    end
+    step_note(job, string.format("look copied (%d fields%s)", copied,
+        #failed > 0 and ("; failed: " .. table.concat(failed, ", ")) or ""))
     return "register"
 end
 

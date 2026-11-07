@@ -603,6 +603,8 @@ class ModTest(unittest.TestCase):
                 donor.InventoryComp.SpawnedGear.Primary = rifle
                 table.insert(donor.InventoryComp.SpawnedGear.Grenades, nade)
                 donor.GetEquippedWeapon = function() return rifle end
+                donor.Customization = {{ Character = "Char_" .. i, Shirt = "Shirt_" .. i }}
+                donor.Rep_FaceMesh = "Face_" .. i
             end
             local world = {{ IsValid = function() return true end, GetFName = function() return {{ ToString = function() return "RiverwoodHouse" end }} end }}
             world.SpawnActor = function(self, class, at, rot)
@@ -613,6 +615,8 @@ class ModTest(unittest.TestCase):
                     o.IsValid = function(self) return not self.destroyed end
                     o.K2_DestroyActor = function(self) self.destroyed = true destroyed[#destroyed + 1] = "officer" end
                     o.IsDeadOrUnconscious = function() return false end
+                    o.Customization = {{}}
+                    o.OnRep_Customization = function(self) self.look_rebuilt = true end
                     o.SpawnDefaultController = function(self)
                         self.Controller = obj("Controller_" .. spawned, {{ OnAIFinishSpawning = function() finished = finished + 1 end }})
                     end
@@ -663,6 +667,11 @@ class ModTest(unittest.TestCase):
             self.assertEqual(o.InventoryComp.SpawnedGear.Primary.GetFName().ToString(), items[0].GetFName().ToString())
             self.assertIsNotNone(o.InventoryComp.SpawnedGear.Grenades[1])
         self.assertEqual(self.lua.eval("#in_hand"), 2)
+        # The look (head and face) copied from the gear source and rebuilt.
+        for o in new:
+            self.assertTrue(o.look_rebuilt)
+            self.assertIn(o.Rep_FaceMesh, ("Face_1", "Face_2"))
+            self.assertEqual(o.Customization.Character, "Char_" + o.Rep_FaceMesh[-1])
         # Asking again while both are alive: nothing new.
         self.send("A", [{"id": 2, "team": "green", "action": "request_team", "target": {}, "options": {}}])
         state = self.tick()
@@ -741,7 +750,7 @@ class ModTest(unittest.TestCase):
         lines = [l for l in g.logged.values() if "Echo:" in l]
         steps = [l.split("Echo: ")[1].split(" (")[0].strip() for l in lines]
         self.assertEqual(steps, ["spawned", "copying RifleClass", "copying FlashClass", "geared up", "AI started",
-                                 "not in the squad list"])
+                                 "look copied", "not in the squad list"])
 
     def test_squad_list_only_touched_when_asked(self):
         # The game adding the officer itself when its AI starts: noticed, nothing appended.
