@@ -50,6 +50,20 @@ jobs:
       # UE4SS 3.0.1 (Feb 2024) doesn't compile with the runner's current MSVC
       # (14.44 rejects a lookup in its Unreal code), so add the compiler of
       # that time, MSVC 14.39 (VS 17.9), next to it and build with that.
+      # UE4SS fetches two of its libraries from their newest commit, which no
+      # longer fit its 2024 code (the text editor now needs a newer ImGui).
+      # Use the commits that were current when UE4SS 3.0.1 came out.
+      - name: Pin UE4SS's unversioned libraries
+        shell: bash
+        run: |
+          pin() {
+            git clone --quiet "https://github.com/$1.git" "native/pinned/$2"
+            git -C "native/pinned/$2" checkout --quiet "$3"
+            echo "$1 @ $(git -C "native/pinned/$2" log -1 --format='%h %cs')"
+          }
+          pin UE4SS-RE/ImGuiColorTextEdit imguitextedit af7821926251feca84e35f8fa83eee84dae90424
+          pin juliettef/IconFontCppHeaders iconfontcppheaders 8886c5657bac22b8fee34354871e3ade2a596433
+
       - name: Install MSVC 14.39
         shell: pwsh
         run: |
@@ -83,8 +97,11 @@ jobs:
         run: |
           $rustc = (rustup which --toolchain 1.76.0 rustc).Trim()
           Write-Host "rustc: $rustc"
+          $root = $PWD.Path -replace '\\', '/'
           cl 2>&1 | Select-Object -First 1
-          cmake -S native -B native/build -G Ninja -DCMAKE_BUILD_TYPE=Game__Shipping__Win64 "-DRust_COMPILER=$rustc"
+          cmake -S native -B native/build -G Ninja -DCMAKE_BUILD_TYPE=Game__Shipping__Win64 "-DRust_COMPILER=$rustc" `
+            "-DFETCHCONTENT_SOURCE_DIR_IMGUITEXTEDIT=$root/native/pinned/imguitextedit" `
+            "-DFETCHCONTENT_SOURCE_DIR_ICONFONTCPPHEADERS=$root/native/pinned/iconfontcppheaders"
           cmake --build native/build --target RoNTAKNative
 
       - name: Package the mod folder

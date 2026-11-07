@@ -7,3 +7,4 @@ dist/
 # Native mod build (native/README.md)
 native/RE-UE4SS/
 native/build/
+native/pinned/
