@@ -186,9 +186,35 @@ config.reinforcements = {
 config.team_probe = {
     team_enum = "ETeamType",
     team_enum_path = "/Script/ReadyOrNot.ETeamType",
-    -- Team functions of classes whose name has one of these are watched.
-    watch_classes = { "SWATManager", "PlayerController", "Command", "Squad", "Swat", "Team", "HUD", "Order" },
     max_live_instances = 12,
+    -- Functions watched while the probe runs; team = which parameter is the
+    -- team (from the order signatures above), nil = no team parameter.
+    watch = {
+        { path = "/Script/ReadyOrNot.SWATManager:GiveStackUpCommand", team = 2 },
+        { path = "/Script/ReadyOrNot.SWATManager:GiveBreachAndClearCommand", team = 3 },
+        { path = "/Script/ReadyOrNot.SWATManager:GiveCheckForContactsCommand", team = 2 },
+        { path = "/Script/ReadyOrNot.SWATManager:GiveWedgeDoorCommand", team = 2 },
+        { path = "/Script/ReadyOrNot.SWATManager:GiveMoveCommand", team = 1 },
+        { path = "/Script/ReadyOrNot.SWATManager:GiveFallInCommand", team = 1 },
+        { path = "/Script/ReadyOrNot.SWATManager:GiveHoldCommand", team = 1 },
+        { path = "/Script/ReadyOrNot.SWATManager:GiveSearchAndSecureCommand", team = 1 },
+        { path = "/Script/ReadyOrNot.SWATManager:GivePickLockCommand", team = 2 },
+        { path = "/Script/ReadyOrNot.SWATManager:GiveCloseDoorCommand", team = 2 },
+        { path = "/Script/ReadyOrNot.SWATManager:GiveRemoveWedgeCommand", team = 2 },
+        { path = "/Script/ReadyOrNot.SWATManager:GiveCheckForTrapsCommand", team = 2 },
+        { path = "/Script/ReadyOrNot.SWATManager:GiveScanDoorCommand", team = 2 },
+        { path = "/Script/ReadyOrNot.SWATManager:GiveCoverAreaCommand", team = 1 },
+        { path = "/Script/ReadyOrNot.SWATManager:GiveRestrainCommand", team = 2 },
+        { path = "/Script/ReadyOrNot.SWATManager:GiveReportTargetCommand", team = 2 },
+        { path = "/Script/ReadyOrNot.SWATManager:RemoveHoldCommand" },
+        { path = "/Script/ReadyOrNot.SwatCommandWidget:DoCommand" },
+        { path = "/Script/ReadyOrNot.SwatCommandWidget:OnCommandIssued" },
+    },
+    -- Team state read at every watched call.
+    state = {
+        { class = "SwatCommandWidget", props = { "ActiveTeamType", "PreviousActiveTeamType", "OverrideActiveTeamType", "ExecutionTeamType" } },
+        { class = "SWATManager", props = { "ActiveCommandTeam" } },
+    },
 }
 
 -- Helicopter, drone and CCTV cameras, drawn on the map as view cones

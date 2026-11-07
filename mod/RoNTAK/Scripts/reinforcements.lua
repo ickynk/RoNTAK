@@ -102,16 +102,39 @@ local function on_nav(nav, world_ctx, x, y, z)
     return nil
 end
 
+-- Without the navigation check: a spot is fine if nothing blocks the way
+-- from the centre (a standing officer's centre) and there is floor under it.
+-- Returns the floor point, or nil and why ("blocked", "no_floor").
+local function traced_spot(system, pawn, centre, x, y)
+    if not valid(system) then return nil, "no_floor" end
+    local function trace(from, to)
+        local hit = {}
+        local ok, blocked = pcall(function()
+            return system:LineTraceSingle(pawn, from, to, 0, false, {}, 0, hit, true,
+                { R = 0, G = 0, B = 0, A = 0 }, { R = 0, G = 0, B = 0, A = 0 }, 0.0)
+        end)
+        if not ok or not blocked then return nil end
+        local got, z = pcall(function() return hit.Location.Z end)
+        return got and type(z) == "number" and z or false
+    end
+    local at = { X = x, Y = y, Z = centre.z }
+    if trace({ X = centre.x, Y = centre.y, Z = centre.z }, at) ~= nil then return nil, "blocked" end
+    local floor = trace(at, { X = x, Y = y, Z = centre.z - 250 })
+    if not floor then return nil, "no_floor" end
+    return { x = x, y = y, z = floor }
+end
+
 -- A free spot to spawn at: { x, y, z, centre } where centre means z is a
 -- standing officer's centre (an entry position), else the floor. Tries the
 -- entry positions themselves, then around them, then around the player.
 -- Returns nil and the reasons spots were turned down.
 local function spawn_spot(pawn, world_ctx, half)
     local nav = StaticFindObject and StaticFindObject("/Script/NavigationSystem.Default__NavigationSystemV1")
+    local system = StaticFindObject and StaticFindObject("/Script/Engine.Default__KismetSystemLibrary")
     local here = game.location(pawn)
     local taken = {}
     for _, o in ipairs(game.officer_actors()) do taken[#taken + 1] = o.pos end
-    local rejected = { occupied = 0, off_nav = 0, other_floor = 0 }
+    local rejected = { occupied = 0, off_nav = 0, other_floor = 0, blocked = 0, no_floor = 0 }
     local function free(p)
         -- Officers stood at the entry positions side by side, so those need less room.
         local clearance = p.centre and (c().entry_clearance_cm or 50) or (c().clearance_cm or 90)
@@ -133,7 +156,11 @@ local function spawn_spot(pawn, world_ctx, half)
                 spot = on_nav(nav, world_ctx, centre.x + off[1], centre.y + off[2], centre.z)
                 if not spot then
                     rejected.off_nav = rejected.off_nav + 1
-                elseif math.abs(spot.z + half - centre.z) > 150 then
+                    local why
+                    spot, why = traced_spot(system, pawn, centre, centre.x + off[1], centre.y + off[2])
+                    if not spot then rejected[why] = rejected[why] + 1 end
+                end
+                if spot and math.abs(spot.z + half - centre.z) > 150 then
                     rejected.other_floor = rejected.other_floor + 1
                     spot = nil
                 end
@@ -273,9 +300,9 @@ function STEPS.spawn(job)
     pcall(function() half = donor.CapsuleComponent:GetScaledCapsuleHalfHeight() end)
     local spot, rejected = spawn_spot(pawn, donor, half)
     if not spot then
-        error(string.format("no free spot at the entry point or near you (%s; entry point %s; spots taken %d, off the nav mesh %d, other floor %d)",
+        error(string.format("no free spot at the entry point or near you (%s; entry point %s; spots taken %d, off the nav mesh %d, other floor %d, wall in the way %d, no floor %d)",
             entry.spots and "entry known" or "entry not recorded", entry.spots and #entry.spots .. " positions" or "-",
-            rejected.occupied, rejected.off_nav, rejected.other_floor), 0)
+            rejected.occupied, rejected.off_nav, rejected.other_floor, rejected.blocked, rejected.no_floor), 0)
     end
     -- An entry position is a standing officer's centre; a nav-mesh point is the floor.
     local z = spot.centre and spot.z + 10 or spot.z + half + 10

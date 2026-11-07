@@ -12,7 +12,8 @@
 --              GOLD, and different kinds of order.
 --   2nd press: stops watching and writes the report.
 --
--- While watching, every call to a team function is logged with its team,
+-- While watching, every call to a watched function (config.team_probe.watch)
+-- is logged with its team and the command wheel's team state,
 -- and a moment later which officers' current job changed (who the order
 -- actually reached). Hooks only read the team value and nothing else (struct
 -- reads inside hooks crashed UE4SS 3.0.1). Hooks stay registered after the
@@ -30,7 +31,6 @@ local valid, object_name = game.valid, game.object_name
 
 local REPORT = "team_report.txt"
 local AFTER_SECONDS = 1.5      -- how long after an order the officers' jobs are compared
-local MAX_HOOKS = 80
 local MAX_CALLS = 400
 
 local survey = nil             -- { enum = {...}, functions = {...}, properties = {...} }
@@ -77,13 +77,6 @@ end
 local function owner_of(fn_full_name)
     -- "Function /Script/ReadyOrNot.SWATManager:GiveMoveCommand" -> "SWATManager"
     return fn_full_name:match("%.([%w_]+):") or "?"
-end
-
-local function wanted_owner(owner)
-    for _, word in ipairs(c().watch_classes or {}) do
-        if owner:lower():find(word:lower(), 1, true) then return true end
-    end
-    return false
 end
 
 -- The ETeamType values: { "0 = NONE", ... }.
@@ -174,27 +167,48 @@ local function call_sign(name)
     return o and o.name and (o.name .. " ") or ""
 end
 
+-- The command wheel's and the squad manager's team state, read when a
+-- watched function is called.
+local function wheel_state()
+    local parts = {}
+    for _, w in ipairs(c().state or {}) do
+        local obj = FindFirstOf(w.class)
+        if valid(obj) then
+            for _, prop in ipairs(w.props) do
+                local v = "?"
+                pcall(function() v = tostring(obj[prop]) end)
+                parts[#parts + 1] = w.class .. "." .. prop .. "=" .. v
+            end
+        end
+    end
+    return table.concat(parts, " ")
+end
+
+-- Hooks the functions in config.team_probe.watch. UE4SS 3.0.1 can't list a
+-- function's parameters from Lua, so which one is the team comes from the
+-- game's headers (config.lua's list of order signatures).
 local function install_hooks()
-    local n = 0
-    for _, f in ipairs(survey.functions) do
-        if n >= MAX_HOOKS then break end
-        if f.native and f.team_index and wanted_owner(f.owner) and not hooked[f.path] then
-            local fn = f
-            local ok, err = pcall(RegisterHook, fn.path, function(self, ...)
+    for _, w in ipairs(c().watch or {}) do
+        if not hooked[w.path] then
+            local spec = w
+            local short = spec.path:match("%.([%w_]+:[%w_]+)$") or spec.path
+            local ok, err = pcall(RegisterHook, spec.path, function(self, ...)
                 if not watching or #calls >= MAX_CALLS then return end
-                local team = "?"
-                local param = select(fn.team_index, ...)
-                if param then pcall(function() team = tostring(param:get()) end) end
-                local entry = { time = os.clock() - (started_at or 0), fn = fn.owner .. ":" .. fn.name,
-                                param = fn.team_param, team = team, before = officer_snapshot() }
+                local team = "-"
+                if spec.team then
+                    team = "?"
+                    local param = select(spec.team, ...)
+                    if param then pcall(function() team = tostring(param:get()) end) end
+                end
+                local entry = { time = os.clock() - (started_at or 0), fn = short, param = spec.team and "TeamType" or nil,
+                                team = team, state = wheel_state(), before = officer_snapshot() }
                 calls[#calls + 1] = entry
                 pending[#pending + 1] = { entry = entry, at = os.clock() + AFTER_SECONDS }
             end)
             if ok then
-                hooked[fn.path] = true
-                n = n + 1
+                hooked[spec.path] = true
             else
-                note("could not watch " .. fn.path .. ": " .. tostring(err))
+                note("could not watch " .. spec.path .. ": " .. tostring(err))
             end
         end
     end
@@ -250,7 +264,9 @@ local function write_report()
     lines[#lines + 1] = ""
     lines[#lines + 1] = "== Calls while watching (team, then officers whose job changed within " .. AFTER_SECONDS .. " s) =="
     for _, call in ipairs(calls) do
-        lines[#lines + 1] = string.format("%7.1f s  %s  %s=%s", call.time, call.fn, tostring(call.param), call.team)
+        lines[#lines + 1] = string.format("%7.1f s  %s%s", call.time, call.fn,
+            call.param and ("  " .. call.param .. "=" .. call.team) or "")
+        if call.state and call.state ~= "" then lines[#lines + 1] = "            state: " .. call.state end
         local changed = 0
         for name, after in pairs(call.after or {}) do
             local before = call.before[name]
@@ -286,7 +302,7 @@ local function write_report()
     for _, f in ipairs(survey.functions) do
         lines[#lines + 1] = string.format("%s%s%s", f.path, hooked[f.path] and "   [watched]" or "",
             f.team_index and (string.format("   team = param %d (%s)", f.team_index, f.team_param)) or "")
-        lines[#lines + 1] = "      (" .. table.concat(f.params, ", ") .. ")"
+        if #f.params > 0 then lines[#lines + 1] = "      (" .. table.concat(f.params, ", ") .. ")" end
     end
 
     lines[#lines + 1] = ""

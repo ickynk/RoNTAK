@@ -765,6 +765,35 @@ class ModTest(unittest.TestCase):
         self.assertEqual(next(r for r in state["results"] if r["id"] == 2)["status"], "ok")
         self.assertEqual(self.spawned_positions(), [(100, 200), (150, 250)])
 
+    def test_call_in_without_navigation_uses_traces(self):
+        """On Datacenter every nav check failed: spots next to the entry point are checked with traces."""
+        self.add_reinforcement_world()
+        self.lua.execute(r"""
+            traces = 0
+            local system = { IsValid = function() return true end }
+            system.LineTraceSingle = function(self, pawn, from, to, channel, complex, ignore, draw, hit)
+                traces = traces + 1
+                if to.Z < from.Z - 100 then  -- looking down: the floor 100 below an officer's centre
+                    hit.Location = { X = to.X, Y = to.Y, Z = from.Z - 100 }
+                    return true
+                end
+                return false  -- nothing in the way sideways
+            end
+            StaticFindObject = function(path)
+                if path:find("KismetSystemLibrary") then return system end
+                return by_path[path]  -- no navigation system
+            end
+        """)
+        self.tick()  # entry point recorded; the squad still stands on it
+        self.run_orders({"id": 1, "team": "green", "action": "request_team", "target": {}, "options": {}})
+        for _ in range(5):
+            state = self.tick()
+        self.assertEqual(next(r for r in state["results"] if r["id"] == 1)["status"], "ok")
+        self.assertGreater(self.lua.globals().traces, 0)
+        # Next to the entry positions (100,200 / 150,250), 120 cm away, not on top of the squad.
+        for x, y in self.spawned_positions():
+            self.assertTrue(any(abs(x - ex) + abs(y - ey) in (120, 240) for ex, ey in ((100, 200), (150, 250))), (x, y))
+
     def test_call_in_needs_the_native_mod(self):
         """Without RoNTAKNative 0.2 nothing is spawned (the Lua-only way corrupted game memory)."""
         self.add_reinforcement_world(native=False)
@@ -892,7 +921,7 @@ class ModTest(unittest.TestCase):
         self.tick()
         g.keybinds["END"]()
         report = (self.bridge / "team_report.txt").read_text()
-        self.assertIn("SWATManager:GiveMoveCommand  Team=2", report)
+        self.assertIn("SWATManager:GiveMoveCommand  TeamType=2", report)
         self.assertIn("none -> MoveActivity#MoveTo_1", report)
         self.assertIn("2 = BLUE", report)
         self.assertIn("ReadyOrNotPlayerController PC_0: SelectedTeam=2", report)
