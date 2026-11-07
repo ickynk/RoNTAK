@@ -255,6 +255,9 @@ class MockGame:
         result = {"id": cmd["id"], "team": cmd["team"], "action": cmd["action"]}
         if cmd["action"] == "request_team":
             return self.request_team(cmd, result)
+        if cmd["action"] == "select_team":
+            self.selected_team = None if cmd["team"] == "stock" else cmd["team"]
+            return dict(result, status="ok")
         if cmd["action"] == "go":
             held, self.held = self.held, {}
             for entry in held.values():
@@ -401,6 +404,7 @@ class MockGame:
             "cameras": cameras,
             "held": [{"id": e["cmd"]["id"], "team": t, "action": e["cmd"]["action"]} for t, e in self.held.items()],
             "configured_actions": sorted(set(ALL_ACTIONS) - UNCONFIGURED),
+            "selected_team": getattr(self, "selected_team", None),
         }
         tmp = bridge / "state.json.tmp"
         tmp.write_text(json.dumps(state), encoding="utf-8")

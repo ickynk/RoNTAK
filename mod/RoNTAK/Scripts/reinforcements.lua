@@ -428,6 +428,12 @@ function STEPS.register(job)
     return "done"
 end
 
+-- The called-in team an actor (by name) belongs to, or nil.
+function reinforcements.team_of(actor_name)
+    local m = members[actor_name]
+    return m and m.team or nil
+end
+
 -- Starts calling in a team. Returns a result for RoNTAK's order list.
 function reinforcements.request(cmd)
     local team = cmd.team

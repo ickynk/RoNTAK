@@ -1,6 +1,7 @@
 -- Turns ATAK orders into game function calls, as described by config.actions.
 
 local config = require("config")
+local squads = require("squads")
 local game = require("game")
 local log = require("log")
 
@@ -96,7 +97,7 @@ local function build_args(spec, cmd, door)
     for i, arg in ipairs(spec.args or {}) do
         local value = arg
         if arg == "$team" then
-            value = config.team_args[cmd.team]
+            value = orders.team_value(cmd.team)
             if value == nil then error("unknown team '" .. tostring(cmd.team) .. "'") end
         elseif arg == "$door" then
             if not door then error("this order needs a door") end
@@ -148,6 +149,19 @@ local function build_args(spec, cmd, door)
     return args, #spec.args, table.concat(sent, ", "), classes
 end
 
+-- The game's team value for an order: RED 1, BLUE 2, GOLD 5; a called-in
+-- team uses the team it joined (squads.lua sends the order to it alone).
+function orders.team_value(team)
+    local value = config.team_args[team]
+    if value ~= nil then return value end
+    local def = ((config.reinforcements or {}).teams or {})[team]
+    return def and config.team_args[def.joins] or nil
+end
+
+local function called_in(team)
+    return ((config.reinforcements or {}).teams or {})[team] ~= nil
+end
+
 -- Runs one order. Returns a result table for state.json.
 function orders.execute(cmd)
     local result = { id = cmd.id, team = cmd.team, action = cmd.action }
@@ -176,6 +190,9 @@ function orders.execute(cmd)
         local args, count, classes
         args, count, sent, classes = build_args(spec, cmd, door)
         class_args, class_report = (next(classes) and classes or nil), nil
+        -- Exactly this team gets it (the called-in teams share the game's RED / BLUE).
+        local value = orders.team_value(cmd.team)
+        if value then squads.route(called_in(cmd.team) and cmd.team or nil, value) end
         local call_ok, call_err = pcall(fn, target, table.unpack(args, 1, count))
         class_args = nil
         if not call_ok then error(call_err, 0) end

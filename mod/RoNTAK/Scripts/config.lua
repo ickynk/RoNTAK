@@ -30,6 +30,7 @@ config.keys = {
                              -- Not F11: that is the game's fullscreen / borderless toggle.
     request_green  = "PAGE_UP",   -- call in GREEN team (config.reinforcements)
     request_yellow = "PAGE_DOWN", -- call in YELLOW team
+    select_team    = "INSERT", -- command wheel orders go to: stock teams -> GREEN -> YELLOW (squads.lua)
     team_probe     = "END",  -- team analysis for GREEN / YELLOW orders: press, give orders, press again
                              -- -> bridge/team_report.txt (teamprobe.lua)
 }
@@ -180,6 +181,18 @@ config.reinforcements = {
     -- The parts of InventoryComp.SpawnedGear that point at items.
     gear_slots = { "Primary", "Secondary", "Armor", "Helmet", "HelmetMount", "Facewear", "RandomGear", "LongTactical" },
     gear_lists = { "Grenades", "TacticalDevices", "Miscelaneous" },  -- (sic: the game's spelling)
+}
+
+-- Orders for the called-in teams on their own (squads.lua).
+config.squads = {
+    enabled = true,
+    -- How long the officers' team settings stay arranged for an order (ms).
+    restore_ms = 500,
+    -- With no team selected, GOLD orders also reach GREEN and YELLOW.
+    gold_reaches_called_in = true,
+    wheel_hook = "/Script/ReadyOrNot.SwatCommandWidget:OnCommandIssued",
+    wheel_team_properties = { "ExecutionTeamType", "ActiveTeamType" },
+    log_routes = true,
 }
 
 -- Team analysis (End key, teamprobe.lua): read-only.

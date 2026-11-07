@@ -91,9 +91,22 @@ and roster in their colour. Calling a team
 again only replaces operators who are dead or missing. If a call-in fails, hover over its button to see why (the
 UE4SS console also says `reinforcements: …`).
 
-They join the squad's officer list, so they take in-game orders. For now the game itself only has RED, BLUE and
-GOLD orders, so GREEN also follows **BLUE**'s orders and YELLOW follows **RED**'s (and GOLD reaches everyone). Ordering GREEN and YELLOW on their own is the next step. Teams,
-names, gear and keys are set in `config.lua` (`config.reinforcements`, `request_green`, `request_yellow`).
+They join the squad's officer list and take orders **as their own teams**:
+
+- **On the ATAK screen:** the **GREEN** and **YELLOW** team buttons appear next to RED / BLUE / GOLD while the
+  team is on scene. Orders sent with them go to that team only.
+- **With the in-game command wheel:** press **Insert** to choose which officers the wheel commands:
+  stock teams (RED / BLUE / GOLD, as in the plain game) → **GREEN** → **YELLOW** → stock teams. With GREEN
+  selected, every wheel order goes to Echo and Foxtrot only, whatever team the wheel shows. The ATAK screen's
+  **Command wheel** buttons do the same, and show what is selected.
+- With the stock teams selected, RED and BLUE orders reach only the original squad, and **GOLD reaches everyone**,
+  the called-in teams included (`gold_reaches_called_in` in `config.squads`).
+
+How it works: the game itself only knows RED, BLUE and GOLD. For the half second an order goes out, RoNTAK
+arranges the officers' team settings so exactly the chosen officers receive it, then puts them back
+(`squads.lua`). Orders queued in game to start later (the game's own "hold for execute") are sent when you start
+them, with whatever team is selected then. Teams, names, gear and keys are set in `config.lua`
+(`config.reinforcements`, `config.squads`, `request_green`, `request_yellow`, `select_team`).
 
 Single player only.
 

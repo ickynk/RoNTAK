@@ -45,10 +45,10 @@ STALE_SECONDS = 3
 MAX_KEPT_COMMANDS = 50
 MAX_UPLOAD_BYTES = 30 * 1024 * 1024
 
-TEAMS = {"red", "blue", "gold"}
-# Teams called in during a mission (the mod's config.reinforcements). For now
-# they can only be requested; orders still go to RED / BLUE / GOLD.
+# Teams called in during a mission (the mod's config.reinforcements): they
+# are requested with request_team, then take orders like the stock teams.
 CALL_IN_TEAMS = {"green", "yellow"}
+TEAMS = {"red", "blue", "gold"} | CALL_IN_TEAMS
 ACTIONS = {
     "stack_up", "open_clear", "breach_clear", "move_clear", "scan_door", "wedge_door",
     "move_to", "fall_in", "hold", "search_secure",
@@ -56,6 +56,7 @@ ACTIONS = {
     "cover_area", "chemlight", "deploy_grenade", "restrain", "report",
     "go", "clear_held",  # start / clear the orders held for GO
     "request_team",      # call in an extra team (team: green / yellow)
+    "select_team",       # which officers the in-game command wheel commands (team: stock / green / yellow)
 }
 OPTION_KEYS = ("breach", "grenade", "side", "scan")
 IMAGE_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp", ".svg": "image/svg+xml"}
@@ -121,8 +122,12 @@ def validate_order(body: dict) -> dict:
         if team not in CALL_IN_TEAMS:
             raise ValueError("team must be green or yellow")
         return {"team": team, "action": action, "target": {}, "options": {}}
+    if action == "select_team":
+        if team not in CALL_IN_TEAMS | {"stock"}:
+            raise ValueError("team must be stock, green or yellow")
+        return {"team": team, "action": action, "target": {}, "options": {}}
     if team not in TEAMS:
-        raise ValueError("team must be red, blue or gold")
+        raise ValueError("team must be red, blue, gold, green or yellow")
     order = {"team": team, "action": action}
 
     target = body.get("target") or {}

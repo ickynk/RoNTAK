@@ -16,6 +16,7 @@ reloads it.
 | **F9** | Start/stop logging calls to the functions in `config.sniff` | `bridge\sniff.txt` and the console |
 | **F10** | Sends `config.test_order` (GOLD Fall In) through the normal order path | console |
 | **Home** | Top-down floor plan of the floor you stand on, then its walls traced (see [03-maps.md](03-maps.md)) | `bridge\capture_<level>_z<height>.png` and `.walls.json`, `bridge\captures.json` |
+| **Insert** | Which officers the command wheel commands: stock teams → GREEN → YELLOW (see [04-orders.md](04-orders.md)) | – |
 | **End** | Team analysis for GREEN / YELLOW orders: press, give orders with the command wheel, press again (read-only) | `bridge\team_report.txt` |
 
 The UE4SS **header dump** is the most useful tool. In a mission, open the UE4SS console window, go to the

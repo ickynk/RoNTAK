@@ -1958,8 +1958,8 @@
     const s = app.state || {};
     const live = Boolean(s.connected) && viewingLiveLevel();
     const results = s.results || [];
-    const key = JSON.stringify([live, (s.officers || []).map((o) => [o.team, o.status]),
-      results.filter((r) => r.action === "request_team").slice(0, 4)]);
+    const key = JSON.stringify([live, (s.officers || []).map((o) => [o.team, o.status]), s.selected_team || "stock",
+      app.team, results.filter((r) => r.action === "request_team").slice(0, 4)]);
     if (box.dataset.key === key) return;
     box.dataset.key = key;
     box.innerHTML = "";
@@ -1974,11 +1974,34 @@
         : alive >= CALL_IN_SIZE ? `${TEAM_LABEL[team]} on scene`
         : `Call in ${TEAM_LABEL[team]} · ${names}`;
       b.title = last && last.status === "error" ? `Last call-in failed: ${last.message}`
-        : `Spawn ${names} next to you. For now they also take ${TEAM_LABEL[joins]}'s orders.`;
+        : `Spawn ${names} at the entry point. Order them with the ${TEAM_LABEL[team]} team button, or select them for the in-game command wheel (Insert key).`;
       b.disabled = !live || coming || alive >= CALL_IN_SIZE;
       b.onclick = () => api("POST", "/api/command", { team, action: "request_team" })
         .catch((e) => alert("Could not call in the team: " + e.message));
       box.appendChild(b);
+    }
+    // Team buttons for the called-in teams, while they are on scene.
+    let anyOnScene = false;
+    for (const [team] of CALL_IN_TEAMS) {
+      const alive = (s.officers || []).some((o) => o.team === team && o.status !== "dead");
+      anyOnScene = anyOnScene || alive;
+      const btn = document.querySelector(`.team[data-team="${team}"]`);
+      if (btn) btn.hidden = !alive;
+      if (!alive && app.team === team) selectTeam("red");
+    }
+    // Which officers the in-game command wheel commands.
+    const wheel = $("wheel-team");
+    wheel.hidden = !live || !anyOnScene;
+    wheel.innerHTML = "<span>Command wheel:</span>";
+    const selected = s.selected_team || "stock";
+    for (const [team, label] of [["stock", "RED / BLUE / GOLD"], ...CALL_IN_TEAMS.map(([t]) => [t, TEAM_LABEL[t]])]) {
+      const b = document.createElement("button");
+      b.textContent = label;
+      b.className = selected === team ? "active" : "";
+      if (team !== "stock") b.style.borderColor = TEAM_COLORS[team];
+      b.onclick = () => api("POST", "/api/command", { team, action: "select_team" })
+        .catch((e) => alert("Could not select the team: " + e.message));
+      wheel.appendChild(b);
     }
   }
   $("clear-held").onclick = () => sendControl("clear_held");
@@ -2004,6 +2027,11 @@
     renderCalibration();
     redraw();
   };
+
+  function selectTeam(team) {
+    app.team = team;
+    document.querySelectorAll(".team").forEach((b) => b.classList.toggle("active", b.dataset.team === team));
+  }
 
   $("teams").addEventListener("click", (e) => {
     const team = e.target.dataset && e.target.dataset.team;
