@@ -2,7 +2,7 @@
 //
 // Gives RoNTAK's Lua mod the few things Lua can't do safely on UE4SS 3.0.1:
 //
-//   RoNTAK_NativeVersion() -> "0.4.2"
+//   RoNTAK_NativeVersion() -> "0.5.0"
 //
 //   RoNTAK_BeginSpawn(context, class, x, y, z, yaw, collision, owner)
 //       -> actor path | nil, error
@@ -29,6 +29,10 @@
 //   RoNTAK_CreateWidget(class, owner) -> widget path | nil, error
 //     UWidgetBlueprintLibrary::Create(owner, class, owner): a widget made the
 //     game's way (a widget constructed from Lua never showed).
+//
+//   RoNTAK_SquadInstall / RoNTAK_SquadCreate / RoNTAK_SquadSet / RoNTAK_SquadStatus
+//     The called-in teams' own squad manager and the hooks that route wheel
+//     orders and their AI to it (see "squad routing" below).
 //
 //   RoNTAK_DumpCode(out_dir, seed_filters, classes, max_depth, max_mb,
 //                   extra_rvas, xref_targets, field_disps)
@@ -68,11 +72,13 @@
 #include <filesystem>
 #include <fstream>
 #include <map>
+#include <memory>
 #include <set>
 #include <sstream>
 #include <unordered_set>
 
 #include <Zydis/Zydis.h>
+#include <polyhook2/Detour/x64Detour.hpp>
 
 #define NOMINMAX
 #include <Windows.h>
@@ -82,7 +88,7 @@ using namespace RC::Unreal;
 
 namespace
 {
-    constexpr const char* NATIVE_VERSION = "0.4.2";
+    constexpr const char* NATIVE_VERSION = "0.5.0";
     constexpr const RC::CharType* LUA_MOD_NAME = STR("RoNTAK");
 
     // ---- Lua arguments ------------------------------------------------------
@@ -906,6 +912,208 @@ namespace
         return 1;
     }
 
+    // ---- squad routing (the called-in teams' own squad manager) ------------
+    //
+    // The command wheel's DoCommand asks a resolver for the world's squad
+    // manager (USWATManager) and gives it the order; the officers' team
+    // activities ask the same resolver while they run. RoNTAK gives the
+    // called-in teams a second manager and hooks:
+    //   resolver   a wheel order marked for the call-ins, or a call-in officer
+    //              (or anything inside one: its controller, activities,
+    //              components) asking, gets the second manager;
+    //   DoCommand  marks the order: group 0 the main manager (plain game),
+    //              1 the call-ins' manager, 2 both (the full element).
+    // The hooks are installed only if the game code at these addresses is
+    // exactly what was analysed (native/RE_NOTES.md); after a game update
+    // they stay off.
+
+    namespace route
+    {
+        constexpr uint32_t RESOLVER_RVA = 0x4dd1090;
+        constexpr uint32_t DOCOMMAND_RVA = 0x4ca7e10;
+        constexpr uint32_t MANAGER_INITIALIZE_SLOT = 88;
+        const uint8_t RESOLVER_BYTES[] = {0x48, 0x89, 0x5c, 0x24, 0x08, 0x57, 0x48, 0x83, 0xec, 0x20, 0x48, 0x8b, 0x01, 0xff, 0x90, 0x88, 0x01, 0x00, 0x00};
+        const uint8_t DOCOMMAND_BYTES[] = {0x48, 0x8b, 0xc4, 0x48, 0x89, 0x58, 0x18, 0x44, 0x88, 0x48, 0x20, 0x48, 0x89, 0x50, 0x10, 0x48, 0x89, 0x48, 0x08};
+
+        uint64_t resolver_trampoline = 0;
+        uint64_t docommand_trampoline = 0;
+        std::unique_ptr<PLH::x64Detour> resolver_detour;
+        std::unique_ptr<PLH::x64Detour> docommand_detour;
+        bool installed = false;
+
+        UObject* element_manager = nullptr;      // the call-ins' manager
+        UObject* command_manager = nullptr;      // set while a wheel order is routed
+        int group = 0;                           // 0 main, 1 call-ins, 2 both
+        bool in_command = false;
+        std::unordered_set<const void*> members; // call-in actors and their controllers (compared, never used)
+        uint64_t redirects = 0, commands = 0;
+
+        using ResolverFn = UObject* (*)(UObject*);
+        using DoCommandFn = uint64_t (*)(void*, void*, uint64_t, uint64_t, void*);
+
+        UObject* main_manager = nullptr;         // the world's own manager when routing was set
+
+        UObject* resolver_hook(UObject* context)
+        {
+            auto original = reinterpret_cast<ResolverFn>(resolver_trampoline);
+            if (!element_manager) return original(context);
+            // Only in the world the call-ins' manager was made for: after a
+            // map change the old pointers are stale and must never be used.
+            UObject* main = original(context);
+            if (main != main_manager) return main;
+            if (command_manager)
+            {
+                ++redirects;
+                return command_manager;
+            }
+            if (context && !members.empty())
+            {
+                UObject* o = context;
+                for (int i = 0; i < 6 && o; ++i)
+                {
+                    if (members.count(o))
+                    {
+                        ++redirects;
+                        return element_manager;
+                    }
+                    o = o->GetOuterPrivate();
+                }
+            }
+            return main;
+        }
+
+        uint64_t docommand_hook(void* widget, void* command, uint64_t a3, uint64_t a4, void* a5)
+        {
+            auto original = reinterpret_cast<DoCommandFn>(docommand_trampoline);
+            if (!element_manager || group == 0 || in_command)
+            {
+                return original(widget, command, a3, a4, a5);
+            }
+            in_command = true;
+            ++commands;
+            uint64_t result = 0;
+            if (group == 2)
+            {
+                // DoCommand adjusts the command's location in place: give the
+                // second run the same command as the first.
+                alignas(16) uint8_t saved[0x200];
+                if (a5) std::memcpy(saved, a5, sizeof(saved));
+                result = original(widget, command, a3, a4, a5);
+                if (a5) std::memcpy(a5, saved, sizeof(saved));
+            }
+            command_manager = element_manager;
+            result = original(widget, command, a3, a4, a5);
+            command_manager = nullptr;
+            in_command = false;
+            return result;
+        }
+
+        auto code_matches(uint8_t* base, uint32_t rva, const uint8_t* bytes, size_t n) -> bool
+        {
+            return std::memcmp(base + rva, bytes, n) == 0;
+        }
+    } // namespace route
+
+    // RoNTAK_SquadInstall() -> "installed" | nil, why
+    auto squad_install(const LuaMadeSimple::Lua& lua) -> int
+    {
+        if (route::installed)
+        {
+            lua.set_string("installed");
+            return 1;
+        }
+        auto* base = reinterpret_cast<uint8_t*>(GetModuleHandleW(nullptr));
+        if (!route::code_matches(base, route::RESOLVER_RVA, route::RESOLVER_BYTES, sizeof(route::RESOLVER_BYTES)) ||
+            !route::code_matches(base, route::DOCOMMAND_RVA, route::DOCOMMAND_BYTES, sizeof(route::DOCOMMAND_BYTES)))
+        {
+            return fail(lua, "the game's code differs from the analysed build (game updated?); squad routing stays off");
+        }
+        route::resolver_detour = std::make_unique<PLH::x64Detour>(reinterpret_cast<uint64_t>(base + route::RESOLVER_RVA),
+                                                                  reinterpret_cast<uint64_t>(&route::resolver_hook),
+                                                                  &route::resolver_trampoline);
+        if (!route::resolver_detour->hook()) return fail(lua, "could not hook the squad manager resolver");
+        route::docommand_detour = std::make_unique<PLH::x64Detour>(reinterpret_cast<uint64_t>(base + route::DOCOMMAND_RVA),
+                                                                   reinterpret_cast<uint64_t>(&route::docommand_hook),
+                                                                   &route::docommand_trampoline);
+        if (!route::docommand_detour->hook())
+        {
+            route::resolver_detour->unHook();
+            return fail(lua, "could not hook the command wheel's DoCommand");
+        }
+        route::installed = true;
+        lua.set_string("installed");
+        return 1;
+    }
+
+    // RoNTAK_SquadCreate(main_manager) -> new manager path | nil, error
+    // A second USWATManager in the main one's world, initialised like the
+    // game's (its setup, tick). Lua then keeps it referenced from the world
+    // (ExtraReferencedObjects), so it lives exactly as long as the mission.
+    auto squad_create(const LuaMadeSimple::Lua& lua) -> int
+    {
+        Args args{lua};
+        auto main_path = args.string("main_manager");
+        if (!args.error.empty()) return fail(lua, args.error);
+        UObject* main = find_object(main_path);
+        if (!main) return fail(lua, "squad manager not found: " + main_path);
+        FStaticConstructObjectParameters params{main->GetClassPrivate(), main->GetOuterPrivate()};
+        UObject* manager = UObjectGlobals::StaticConstructObject(params);
+        if (!manager) return fail(lua, "could not create a squad manager");
+        // Initialize(FSubsystemCollectionBase&): the engine part only sets the
+        // initialised flag and the tick type; the collection isn't used.
+        alignas(16) static uint8_t collection[0x200]{};
+        auto vtable = *reinterpret_cast<void***>(manager);
+        using InitializeFn = void (*)(UObject*, void*);
+        reinterpret_cast<InitializeFn>(vtable[route::MANAGER_INITIALIZE_SLOT])(manager, collection);
+        lua.set_string(path_of(manager));
+        return 1;
+    }
+
+    // RoNTAK_SquadSet(manager, members, group) -> true | nil, error
+    //   manager: the call-ins' manager path ("" = none: routing off)
+    //   members: comma-separated actor paths (their controllers are added)
+    //   group:   0 main, 1 call-ins, 2 both, for the command wheel
+    auto squad_set(const LuaMadeSimple::Lua& lua) -> int
+    {
+        Args args{lua};
+        auto manager_path = args.string("manager");
+        auto member_list = split(args.string("members"));
+        int group = static_cast<int>(args.number("group"));
+        if (!args.error.empty()) return fail(lua, args.error);
+        UObject* manager = manager_path.empty() ? nullptr : find_object(manager_path);
+        if (!manager_path.empty() && !manager) return fail(lua, "squad manager not found: " + manager_path);
+        std::unordered_set<const void*> members;
+        for (auto& path : member_list)
+        {
+            UObject* actor = find_object(path);
+            if (!actor) continue;
+            members.insert(actor);
+            if (auto controller = actor->GetValuePtrByPropertyNameInChain<UObject*>(STR("Controller")))
+            {
+                if (*controller) members.insert(*controller);
+            }
+        }
+        // The manager the game itself resolves in that world (see resolver_hook).
+        route::main_manager = (manager && route::installed) ? reinterpret_cast<route::ResolverFn>(route::resolver_trampoline)(manager) : nullptr;
+        route::element_manager = route::main_manager ? manager : nullptr;
+        if (route::element_manager) members.insert(route::element_manager); // its own calls
+        route::members = std::move(members);
+        route::group = (group >= 0 && group <= 2) ? group : 0;
+        lua.set_bool(true);
+        return 1;
+    }
+
+    // RoNTAK_SquadStatus() -> "installed=1 manager=1 members=4 group=1 redirects=N commands=N"
+    auto squad_status(const LuaMadeSimple::Lua& lua) -> int
+    {
+        std::ostringstream o;
+        o << "installed=" << route::installed << " manager=" << (route::element_manager != nullptr)
+          << " members=" << route::members.size() << " group=" << route::group
+          << " redirects=" << route::redirects << " commands=" << route::commands;
+        lua.set_string(o.str());
+        return 1;
+    }
+
     auto register_functions(const LuaMadeSimple::Lua& lua) -> void
     {
         lua.register_function("RoNTAK_NativeVersion", &native_version);
@@ -915,6 +1123,10 @@ namespace
         lua.register_function("RoNTAK_ArrayCount", &array_count);
         lua.register_function("RoNTAK_CreateWidget", &create_widget);
         lua.register_function("RoNTAK_DumpCode", &dump_code);
+        lua.register_function("RoNTAK_SquadInstall", &squad_install);
+        lua.register_function("RoNTAK_SquadCreate", &squad_create);
+        lua.register_function("RoNTAK_SquadSet", &squad_set);
+        lua.register_function("RoNTAK_SquadStatus", &squad_status);
     }
 } // namespace
 
@@ -924,10 +1136,10 @@ class RoNTAKNative : public CppUserModBase
     RoNTAKNative() : CppUserModBase()
     {
         ModName = STR("RoNTAKNative");
-        ModVersion = STR("0.4.2");
+        ModVersion = STR("0.5.0");
         ModDescription = STR("Native helpers for the RoNTAK mod");
         ModAuthors = STR("RoNTAK");
-        Output::send<LogLevel::Verbose>(STR("[RoNTAKNative] loaded, version 0.4.2\n"));
+        Output::send<LogLevel::Verbose>(STR("[RoNTAKNative] loaded, version 0.5.0\n"));
     }
 
     ~RoNTAKNative() override = default;

@@ -101,6 +101,7 @@ local function tick()
         capture_progress = walls.progress(),
         native = native_version,
         selected_team = squads.selected(),
+        squad_routing = squads.routed(),
     })
 end
 

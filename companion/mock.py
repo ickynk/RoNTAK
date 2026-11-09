@@ -256,7 +256,8 @@ class MockGame:
         if cmd["action"] == "request_team":
             return self.request_team(cmd, result)
         if cmd["action"] == "select_team":
-            self.selected_team = None if cmd["team"] == "stock" else "called_in"
+            team = cmd["team"]
+            self.selected_team = None if team == "stock" else ("full" if team == "full" else "called_in")
             return dict(result, status="ok")
         if cmd["action"] == "go":
             held, self.held = self.held, {}

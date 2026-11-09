@@ -32,8 +32,9 @@ Widget fields: `0x348` ActiveTeamType, `0x34a` OverrideActiveTeamType,
   then setup `4df9070`), [89] `4dcb150` Deinitialize, [95] `4dfb010` Tick
   (works on the FTickableGameObject at `manager+0x30`).
 * Setup `4df9070` builds per-team state for GOLD / RED / BLUE and registers a
-  world callback `4def4d0` (`world+0x780`); what the callback does is still
-  to be read (code dump 4).
+  world callback `4def4d0` (`world+0x780`), which only binds the
+  OnActivityStarted / OnLeaderToggledNightvision delegates.
+* The squad leader is the player's pawn (PlayerController 0, `2f2e030`).
 * `IsSWATTeamDead(team)` `4de8b50`.
 
 `Give*Command` implementations (`this` = manager, then team):
@@ -54,3 +55,15 @@ Widget fields: `0x348` ActiveTeamType, `0x34a` OverrideActiveTeamType,
 4. Hook the team scroll: RED, BLUE, RED+BLUE, GREEN, YELLOW, GREEN+YELLOW,
    FULL ELEMENT (the wheel shows red / blue / gold; RoNTAK's label shows the
    real name).
+
+### Status (native 0.5.0)
+
+Steps 1-3 are in `RoNTAKNative` (`RoNTAK_Squad*`, the "squad routing"
+section of `dllmain.cpp`) and `mod/RoNTAK/Scripts/squads.lua`; Insert picks
+the group for now. Prologue bytes checked before hooking:
+
+| RVA | First bytes |
+| --- | --- |
+| `4dd1090` resolver | `48 89 5c 24 08 57 48 83 ec 20 48 8b 01 ff 90 88 01 00 00` |
+| `4ca7e10` DoCommand | `48 8b c4 48 89 58 18 44 88 48 20 48 89 50 10 48 89 48 08` |
+| `4ca7710` team scroll | `44 88 44 24 18 55 57 41 54 41 55 41 57 48 8b ec 48 83 ec 60` (step 4) |

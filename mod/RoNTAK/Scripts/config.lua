@@ -13,7 +13,7 @@ config.tick_ms = 250
 
 -- Folder used to exchange files with the ATAK companion app.
 -- Which RoNTAK this is (shown in the UE4SS log when the mod loads).
-config.build = "2026-11-09 code dump 4"
+config.build = "2026-11-09 squad routing 1"
 
 -- nil = the "bridge" folder inside this mod (recommended).
 config.bridge_dir = nil
@@ -196,6 +196,14 @@ config.reinforcements = {
 -- Orders for the called-in teams on their own (squads.lua).
 config.squads = {
     enabled = true,
+    -- RoNTAKNative 0.5+: the called-in teams get their own squad manager,
+    -- so the command wheel commands them like RED / BLUE (Insert picks
+    -- RED / BLUE, GREEN / YELLOW or FULL ELEMENT). false: the older team
+    -- parking below.
+    native_routing = true,
+    -- On-screen names with native routing (wheel GOLD per group; "red+yellow"
+    -- etc. in the FULL ELEMENT group).
+    group_labels = { stock = "RED + BLUE", full = "FULL ELEMENT" },
     -- The team called-in operators rest on while not commanded by the wheel:
     -- GOLD (5) is the squad-wide team, so RED / BLUE wheel orders miss them
     -- and GOLD orders reach them.
@@ -219,6 +227,8 @@ config.squads = {
         red = { R = 0.95, G = 0.2, B = 0.2 }, blue = { R = 0.2, G = 0.55, B = 1 }, gold = { R = 1, G = 0.72, B = 0.1 },
         green = { R = 0.18, G = 0.9, B = 0.44 }, yellow = { R = 1, G = 0.92, B = 0 },
         orange = { R = 1, G = 0.5, B = 0.05 }, purple = { R = 0.7, G = 0.4, B = 1 },
+        -- native routing groups: RED + BLUE, GREEN + YELLOW, FULL ELEMENT
+        stock = { R = 1, G = 0.72, B = 0.1 }, called_in = { R = 0.65, G = 1, B = 0.15 }, full = { R = 1, G = 1, B = 1 },
     },
     -- Also send the game's player message (Ready or Not didn't show it in testing).
     announce = false,

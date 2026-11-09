@@ -1959,7 +1959,7 @@
     const s = app.state || {};
     const live = Boolean(s.connected) && viewingLiveLevel();
     const results = s.results || [];
-    const key = JSON.stringify([live, (s.officers || []).map((o) => [o.team, o.status]), s.selected_team || "stock",
+    const key = JSON.stringify([live, (s.officers || []).map((o) => [o.team, o.status]), s.selected_team || "stock", !!s.squad_routing,
       app.team, results.filter((r) => r.action === "request_team").slice(0, 4)]);
     if (box.dataset.key === key) return;
     box.dataset.key = key;
@@ -1994,10 +1994,14 @@
     const wheel = $("wheel-team");
     wheel.hidden = !live || !anyOnScene;
     wheel.innerHTML = "<span>Command wheel:</span>";
-    wheel.title = "Which officers the in-game command wheel's RED and BLUE command (Insert key in game). GOLD always commands everyone.";
+    wheel.title = s.squad_routing
+      ? "Which squad the in-game command wheel commands (Insert key in game): its GOLD commands the whole group."
+      : "Which officers the in-game command wheel's RED and BLUE command (Insert key in game). GOLD always commands everyone.";
     const selected = s.selected_team || "stock";
     const groups = [["stock", "RED / BLUE", ["red", "blue"]],
       ["called_in", CALL_IN_TEAMS.map(([t]) => TEAM_LABEL[t]).join(" / "), CALL_IN_TEAMS.map(([t]) => t)]];
+    // With native squad routing the wheel can also command everyone's teams together.
+    if (s.squad_routing) groups.push(["full", "FULL ELEMENT", ["red", "blue", ...CALL_IN_TEAMS.map(([t]) => t)]]);
     for (const [team, label, colors] of groups) {
       const b = document.createElement("button");
       b.textContent = label;

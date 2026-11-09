@@ -418,7 +418,12 @@ function STEPS.register(job)
     check(valid(job.op), "operator gone")
     local manager = game.resolve_target(c().manager or "SWATManager")
     check(valid(manager), "no squad manager")
-    if c().add_to_squad_list == false then
+    if squads.native_ready() then
+        -- Their own squad manager (squads.lua, native squad routing).
+        local count, err = squads.native_register(job.op)
+        check(count, "not added to the called-in teams' squad manager: " .. tostring(err))
+        step_note(job, string.format("added to the called-in teams' squad manager (%d officers)", count))
+    elseif c().add_to_squad_list == false then
         step_note(job, "not added to the squad list (config.reinforcements.add_to_squad_list = false)")
     else
         local count, err = append(job.fns, manager, "SwatAI", job.op)
@@ -450,11 +455,7 @@ function reinforcements.request(cmd)
     end
     -- The game's squad has 8 places (squad slots Alpha..India): a 9th
     -- officer in its list crashed the game (Nov 2026). Room for the whole team?
-    local manager = game.resolve_target(c().manager or "SWATManager")
-    local listed = 0
-    if valid(manager) then
-        pcall(function() manager.SwatAI:ForEach(function() listed = listed + 1 end) end)
-    end
+    local listed = squads.callin_list_count()
     local queued_total = #queue
     local wanted_now = 0
     for _, call_sign in ipairs(def.names or {}) do

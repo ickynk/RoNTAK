@@ -189,13 +189,22 @@ function orders.execute(cmd)
         if not fn then error(string.format("%s has no function %s", game.object_name(target), spec.fn)) end
         local args, count, classes
         args, count, sent, classes = build_args(spec, cmd, door)
-        class_args, class_report = (next(classes) and classes or nil), nil
-        -- Exactly this team gets it (the called-in teams share the game's RED / BLUE).
-        local value = orders.team_value(cmd.team)
-        if value then squads.route(called_in(cmd.team) and cmd.team or nil, value) end
-        local call_ok, call_err = pcall(fn, target, table.unpack(args, 1, count))
-        class_args = nil
-        if not call_ok then error(call_err, 0) end
+        -- With native squad routing the called-in teams have their own squad
+        -- manager: the order goes to theirs, the game's, or both (GOLD).
+        local targets = spec.target == ((config.reinforcements or {}).manager or "SWATManager")
+            and squads.order_targets(cmd.team, target) or nil
+        if not targets then
+            -- Exactly this team gets it (the called-in teams share the game's RED / BLUE).
+            local value = orders.team_value(cmd.team)
+            if value then squads.route(called_in(cmd.team) and cmd.team or nil, value) end
+            targets = { target }
+        end
+        for _, t in ipairs(targets) do
+            class_args, class_report = (next(classes) and classes or nil), nil
+            local call_ok, call_err = pcall(t[spec.fn], t, table.unpack(args, 1, count))
+            class_args = nil
+            if not call_ok then error(call_err, 0) end
+        end
     end)
 
     if ok then

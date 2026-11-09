@@ -8,3 +8,5 @@ target_include_directories(${TARGET} PRIVATE .)
 target_link_libraries(${TARGET} PUBLIC UE4SS)
 # Zydis (built by UE4SS as a static library) decodes game code for RoNTAK_DumpCode.
 target_link_libraries(${TARGET} PRIVATE Zydis)
+# PolyHook 2 (built by UE4SS) hooks the game's squad manager resolver and DoCommand.
+target_link_libraries(${TARGET} PRIVATE PolyHook_2)
