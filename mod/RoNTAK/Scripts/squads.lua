@@ -1,22 +1,19 @@
--- Orders for the called-in teams (GREEN, YELLOW) on their own.
+-- Which officers the command wheel commands (the called-in teams included).
 --
 -- The game sends a squad order to the officers in its squad list whose
 -- DefaultTeam is the order's team (RED 1, BLUE 2), or to all of them (GOLD
--- 5). It has no other teams.
+-- 5). It has no other teams, and the command wheel picks who gets an order
+-- inside the game's own code, before anything RoNTAK can hook (tested Nov
+-- 2026). So the officers' DefaultTeam is kept arranged all the time for the
+-- command group selected with config.keys.select_team (Insert):
 --
--- The command wheel picks who gets an order inside the game's own code,
--- before anything RoNTAK can hook (tested Nov 2026: changing DefaultTeam in
--- the wheel's OnCommandIssued came too late). So the officers' DefaultTeam is
--- kept arranged all the time, for whatever the wheel sends next:
+--   * RED / BLUE (the plain game): the original squad keeps its teams; the
+--     called-in operators rest on config.squads.rest_team (GOLD);
+--   * GREEN / YELLOW ("called_in"): the called-in operators take the team
+--     they joined (GREEN -> BLUE, YELLOW -> RED), the original squad rests
+--     on GOLD. The wheel's RED commands YELLOW, its BLUE commands GREEN.
 --
---   * stock teams selected (the plain game): the original squad keeps its
---     teams; the called-in operators rest on config.squads.rest_team (GOLD),
---     so RED / BLUE orders reach the original squad only and GOLD reaches
---     everyone;
---   * GREEN (or YELLOW) selected with config.keys.select_team: that team's
---     operators take the wheel's current team (RED or BLUE, followed every
---     mod tick), everyone else rests on GOLD. RED / BLUE orders on the wheel
---     go to GREEN only; GOLD still reaches everyone.
+-- Either way the wheel's GOLD commands the full element.
 --
 -- RoNTAK's own orders (the companion) don't depend on the wheel: for the
 -- moment one goes out, DefaultTeam is arranged so exactly its team gets it,
@@ -34,7 +31,8 @@ local valid, object_name = game.valid, game.object_name
 local NO_TEAM = 0
 local RED, BLUE, GOLD = 1, 2, 5
 
-local selected = nil        -- nil (stock teams) or a called-in team name
+local CALLED_IN = "called_in"
+local selected = nil        -- nil (RED / BLUE) or CALLED_IN (GREEN / YELLOW)
 local swapped = nil         -- a RoNTAK order's arrangement: { until_clock, list = { { actor, team } } }
 local home = {}             -- actor name -> the stock team it had (stock officers only)
 local member_team = function() return nil end   -- actor name -> called-in team, set by reinforcements
@@ -98,7 +96,9 @@ end
 -- The DefaultTeam an officer should have right now, for the wheel.
 local function arranged_team(actor, name, own)
     if selected then
-        return own == selected and wheel_team or rest_team()
+        if own then return home_team(actor, name, own) end
+        home_team(actor, name, own)   -- remembered before it is parked
+        return rest_team()
     end
     if own then return rest_team() end
     return home_team(actor, name, own)
@@ -194,9 +194,11 @@ end
 function squads.last_route() return last_route end
 function squads.selected() return selected end
 
+-- Is any called-in operator (of `team`, or of any team) up?
 local function has_members(team)
     for _, actor in ipairs(squad_list()) do
-        if member_team(object_name(actor)) == team then
+        local own = member_team(object_name(actor))
+        if own and (team == nil or own == team) then
             local ok, down = pcall(function() return actor:IsDeadOrUnconscious() end)
             if not (ok and down) then return true end
         end
@@ -204,38 +206,36 @@ local function has_members(team)
     return false
 end
 
--- A short message on screen (the game's player message), if it shows one.
-local function announce(text)
-    if c().announce == false then return end
-    local pc = game.player_controller()
-    if not valid(pc) then return end
-    pcall(function() pc:ClientMessage(text, FName and FName("None") or "None", c().announce_seconds or 3) end)
+local function group_label(group)
+    if group == CALLED_IN then
+        local names = {}
+        for _, t in ipairs(called_in_teams()) do names[#names + 1] = string.upper(t) end
+        return table.concat(names, " / ")
+    end
+    return "RED / BLUE"
 end
 
-function squads.select(team)
-    if team ~= nil and not team_defs()[team] then return false end
-    selected = team
-    local text = selected and string.format("Command wheel: %s (RED / BLUE orders go to %s only)", string.upper(selected),
-        string.upper(selected)) or "Command wheel: RED / BLUE / GOLD"
+-- Selects the command group: nil (RED / BLUE) or "called_in" (GREEN /
+-- YELLOW). Called-in team names select the called-in group too.
+function squads.select(group)
+    if group == "stock" then group = nil end
+    if group ~= nil and group ~= CALLED_IN then
+        if not team_defs()[group] then return false end
+        group = CALLED_IN
+    end
+    selected = group
+    local text = "Command wheel: " .. group_label(selected) .. " (GOLD: full element)"
     note(text)
-    announce(text)
     squads.arrange()
     return true
 end
 
--- Selects which team the command wheel commands: stock -> GREEN -> YELLOW ->
--- stock, skipping teams that aren't on scene.
+-- Insert: RED / BLUE <-> GREEN / YELLOW (only while a called-in team is up).
 function squads.cycle()
-    local order = { false }
-    for _, t in ipairs(called_in_teams()) do order[#order + 1] = t end
-    local index = 1
-    for i, t in ipairs(order) do if t == (selected or false) then index = i end end
-    for step = 1, #order do
-        local candidate = order[(index - 1 + step) % #order + 1]
-        if candidate == false or has_members(candidate) then
-            squads.select(candidate or nil)
-            return selected
-        end
+    if selected then
+        squads.select(nil)
+    elseif has_members(nil) then
+        squads.select(CALLED_IN)
     end
     return selected
 end
@@ -259,19 +259,31 @@ end
 
 local STOCK_NAMES = { [RED] = "red", [BLUE] = "blue", [GOLD] = "gold" }
 
--- Who the command wheel commands right now: a called-in team, or the stock
--- team it shows (nil until the wheel has been seen).
+-- The called-in team that joined a stock team (the wheel's RED -> YELLOW).
+local function called_in_on(stock_team)
+    for _, t in ipairs(called_in_teams()) do
+        local def = team_defs()[t]
+        if (config.team_args or {})[def.joins] == stock_team then return t end
+    end
+    return nil
+end
+
+-- Who the command wheel commands right now: "gold" (the full element), a
+-- stock team, or the called-in team on the wheel's colour (nil until the
+-- wheel has been seen).
 function squads.commanding()
-    if selected then return selected end
-    return wheel_shows and STOCK_NAMES[wheel_shows] or nil
+    if not wheel_shows then return nil end
+    if wheel_shows == GOLD then return "gold" end
+    if selected then return called_in_on(wheel_shows) or STOCK_NAMES[wheel_shows] end
+    return STOCK_NAMES[wheel_shows]
 end
 
 -- Every mod tick: put back a RoNTAK order's arrangement when its time is up,
 -- follow the wheel, keep the officers arranged.
 function squads.tick()
     if swapped and os.clock() >= swapped.until_clock then squads.restore() end
-    if selected and not has_members(selected) then
-        note(string.upper(selected) .. " is no longer on scene")
+    if selected and not has_members(nil) then
+        note("no called-in operator is up any more")
         squads.select(nil)
     end
     read_wheel_team()
@@ -280,7 +292,8 @@ function squads.tick()
     local team = squads.commanding()
     if team and (selected or c().show_stock_team ~= false) and game.player_pawn() then
         local colors = c().colors or {}
-        overlay.show(string.format(c().label or "COMMANDING: %s", string.upper(team)), colors[team])
+        local name = team == "gold" and (c().gold_label or "GOLD (FULL ELEMENT)") or string.upper(team)
+        overlay.show(string.format(c().label or "COMMANDING: %s", name), colors[team])
     else
         overlay.show(nil)
     end

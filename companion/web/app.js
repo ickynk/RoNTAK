@@ -11,8 +11,7 @@
   const TEAM_LABEL = { red: "RED", blue: "BLUE", gold: "GOLD", green: "GREEN", yellow: "YELLOW", orange: "ORANGE", purple: "PURPLE" };
   // Teams called in during a mission (the mod's config.reinforcements).
   // [team, operators, stock team whose orders they also follow for now]
-  const CALL_IN_TEAMS = [["green", "Echo, Foxtrot", "blue"], ["yellow", "Golf, Hotel", "red"],
-    ["orange", "India, Juliet", "blue"], ["purple", "Kilo, Lima", "red"]];
+  const CALL_IN_TEAMS = [["green", "Echo, Foxtrot", "blue"], ["yellow", "Golf, Hotel", "red"]];
   const CALL_IN_SIZE = 2;
 
   const OPTION_CHOICES = {
@@ -1995,12 +1994,15 @@
     const wheel = $("wheel-team");
     wheel.hidden = !live || !anyOnScene;
     wheel.innerHTML = "<span>Command wheel:</span>";
+    wheel.title = "Which officers the in-game command wheel's RED and BLUE command (Insert key in game). GOLD always commands everyone.";
     const selected = s.selected_team || "stock";
-    for (const [team, label] of [["stock", "RED / BLUE / GOLD"], ...CALL_IN_TEAMS.map(([t]) => [t, TEAM_LABEL[t]])]) {
+    const groups = [["stock", "RED / BLUE", ["red", "blue"]],
+      ["called_in", CALL_IN_TEAMS.map(([t]) => TEAM_LABEL[t]).join(" / "), CALL_IN_TEAMS.map(([t]) => t)]];
+    for (const [team, label, colors] of groups) {
       const b = document.createElement("button");
       b.textContent = label;
       b.className = selected === team ? "active" : "";
-      if (team !== "stock") b.style.borderColor = TEAM_COLORS[team];
+      b.style.borderImage = `linear-gradient(90deg, ${colors.map((c) => TEAM_COLORS[c]).join(", ")}) 1`;
       b.onclick = () => api("POST", "/api/command", { team, action: "select_team" })
         .catch((e) => alert("Could not select the team: " + e.message));
       wheel.appendChild(b);

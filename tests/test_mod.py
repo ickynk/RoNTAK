@@ -845,40 +845,38 @@ class ModTest(unittest.TestCase):
         # so the wheel's RED / BLUE orders reach the original squad only and GOLD reaches everyone.
         self.assertEqual(self.lua.eval("teams_now()"), "1,2,5,5,5,5")
 
-    def test_wheel_commands_the_selected_team(self):
+    def test_wheel_commands_the_selected_group(self):
         self.call_in_both_teams()
         g = self.lua.globals()
-        # Insert selects GREEN: Echo and Foxtrot take the wheel's team (RED), everyone else rests on GOLD.
+        # RED / BLUE selected: the label follows the wheel (RED now), in red.
+        self.assertEqual(self.lua.eval("draw_frame()"), "COMMANDING: RED")
+        self.assertGreater(g.label.color.R, g.label.color.B)
+        # Insert selects GREEN / YELLOW: Echo, Foxtrot on BLUE, Golf, Hotel on RED, the original squad on GOLD.
         g.keybinds["INS"]()
-        self.assertEqual(self.tick()["selected_team"], "green")
-        self.assertEqual(self.lua.eval("teams_now()"), "5,5,1,1,5,5")
-        # On screen: "COMMANDING: GREEN", in green, above the game's HUD.
-        self.assertEqual(self.lua.eval("draw_frame()"), "COMMANDING: GREEN")
-        self.assertGreater(g.label.color.G, g.label.color.R)
+        self.assertEqual(self.tick()["selected_team"], "called_in")
+        self.assertEqual(self.lua.eval("teams_now()"), "5,5,2,2,1,1")
+        # The wheel's RED commands YELLOW, its BLUE commands GREEN, its GOLD the full element.
+        self.assertEqual(self.lua.eval("draw_frame()"), "COMMANDING: YELLOW")
         self.assertEqual(g.label.z, 1200)
-        # Scrolling the wheel to BLUE: GREEN follows.
         self.lua.execute("wheel.ActiveTeamType = 2")
         self.tick()
-        self.assertEqual(self.lua.eval("teams_now()"), "5,5,2,2,5,5")
-        # Insert again: YELLOW.
-        g.keybinds["INS"]()
+        self.assertEqual(self.lua.eval("draw_frame()"), "COMMANDING: GREEN")
+        self.assertGreater(g.label.color.G, g.label.color.R)
+        self.lua.execute("wheel.ActiveTeamType = 5")
         self.tick()
-        self.assertEqual(self.lua.eval("teams_now()"), "5,5,5,5,2,2")
-        self.assertEqual(self.lua.eval("draw_frame()"), "COMMANDING: YELLOW")
-        # Insert again: back to the stock teams.
+        self.assertEqual(self.lua.eval("draw_frame()"), "COMMANDING: GOLD (FULL ELEMENT)")
+        self.assertEqual(self.lua.eval("teams_now()"), "5,5,2,2,1,1")  # GOLD reaches every officer anyway
+        # Insert again: back to RED / BLUE.
         g.keybinds["INS"]()
         self.assertNotIn("selected_team", self.tick())
         self.assertEqual(self.lua.eval("teams_now()"), "1,2,5,5,5,5")
-        # Back to the stock teams: the team the wheel shows (BLUE now), in blue.
-        self.assertEqual(self.lua.eval("draw_frame()"), "COMMANDING: BLUE")
-        self.assertGreater(g.label.color.B, g.label.color.R)
-        self.lua.execute("wheel.ActiveTeamType = 5")
+        self.lua.execute("wheel.ActiveTeamType = 2")
         self.tick()
-        self.assertEqual(self.lua.eval("draw_frame()"), "COMMANDING: GOLD")
+        self.assertEqual(self.lua.eval("draw_frame()"), "COMMANDING: BLUE")
         self.assertEqual(g.label.built, 1)  # made once, reused
 
     def test_teams_are_real_while_operators_arrive(self):
-        """GREEN selected, then YELLOW called in: everyone is on their real team until it is in (crash in game)."""
+        """GREEN / YELLOW selected, then YELLOW called in: everyone is on their real team until it is in."""
         self.add_reinforcement_world()
         self.lua.execute(r"""
             clock = 100 os.clock = function() return clock end
@@ -908,9 +906,9 @@ class ModTest(unittest.TestCase):
         self.tick()  # Foxtrot
         self.lua.execute("clock = clock + 5")
         self.tick()
-        self.lua.globals().keybinds["INS"]()  # GREEN
+        self.lua.globals().keybinds["INS"]()  # GREEN / YELLOW
         self.tick()
-        self.assertEqual(self.lua.eval("teams_now()"), "5,5,1,1")
+        self.assertEqual(self.lua.eval("teams_now()"), "5,5,2,2")
         self.send("A", [{"id": 2, "team": "yellow", "action": "request_team", "target": {}, "options": {}}])
         self.tick()
         # Golf was taken in with everyone on RED / BLUE (no one parked on GOLD).
@@ -920,30 +918,22 @@ class ModTest(unittest.TestCase):
         self.assertEqual(self.lua.eval("teams_at_finish"), "1,2,2,2,1")
         self.lua.execute("clock = clock + 5")
         self.tick()
-        self.assertEqual(self.lua.eval("teams_now()"), "5,5,1,1,5,5")  # arranged for GREEN again
+        self.assertEqual(self.lua.eval("teams_now()"), "5,5,2,2,1,1")  # arranged for GREEN / YELLOW again
 
     def test_squad_never_grows_past_eight(self):
         """A 9th officer in the squad list crashed the game: a call-in that wouldn't fit is refused."""
-        self.call_in_both_teams()  # 2 stock + 4 called in = 6
-        self.lua.execute('require("config").reinforcements.max_squad = 7')
-        self.send("A", [{"id": 3, "team": "orange", "action": "request_team", "target": {}, "options": {}}])
+        self.add_reinforcement_world()
+        self.lua.execute('require("config").reinforcements.max_squad = 5')
+        self.run_orders({"id": 1, "team": "green", "action": "request_team", "target": {}, "options": {}})
+        for _ in range(3):
+            self.tick()
+        self.assertEqual(self.lua.eval("#objects.SWATManager[1].SwatAI"), 4)  # 2 stock + GREEN
+        self.send("A", [{"id": 2, "team": "yellow", "action": "request_team", "target": {}, "options": {}}])
         state = self.tick()
-        result = next(r for r in state["results"] if r["id"] == 3)
+        result = next(r for r in state["results"] if r["id"] == 2)
         self.assertEqual(result["status"], "error")
         self.assertIn("the squad is full", result["message"])
-        self.assertEqual(self.lua.eval("#objects.SWATManager[1].SwatAI"), 6)
-        # With room for both, ORANGE comes in; Insert then cycles GREEN, YELLOW, ORANGE.
-        self.lua.execute('require("config").reinforcements.max_squad = 8')
-        self.send("A", [{"id": 4, "team": "orange", "action": "request_team", "target": {}, "options": {}}])
-        for _ in range(4):
-            state = self.tick()
-        self.assertEqual(next(r for r in state["results"] if r["id"] == 4)["status"], "ok")
-        self.assertEqual(self.lua.eval("#objects.SWATManager[1].SwatAI"), 8)
-        seen = []
-        for _ in range(4):
-            self.lua.globals().keybinds["INS"]()
-            seen.append(self.tick().get("selected_team"))
-        self.assertEqual(seen, ["green", "yellow", "orange", None])
+        self.assertEqual(self.lua.eval("#objects.SWATManager[1].SwatAI"), 4)
 
     def test_selection_skips_teams_not_on_scene(self):
         self.add_reinforcement_world()
@@ -968,13 +958,13 @@ class ModTest(unittest.TestCase):
         self.lua.execute("clock = clock + 1")
         self.tick()
         self.assertEqual(self.lua.eval("teams_now()"), "1,2,5,5,5,5")  # arranged for the wheel again
-        # A stock RED order from the companion while GREEN is selected still reaches the stock RED officer only.
-        self.send("A", [{"id": 10, "team": "green", "action": "select_team", "target": {}, "options": {}}])
-        self.assertEqual(self.tick()["selected_team"], "green")
+        # A stock RED order from the companion while GREEN / YELLOW is selected still reaches the stock RED officer only.
+        self.send("A", [{"id": 10, "team": "called_in", "action": "select_team", "target": {}, "options": {}}])
+        self.assertEqual(self.tick()["selected_team"], "called_in")
         self.send("A", [{"id": 11, "team": "red", "action": "move_to",
                          "target": {"location": {"x": 1, "y": 2, "z": 0}}, "options": {}}])
         self.tick()
-        self.assertEqual(self.lua.eval("move_call.teams"), "1,5,0,0,5,5")
+        self.assertEqual(self.lua.eval("move_call.teams"), "1,5,2,2,0,0")
 
     def test_call_in_needs_the_native_mod(self):
         """Without RoNTAKNative 0.2 nothing is spawned (the Lua-only way corrupted game memory)."""

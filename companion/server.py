@@ -47,7 +47,7 @@ MAX_UPLOAD_BYTES = 30 * 1024 * 1024
 
 # Teams called in during a mission (the mod's config.reinforcements): they
 # are requested with request_team, then take orders like the stock teams.
-CALL_IN_TEAMS = {"green", "yellow", "orange", "purple"}
+CALL_IN_TEAMS = {"green", "yellow"}
 TEAMS = {"red", "blue", "gold"} | CALL_IN_TEAMS
 ACTIONS = {
     "stack_up", "open_clear", "breach_clear", "move_clear", "scan_door", "wedge_door",
@@ -55,8 +55,8 @@ ACTIONS = {
     "pick_lock", "close_door", "remove_wedge", "check_traps", "disarm_trap", "scan_open",
     "cover_area", "chemlight", "deploy_grenade", "restrain", "report",
     "go", "clear_held",  # start / clear the orders held for GO
-    "request_team",      # call in an extra team (team: green / yellow / orange / purple)
-    "select_team",       # which officers the in-game command wheel commands (team: stock or a called-in team)
+    "request_team",      # call in an extra team (team: green / yellow)
+    "select_team",       # which officers the in-game command wheel commands (team: stock / called_in)
 }
 OPTION_KEYS = ("breach", "grenade", "side", "scan")
 IMAGE_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp", ".svg": "image/svg+xml"}
@@ -120,14 +120,14 @@ def validate_order(body: dict) -> dict:
         raise ValueError(f"unknown action {action!r}")
     if action == "request_team":
         if team not in CALL_IN_TEAMS:
-            raise ValueError("team must be green, yellow, orange or purple")
+            raise ValueError("team must be green or yellow")
         return {"team": team, "action": action, "target": {}, "options": {}}
     if action == "select_team":
-        if team not in CALL_IN_TEAMS | {"stock"}:
-            raise ValueError("team must be stock, green, yellow, orange or purple")
+        if team not in CALL_IN_TEAMS | {"stock", "called_in"}:
+            raise ValueError("team must be stock or called_in")
         return {"team": team, "action": action, "target": {}, "options": {}}
     if team not in TEAMS:
-        raise ValueError("team must be red, blue, gold, green, yellow, orange or purple")
+        raise ValueError("team must be red, blue, gold, green or yellow")
     order = {"team": team, "action": action}
 
     target = body.get("target") or {}

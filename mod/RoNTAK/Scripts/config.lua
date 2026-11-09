@@ -13,7 +13,7 @@ config.tick_ms = 250
 
 -- Folder used to exchange files with the ATAK companion app.
 -- Which RoNTAK this is (shown in the UE4SS log when the mod loads).
-config.build = "2026-11-09 squad limit 8"
+config.build = "2026-11-09 command groups RED/BLUE, GREEN/YELLOW, GOLD all"
 
 -- nil = the "bridge" folder inside this mod (recommended).
 config.bridge_dir = nil
@@ -33,9 +33,7 @@ config.keys = {
                              -- Not F11: that is the game's fullscreen / borderless toggle.
     request_green  = "PAGE_UP",   -- call in GREEN team (config.reinforcements)
     request_yellow = "PAGE_DOWN", -- call in YELLOW team
-    request_orange = "NUM_SEVEN", -- call in ORANGE team (numpad 7)
-    request_purple = "NUM_EIGHT", -- call in PURPLE team (numpad 8)
-    select_team    = "INS",  -- Insert: the command wheel commands stock teams -> GREEN -> YELLOW (squads.lua)
+    select_team    = "INS",  -- Insert: the command wheel commands RED / BLUE <-> GREEN / YELLOW (squads.lua)
     team_probe     = "END",  -- team analysis for GREEN / YELLOW orders: press, give orders, press again
                              -- -> bridge/team_report.txt (teamprobe.lua)
 }
@@ -156,14 +154,13 @@ config.reinforcements = {
     teams = {
         green = { names = { "Echo", "Foxtrot" }, kits = { 0, 1 }, joins = "blue" },
         yellow = { names = { "Golf", "Hotel" }, kits = { 2, 3 }, joins = "red" },
-        orange = { names = { "India", "Juliet" }, kits = { 0, 2 }, joins = "blue" },
-        purple = { names = { "Kilo", "Lima" }, kits = { 1, 3 }, joins = "red" },
     },
     -- The game's squad list has 8 places (squad slots Alpha..India); a 9th
-    -- officer crashed it. Call-ins that wouldn't fit are refused.
+    -- officer crashed it. Call-ins that wouldn't fit are refused, so with the
+    -- original four there is room for these two teams.
     max_squad = 8,
-    -- The order teams come in when selecting with Insert, and on the ATAK screen.
-    order = { "green", "yellow", "orange", "purple" },
+    -- The order teams are listed in.
+    order = { "green", "yellow" },
     manager = "SWATManager",
     -- "entry": at the mission's entry point (where your squad stood when the
     -- mission began), else near you. "player": always near you.
@@ -214,6 +211,7 @@ config.squads = {
     -- The on-screen text: always shown during a mission, in the colour of the
     -- team the command wheel commands.
     label = "COMMANDING: %s",
+    gold_label = "GOLD (FULL ELEMENT)",
     show_stock_team = true,   -- also when RED / BLUE / GOLD is commanded
     -- Colour of the on-screen "COMMANDING" text per team.
     colors = {

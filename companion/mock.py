@@ -256,7 +256,7 @@ class MockGame:
         if cmd["action"] == "request_team":
             return self.request_team(cmd, result)
         if cmd["action"] == "select_team":
-            self.selected_team = None if cmd["team"] == "stock" else cmd["team"]
+            self.selected_team = None if cmd["team"] == "stock" else "called_in"
             return dict(result, status="ok")
         if cmd["action"] == "go":
             held, self.held = self.held, {}
@@ -278,8 +278,7 @@ class MockGame:
             return result
         return self.execute(cmd)
 
-    CALL_INS = {"green": ("Echo", "Foxtrot"), "yellow": ("Golf", "Hotel"),
-                "orange": ("India", "Juliet"), "purple": ("Kilo", "Lima")}
+    CALL_INS = {"green": ("Echo", "Foxtrot"), "yellow": ("Golf", "Hotel")}
 
     def request_team(self, cmd, result):
         """Like the mod's reinforcements: one operator per second next to the player."""

@@ -133,8 +133,8 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(status, 200)  # called-in teams take orders of their own
         self.assertEqual(self.call("POST", "/api/command", {"team": "yellow", "action": "select_team"})[0], 200)
         self.assertEqual(self.call("POST", "/api/command", {"team": "stock", "action": "select_team"})[0], 200)
-        self.assertEqual(self.call("POST", "/api/command", {"team": "purple", "action": "request_team"})[0], 200)
-        self.assertEqual(self.call("POST", "/api/command", {"team": "orange", "action": "hold"})[0], 200)
+        self.assertEqual(self.call("POST", "/api/command", {"team": "called_in", "action": "select_team"})[0], 200)
+        self.assertEqual(self.call("POST", "/api/command", {"team": "orange", "action": "request_team"})[0], 400)
         self.assertEqual(self.call("POST", "/api/command", {"team": "red", "action": "select_team"})[0], 400)
 
     def test_command_validation(self):
