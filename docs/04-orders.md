@@ -98,7 +98,8 @@ They join the squad's officer list and take orders **as their own teams**:
 - **On the ATAK screen:** a called-in team's button (**GREEN**, **YELLOW**, **ORANGE**, **PURPLE**) appears next
   to RED / BLUE / GOLD while the team is on scene. Orders sent with them go to that team only.
 - **With the in-game command wheel:** press **Insert** to choose what the wheel commands: the stock teams
-  (as in the plain game) → **GREEN** → **YELLOW** → the stock teams. Near the top left of the screen, **COMMANDING: RED** (or BLUE,
+  (as in the plain game) → **GREEN** → **YELLOW** → **ORANGE** → **PURPLE** → the stock teams (teams not on scene
+  are skipped). Near the top left of the screen, **COMMANDING: RED** (or BLUE,
   GOLD, GREEN...) always shows who the wheel commands, in that team's colour (needs RoNTAKNative 0.3;
   `config.overlay`, `config.squads.show_stock_team`). The **Command wheel** buttons on the
   ATAK screen show and change the selection too.
