@@ -2,7 +2,7 @@
 //
 // Gives RoNTAK's Lua mod the few things Lua can't do safely on UE4SS 3.0.1:
 //
-//   RoNTAK_NativeVersion() -> "0.4.0"
+//   RoNTAK_NativeVersion() -> "0.4.1"
 //
 //   RoNTAK_BeginSpawn(context, class, x, y, z, yaw, collision, owner)
 //       -> actor path | nil, error
@@ -30,7 +30,8 @@
 //     UWidgetBlueprintLibrary::Create(owner, class, owner): a widget made the
 //     game's way (a widget constructed from Lua never showed).
 //
-//   RoNTAK_DumpCode(out_dir, seed_filters, classes, max_depth, max_mb)
+//   RoNTAK_DumpCode(out_dir, seed_filters, classes, max_depth, max_mb,
+//                   extra_rvas, xref_targets, field_disps)
 //     Read-only: saves the game code around the wheel / squad functions for
 //     reverse-engineering (see dump_code below).
 //
@@ -81,7 +82,7 @@ using namespace RC::Unreal;
 
 namespace
 {
-    constexpr const char* NATIVE_VERSION = "0.4.0";
+    constexpr const char* NATIVE_VERSION = "0.4.1";
     constexpr const RC::CharType* LUA_MOD_NAME = STR("RoNTAK");
 
     // ---- Lua arguments ------------------------------------------------------
@@ -535,8 +536,11 @@ namespace
 
     // ---- code dump (reverse-engineering the wheel and squad code) -----------
     //
-    // RoNTAK_DumpCode(out_dir, seed_filters, classes, max_depth, max_mb)
-    //   -> summary | nil, error
+    // RoNTAK_DumpCode(out_dir, seed_filters, classes, max_depth, max_mb,
+    //                 extra_rvas, xref_targets, field_disps) -> summary | nil, error
+    //   extra_rvas: more seeds by address; xref_targets: list every call / jump
+    //   to these (xrefs.txt); field_disps: list every memory use of these
+    //   displacements (fields.txt). All comma-separated hex, may be empty.
     // Read-only. Writes into out_dir:
     //   header.txt     image base, size, sections
     //   functions.txt  every native ReadyOrNot UFunction: rva, name
@@ -635,7 +639,13 @@ namespace
         auto classes = split(args.string("classes"));
         int max_depth = static_cast<int>(args.number("max_depth"));
         double max_mb = args.number("max_mb");
+        auto extra_rvas = split(args.string("extra_rvas"));
+        auto xref_list = split(args.string("xref_targets"));
+        auto field_list = split(args.string("field_disps"));
         if (!args.error.empty()) return fail(lua, args.error);
+        auto parse_hex = [](const std::string& t) -> uint64_t {
+            try { return std::stoull(t, nullptr, 16); } catch (...) { return 0; }
+        };
 
         Image img = read_image();
         if (img.functions.empty() || img.text_end == 0) return fail(lua, "could not read the game's image");
@@ -707,6 +717,88 @@ namespace
         ZydisDecoder decoder{};
         ZydisDecoderInit(&decoder, ZYDIS_MACHINE_MODE_LONG_64, ZYDIS_STACK_WIDTH_64);
 
+        // Extra seeds by address.
+        for (auto& t : extra_rvas)
+        {
+            uint64_t rva = parse_hex(t);
+            if (rva && in_text(rva))
+            {
+                queue.emplace_front(static_cast<uint32_t>(rva), 0);
+                why.emplace(static_cast<uint32_t>(rva), "requested");
+            }
+        }
+
+        // Whole-program scan: calls / jumps to xref_targets, and memory
+        // operands with a displacement in field_disps (who reads / writes a
+        // field). The containing functions are dumped too.
+        std::set<uint64_t> xref_targets, field_disps;
+        for (auto& t : xref_list) if (auto v = parse_hex(t)) xref_targets.insert(v);
+        for (auto& t : field_list) if (auto v = parse_hex(t)) field_disps.insert(v);
+        size_t xref_count = 0, field_count = 0;
+        if (!xref_targets.empty() || !field_disps.empty())
+        {
+            std::ofstream xrefs_out(dir + L"\\xrefs.txt");
+            std::ofstream fields_out(dir + L"\\fields.txt");
+            std::map<uint64_t, size_t> per_field;
+            ZydisDecodedInstruction ins{};
+            ZydisDecodedOperand ops[ZYDIS_MAX_OPERAND_COUNT]{};
+            for (auto& f : img.functions)
+            {
+                if (!in_text(f.begin) || f.end <= f.begin || f.end - f.begin > 1024 * 1024) continue;
+                uint32_t off = 0, len = f.end - f.begin;
+                while (off < len)
+                {
+                    const uint8_t* at = img.base + f.begin + off;
+                    if (!ZYAN_SUCCESS(ZydisDecoderDecodeFull(&decoder, at, len - off, &ins, ops)))
+                    {
+                        off += 1;
+                        continue;
+                    }
+                    for (int i = 0; i < ins.operand_count_visible; ++i)
+                    {
+                        auto& op = ops[i];
+                        if (!xref_targets.empty() && op.type == ZYDIS_OPERAND_TYPE_IMMEDIATE && op.imm.is_relative)
+                        {
+                            ZyanU64 target{};
+                            if (ZYAN_SUCCESS(ZydisCalcAbsoluteAddress(&ins, &op, reinterpret_cast<uint64_t>(at), &target)))
+                            {
+                                uint64_t trva = rva_of(reinterpret_cast<const void*>(target));
+                                if (xref_targets.count(trva))
+                                {
+                                    xrefs_out << hex(trva) << " " << hex(f.begin + off) << " " << hex(f.begin) << "\n";
+                                    ++xref_count;
+                                    if (xref_count < 3000)
+                                    {
+                                        queue.emplace_back(f.begin, 0);
+                                        why.emplace(f.begin, "xref " + hex(trva));
+                                    }
+                                }
+                            }
+                        }
+                        if (!field_disps.empty() && op.type == ZYDIS_OPERAND_TYPE_MEMORY && op.mem.base != ZYDIS_REGISTER_RIP &&
+                            op.mem.base != ZYDIS_REGISTER_RSP && op.mem.base != ZYDIS_REGISTER_RBP)
+                        {
+                            uint64_t disp = static_cast<uint64_t>(op.mem.disp.value);
+                            if (field_disps.count(disp) && per_field[disp] < 4000)
+                            {
+                                bool write = (op.actions & ZYDIS_OPERAND_ACTION_MASK_WRITE) != 0;
+                                fields_out << hex(disp) << " " << (write ? "w" : "r") << " " << op.size << " "
+                                           << hex(f.begin + off) << " " << hex(f.begin) << "\n";
+                                ++per_field[disp];
+                                ++field_count;
+                                if (write && op.size == 8)
+                                {
+                                    queue.emplace_back(f.begin, 0);
+                                    why.emplace(f.begin, "writes " + hex(disp));
+                                }
+                            }
+                        }
+                    }
+                    off += ins.length;
+                }
+            }
+        }
+
         std::ofstream code_out(dir + L"\\code.bin", std::ios::binary);
         std::ofstream index_out(dir + L"\\index.txt");
         std::ofstream data_out(dir + L"\\data.txt");
@@ -750,6 +842,8 @@ namespace
                     auto& op = operands[i];
                     bool branch = instruction.meta.category == ZYDIS_CATEGORY_CALL ||
                                   instruction.meta.category == ZYDIS_CATEGORY_UNCOND_BR;
+                    bool jump = instruction.meta.category == ZYDIS_CATEGORY_COND_BR ||
+                                instruction.meta.category == ZYDIS_CATEGORY_UNCOND_BR;
                     bool relative_imm = op.type == ZYDIS_OPERAND_TYPE_IMMEDIATE && op.imm.is_relative;
                     bool rip_mem = op.type == ZYDIS_OPERAND_TYPE_MEMORY && op.mem.base == ZYDIS_REGISTER_RIP;
                     if (!relative_imm && !rip_mem) continue;
@@ -757,7 +851,14 @@ namespace
                     if (!ZYAN_SUCCESS(ZydisCalcAbsoluteAddress(&instruction, &op, runtime, &target))) continue;
                     uint64_t target_rva = rva_of(reinterpret_cast<const void*>(target));
                     if (!target_rva) continue;
-                    if (relative_imm && branch && in_text(target_rva))
+                    bool outside = target_rva < begin || target_rva >= begin + size;
+                    if (relative_imm && jump && in_text(target_rva) && outside)
+                    {
+                        // Another part of the same function (the compiler splits
+                        // large functions into separate .pdata entries).
+                        queue.emplace_front(static_cast<uint32_t>(target_rva), depth);
+                    }
+                    else if (relative_imm && branch && in_text(target_rva))
                     {
                         if (depth < max_depth) queue.emplace_back(static_cast<uint32_t>(target_rva), depth + 1);
                     }
@@ -789,7 +890,8 @@ namespace
 
         std::ostringstream summary;
         summary << count << " functions (" << written / 1024 << " KB), " << ufunctions << " UFunctions listed, "
-                << data_seen.size() << " data references" << (queue.empty() ? "" : " (size limit reached)");
+                << data_seen.size() << " data references, " << xref_count << " xrefs, " << field_count << " field uses"
+                << (queue.empty() ? "" : " (size limit reached)");
         lua.set_string(summary.str());
         return 1;
     }
@@ -812,10 +914,10 @@ class RoNTAKNative : public CppUserModBase
     RoNTAKNative() : CppUserModBase()
     {
         ModName = STR("RoNTAKNative");
-        ModVersion = STR("0.4.0");
+        ModVersion = STR("0.4.1");
         ModDescription = STR("Native helpers for the RoNTAK mod");
         ModAuthors = STR("RoNTAK");
-        Output::send<LogLevel::Verbose>(STR("[RoNTAKNative] loaded, version 0.4.0\n"));
+        Output::send<LogLevel::Verbose>(STR("[RoNTAKNative] loaded, version 0.4.1\n"));
     }
 
     ~RoNTAKNative() override = default;

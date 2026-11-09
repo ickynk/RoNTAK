@@ -13,7 +13,7 @@ config.tick_ms = 250
 
 -- Folder used to exchange files with the ATAK companion app.
 -- Which RoNTAK this is (shown in the UE4SS log when the mod loads).
-config.build = "2026-11-09 code dump"
+config.build = "2026-11-09 code dump 2"
 
 -- nil = the "bridge" folder inside this mod (recommended).
 config.bridge_dir = nil
@@ -253,6 +253,16 @@ config.code_dump = {
                 "PlayerCharacter", "HumanCharacterHUD_V2", "SwatAIController", "CyberneticController" },
     max_depth = 3,
     max_mb = 24,
+    -- Addresses (RVAs) found in the first dump, for this game build only
+    -- (ReadyOrNotSteam-Win64-Shipping.exe of Nov 2026):
+    --   4ca7e10 the command wheel's DoCommand   4dd1090 the squad manager resolver
+    --   4cafa30 SwatCommandWidget GetActiveTeam  494eb50 SWATManager's class
+    --   4de3260 / 4de2b40 / 4de5e10 GiveMove / GiveFallIn / GiveStackUp
+    extra_rvas = { "4ca7e10", "4dd1090", "4cafa30", "4de3260", "4de2b40", "4de5e10", "4de2f90", "4de5a90" },
+    -- Every call to these (who uses the resolver, DoCommand, the wheel's team).
+    xref_targets = { "4dd1090", "4ca7e10", "4cafa30", "494eb50" },
+    -- Every use of these field offsets (the wheel's team bytes 0x348..0x34c).
+    field_disps = { "348", "34a", "34b", "34c" },
 }
 
 -- Team analysis (End key, teamprobe.lua): read-only.

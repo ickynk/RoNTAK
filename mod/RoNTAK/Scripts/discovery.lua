@@ -162,14 +162,15 @@ end
 function discovery.dump_code()
     local fn = rawget(_G, "RoNTAK_DumpCode")
     if type(fn) ~= "function" then
-        log.info("code dump: needs RoNTAKNative 0.4 or newer")
+        log.info("code dump: needs RoNTAKNative 0.4.1 or newer")
         return
     end
     local c = config.code_dump or {}
     local dir = bridge.dir .. "\\" .. (c.folder or "code_dump")
     log.info("code dump: saving the game's command code to " .. dir .. " (the game may freeze for a few seconds)...")
     local ok, summary, err = pcall(fn, dir, table.concat(c.seed_filters or {}, ","), table.concat(c.classes or {}, ","),
-        c.max_depth or 3, c.max_mb or 24)
+        c.max_depth or 3, c.max_mb or 24, table.concat(c.extra_rvas or {}, ","),
+        table.concat(c.xref_targets or {}, ","), table.concat(c.field_disps or {}, ","))
     if not ok then
         log.info("code dump failed: " .. tostring(summary))
     elseif not summary then
