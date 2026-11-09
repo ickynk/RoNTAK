@@ -75,46 +75,44 @@ way round.
 
 ## Reinforcements: calling in more teams
 
-Four extra teams can be called in during a mission:
+Two extra teams can be called in during a mission:
 
 | Team | Operators | Gear copied from | Call in |
 | --- | --- | --- | --- |
 | **GREEN** | Echo, Foxtrot | Alpha, Beta | **Call in GREEN** on the ATAK screen, or **Page Up** in game |
 | **YELLOW** | Golf, Hotel | Charlie, Delta | **Call in YELLOW**, or **Page Down** in game |
-| **ORANGE** | India, Juliet | Alpha, Charlie | **Call in ORANGE**, or **numpad 7** in game |
-| **PURPLE** | Kilo, Lima | Beta, Delta | **Call in PURPLE**, or **numpad 8** in game |
 
 **The game's squad holds at most 8 officers** (its squad slots run Alpha to India; a 9th officer crashed the
-game). With the original four, that is room for two called-in teams at a time; a call-in that wouldn't fit
-is refused and says so (`max_squad` in `config.reinforcements`).
+game): the original four plus GREEN and YELLOW. A call-in that wouldn't fit is refused and says so
+(`max_squad` in `config.reinforcements`).
 
 Calling in needs the native part of RoNTAK, **RoNTAKNative** (version 0.2 or newer: see `native/README.md`);
 without it the button says so and nothing is spawned.
 
 They arrive one per second at the mission's **entry point**, where your squad stood when the mission began
 (or next to you if that's full, or with `spawn_at = "player"` in `config.reinforcements`), and show up on the map
-and roster in their colour. Calling a team
-again only replaces operators who are dead or missing. If a call-in fails, hover over its button to see why (the
-UE4SS console also says `reinforcements: …`).
+and roster in their colour. Calling a team again only replaces operators who are dead or missing. If a call-in
+fails, hover over its button to see why (the UE4SS console also says `reinforcements: …`).
 
 They join the squad's officer list and take orders **as their own teams**:
 
-- **On the ATAK screen:** a called-in team's button (**GREEN**, **YELLOW**, **ORANGE**, **PURPLE**) appears next
-  to RED / BLUE / GOLD while the team is on scene. Orders sent with them go to that team only.
-- **With the in-game command wheel:** press **Insert** to choose what the wheel commands: the stock teams
-  (as in the plain game) → **GREEN** → **YELLOW** → **ORANGE** → **PURPLE** → the stock teams (teams not on scene
-  are skipped). Near the top left of the screen, **COMMANDING: RED** (or BLUE,
-  GOLD, GREEN...) always shows who the wheel commands, in that team's colour (needs RoNTAKNative 0.3;
-  `config.overlay`, `config.squads.show_stock_team`). The **Command wheel** buttons on the
-  ATAK screen show and change the selection too.
-  - Stock teams selected: RED and BLUE reach the original squad only; **GOLD reaches everyone**.
-  - GREEN selected: RED or BLUE on the wheel (either) commands **Echo and Foxtrot only**; GOLD still reaches
-    everyone. The same for YELLOW.
+- **On the ATAK screen:** the **GREEN** and **YELLOW** team buttons appear next to RED / BLUE / GOLD while the
+  team is on scene. Orders sent with them go to that team only.
+- **With the in-game command wheel:** press **Insert** to switch what the wheel's RED and BLUE command:
+
+  | Selected | Wheel RED | Wheel BLUE | Wheel GOLD |
+  | --- | --- | --- | --- |
+  | **RED / BLUE** (as in the plain game) | the original RED pair | the original BLUE pair | the full element |
+  | **GREEN / YELLOW** | YELLOW (Golf, Hotel) | GREEN (Echo, Foxtrot) | the full element |
+
+  Near the top left of the screen, **COMMANDING: RED** (BLUE, YELLOW, GREEN, or **GOLD (FULL ELEMENT)**) shows
+  who the wheel commands, in that team's colour (needs RoNTAKNative 0.3; `config.overlay`). The **Command
+  wheel** buttons on the ATAK screen show and switch the group too.
 
 How it works: the game itself only knows RED, BLUE and GOLD, and picks who gets a wheel order from each
-officer's team. RoNTAK keeps those teams arranged for the current selection: the called-in operators rest on
-GOLD (the squad-wide team) unless selected, and while a team is selected everyone else rests on GOLD
-(`squads.lua`, `config.squads`). Teams, names, gear and keys are set in `config.lua` (`config.reinforcements`,
+officer's team. RoNTAK keeps those teams arranged for the selected group: the group not selected rests on GOLD
+(the squad-wide team), so the wheel's RED and BLUE reach only the selected group (`squads.lua`,
+`config.squads`). Teams, names, gear and keys are set in `config.lua` (`config.reinforcements`,
 `config.squads`, `request_green`, `request_yellow`, `select_team`).
 
 Single player only.
