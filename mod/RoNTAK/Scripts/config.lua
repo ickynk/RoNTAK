@@ -13,7 +13,7 @@ config.tick_ms = 250
 
 -- Folder used to exchange files with the ATAK companion app.
 -- Which RoNTAK this is (shown in the UE4SS log when the mod loads).
-config.build = "2026-11-09 code dump 3"
+config.build = "2026-11-09 code dump 4"
 
 -- nil = the "bridge" folder inside this mod (recommended).
 config.bridge_dir = nil
@@ -260,8 +260,15 @@ config.code_dump = {
     --   4cbd2e3 the wheel's tick part        4de8b50 IsSWATTeamDead
     --   4de3260 / 4de2b40 / 4de5e10 / 4de2f90 / 4de5a90 Give Move / FallIn / StackUp / Hold / Search
     --   4de8f30 / 4de7f50 manager checks     4dc91c0 CanGiveActivityToSWAT
-    extra_rvas = { "4ca7e10", "4dd1090", "4ca7710", "4ccd250", "4cbd2e3", "4de8b50", "4de8f30", "4de7f50",
+    --   4def4d0 the manager's world callback  4dfb010 the manager's Tick
+    --   4df9070 the manager's setup          4cc32d0 the wheel's set team
+    extra_rvas = { "4def4d0", "4dfb010", "4df9070", "4cc32d0", "4de7c60", "4dcb150",
+                   "4ca7e10", "4dd1090", "4ca7710", "4ccd250", "4cbd2e3", "4de8b50", "4de8f30", "4de7f50",
                    "4de3260", "4de2b40", "4de5e10", "4de2f90", "4de5a90", "4dc91c0", "4cafa30", "4ca5c70" },
+    -- Classes whose property offsets are written to offsets.txt.
+    offset_classes = { "SWATManager", "SwatCommandWidget", "ReadyOrNotCharacter", "SWATCharacter", "CyberneticCharacter",
+                       "CyberneticController", "BaseActivity", "TeamBaseActivity", "TeamStackUpActivity",
+                       "TeamBreachAndClearActivity", "TeamFallinActivity" },
     -- Every call to these (who scrolls the wheel's team, who asks for the manager).
     xref_targets = { "4ca7710", "4ca7e10", "4dd1090", "4de8b50", "494eb50" },
     -- Every use of these field offsets: the wheel's team bytes 0x348..0x34c and

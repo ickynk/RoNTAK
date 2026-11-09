@@ -167,6 +167,28 @@ function discovery.dump_code()
     end
     local c = config.code_dump or {}
     local dir = bridge.dir .. "\\" .. (c.folder or "code_dump")
+    -- Property offsets of the classes the code works on (reflection), for
+    -- reading the dumped code.
+    local lines = {}
+    for _, class_name in ipairs(c.offset_classes or {}) do
+        local class = StaticFindObject and StaticFindObject("/Script/ReadyOrNot." .. class_name)
+        if class and class:IsValid() then
+            local props = {}
+            pcall(function()
+                class:ForEachProperty(function(prop)
+                    local off, kind = -1, "?"
+                    pcall(function() off = prop:GetOffset_Internal() end)
+                    pcall(function() kind = prop:GetClass():GetFName():ToString() end)
+                    props[#props + 1] = { off = off, text = string.format("  %5x %s %s", off, name_of(prop), kind) }
+                end)
+            end)
+            table.sort(props, function(a, b) return a.off < b.off end)
+            lines[#lines + 1] = class_name
+            for _, p in ipairs(props) do lines[#lines + 1] = p.text end
+        else
+            lines[#lines + 1] = class_name .. ": not found"
+        end
+    end
     log.info("code dump: saving the game's command code to " .. dir .. " (the game may freeze for a few seconds)...")
     local ok, summary, err = pcall(fn, dir, table.concat(c.seed_filters or {}, ","), table.concat(c.classes or {}, ","),
         c.max_depth or 3, c.max_mb or 24, table.concat(c.extra_rvas or {}, ","),
@@ -176,6 +198,7 @@ function discovery.dump_code()
     elseif not summary then
         log.info("code dump failed: " .. tostring(err))
     else
+        bridge.write_file((c.folder or "code_dump") .. "\\offsets.txt", table.concat(lines, "\n"))
         log.info("code dump: " .. tostring(summary) .. ". Zip the folder " .. dir .. " and send it.")
     end
 end
