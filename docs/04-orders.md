@@ -84,6 +84,10 @@ Four extra teams can be called in during a mission:
 | **ORANGE** | India, Juliet | Alpha, Charlie | **Call in ORANGE**, or **numpad 7** in game |
 | **PURPLE** | Kilo, Lima | Beta, Delta | **Call in PURPLE**, or **numpad 8** in game |
 
+**The game's squad holds at most 8 officers** (its squad slots run Alpha to India; a 9th officer crashed the
+game). With the original four, that is room for two called-in teams at a time; a call-in that wouldn't fit
+is refused and says so (`max_squad` in `config.reinforcements`).
+
 Calling in needs the native part of RoNTAK, **RoNTAKNative** (version 0.2 or newer: see `native/README.md`);
 without it the button says so and nothing is spawned.
 

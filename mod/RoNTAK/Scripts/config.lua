@@ -13,7 +13,7 @@ config.tick_ms = 250
 
 -- Folder used to exchange files with the ATAK companion app.
 -- Which RoNTAK this is (shown in the UE4SS log when the mod loads).
-config.build = "2026-11-09 four call-in teams, coloured label"
+config.build = "2026-11-09 squad limit 8"
 
 -- nil = the "bridge" folder inside this mod (recommended).
 config.bridge_dir = nil
@@ -159,6 +159,9 @@ config.reinforcements = {
         orange = { names = { "India", "Juliet" }, kits = { 0, 2 }, joins = "blue" },
         purple = { names = { "Kilo", "Lima" }, kits = { 1, 3 }, joins = "red" },
     },
+    -- The game's squad list has 8 places (squad slots Alpha..India); a 9th
+    -- officer crashed it. Call-ins that wouldn't fit are refused.
+    max_squad = 8,
     -- The order teams come in when selecting with Insert, and on the ATAK screen.
     order = { "green", "yellow", "orange", "purple" },
     manager = "SWATManager",

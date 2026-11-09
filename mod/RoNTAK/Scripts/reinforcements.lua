@@ -448,6 +448,25 @@ function reinforcements.request(cmd)
         result.message = "no mission running"
         return result
     end
+    -- The game's squad has 8 places (squad slots Alpha..India): a 9th
+    -- officer in its list crashed the game (Nov 2026). Room for the whole team?
+    local manager = game.resolve_target(c().manager or "SWATManager")
+    local listed = 0
+    if valid(manager) then
+        pcall(function() manager.SwatAI:ForEach(function() listed = listed + 1 end) end)
+    end
+    local queued_total = #queue
+    local wanted_now = 0
+    for _, call_sign in ipairs(def.names or {}) do
+        if not on_scene(team, call_sign) then wanted_now = wanted_now + 1 end
+    end
+    local room = (c().max_squad or 8) - listed - queued_total
+    if wanted_now > 0 and room < wanted_now then
+        result.message = string.format("the squad is full (%d of %d places taken): the game allows %d officers",
+            listed + queued_total, c().max_squad or 8, c().max_squad or 8)
+        note(string.format("%s not called in: %s", string.upper(team), result.message))
+        return result
+    end
     if not native() then
         result.message = "needs RoNTAKNative 0.2 or newer (see native/README.md)"
         note(string.format("%s not called in: %s", string.upper(team), result.message))

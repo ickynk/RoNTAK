@@ -922,25 +922,28 @@ class ModTest(unittest.TestCase):
         self.tick()
         self.assertEqual(self.lua.eval("teams_now()"), "5,5,1,1,5,5")  # arranged for GREEN again
 
-    def test_four_called_in_teams(self):
-        self.call_in_both_teams()
-        self.send("A", [{"id": 3, "team": "orange", "action": "request_team", "target": {}, "options": {}},
-                        {"id": 4, "team": "purple", "action": "request_team", "target": {}, "options": {}}])
-        for _ in range(6):
+    def test_squad_never_grows_past_eight(self):
+        """A 9th officer in the squad list crashed the game: a call-in that wouldn't fit is refused."""
+        self.call_in_both_teams()  # 2 stock + 4 called in = 6
+        self.lua.execute('require("config").reinforcements.max_squad = 7')
+        self.send("A", [{"id": 3, "team": "orange", "action": "request_team", "target": {}, "options": {}}])
+        state = self.tick()
+        result = next(r for r in state["results"] if r["id"] == 3)
+        self.assertEqual(result["status"], "error")
+        self.assertIn("the squad is full", result["message"])
+        self.assertEqual(self.lua.eval("#objects.SWATManager[1].SwatAI"), 6)
+        # With room for both, ORANGE comes in; Insert then cycles GREEN, YELLOW, ORANGE.
+        self.lua.execute('require("config").reinforcements.max_squad = 8')
+        self.send("A", [{"id": 4, "team": "orange", "action": "request_team", "target": {}, "options": {}}])
+        for _ in range(4):
             state = self.tick()
-        names = sorted((o["team"], o["name"]) for o in state["officers"] if o["team"] in ("orange", "purple"))
-        self.assertEqual(names, [("orange", "India"), ("orange", "Juliet"), ("purple", "Kilo"), ("purple", "Lima")])
-        # Insert goes GREEN, YELLOW, ORANGE, PURPLE, then back to the stock teams.
+        self.assertEqual(next(r for r in state["results"] if r["id"] == 4)["status"], "ok")
+        self.assertEqual(self.lua.eval("#objects.SWATManager[1].SwatAI"), 8)
         seen = []
-        for _ in range(5):
-            self.lua.globals().keybinds["INS"]()
-            seen.append(self.tick().get("selected_team"))
-        self.assertEqual(seen, ["green", "yellow", "orange", "purple", None])
-        # PURPLE selected: only Kilo and Lima take the wheel's team.
         for _ in range(4):
             self.lua.globals().keybinds["INS"]()
-        self.tick()
-        self.assertEqual(self.lua.eval("teams_now()"), "5,5,5,5,5,5,5,5,1,1")
+            seen.append(self.tick().get("selected_team"))
+        self.assertEqual(seen, ["green", "yellow", "orange", None])
 
     def test_selection_skips_teams_not_on_scene(self):
         self.add_reinforcement_world()
