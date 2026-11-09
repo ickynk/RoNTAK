@@ -2,7 +2,7 @@
 //
 // Gives RoNTAK's Lua mod the few things Lua can't do safely on UE4SS 3.0.1:
 //
-//   RoNTAK_NativeVersion() -> "0.4.1"
+//   RoNTAK_NativeVersion() -> "0.4.2"
 //
 //   RoNTAK_BeginSpawn(context, class, x, y, z, yaw, collision, owner)
 //       -> actor path | nil, error
@@ -82,7 +82,7 @@ using namespace RC::Unreal;
 
 namespace
 {
-    constexpr const char* NATIVE_VERSION = "0.4.1";
+    constexpr const char* NATIVE_VERSION = "0.4.2";
     constexpr const RC::CharType* LUA_MOD_NAME = STR("RoNTAK");
 
     // ---- Lua arguments ------------------------------------------------------
@@ -818,6 +818,16 @@ namespace
             if (!in_text(begin) || dumped.count(begin)) continue;
             dumped.insert(begin);
             uint32_t size = std::min<uint32_t>(end - begin, 256 * 1024);
+            // A function piece that runs straight into the next .pdata entry
+            // (no padding between them) continues the same function.
+            if (f)
+            {
+                const RuntimeFunction* next = function_at(img, f->end);
+                if (next && next->begin == f->end && !dumped.count(next->begin))
+                {
+                    queue.emplace_front(next->begin, depth);
+                }
+            }
             code_out.write(reinterpret_cast<const char*>(img.base + begin), size);
             index_out << hex(begin) << " " << hex(size) << " " << hex(written) << " " << depth << " "
                       << (why.count(rva) ? why[rva] : "call") << "\n";
@@ -914,10 +924,10 @@ class RoNTAKNative : public CppUserModBase
     RoNTAKNative() : CppUserModBase()
     {
         ModName = STR("RoNTAKNative");
-        ModVersion = STR("0.4.1");
+        ModVersion = STR("0.4.2");
         ModDescription = STR("Native helpers for the RoNTAK mod");
         ModAuthors = STR("RoNTAK");
-        Output::send<LogLevel::Verbose>(STR("[RoNTAKNative] loaded, version 0.4.1\n"));
+        Output::send<LogLevel::Verbose>(STR("[RoNTAKNative] loaded, version 0.4.2\n"));
     }
 
     ~RoNTAKNative() override = default;
