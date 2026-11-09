@@ -49,10 +49,16 @@ function squads.set_member_lookup(fn) member_team = fn end
 
 local function team_defs() return (config.reinforcements or {}).teams or {} end
 
+-- The called-in teams in their configured order (then any others, sorted).
 local function called_in_teams()
-    local out = {}
-    for name in pairs(team_defs()) do out[#out + 1] = name end
-    table.sort(out)
+    local out, seen = {}, {}
+    for _, name in ipairs((config.reinforcements or {}).order or {}) do
+        if team_defs()[name] and not seen[name] then out[#out + 1] = name seen[name] = true end
+    end
+    local rest = {}
+    for name in pairs(team_defs()) do if not seen[name] then rest[#rest + 1] = name end end
+    table.sort(rest)
+    for _, name in ipairs(rest) do out[#out + 1] = name end
     return out
 end
 
@@ -236,12 +242,28 @@ end
 
 -- The command wheel's current team: the selected team takes it, so RED and
 -- BLUE on the wheel both command it.
+local wheel_widget = nil
+local wheel_shows = nil     -- the team the wheel shows: RED, BLUE or GOLD
+
 local function read_wheel_team()
-    local widget = FindFirstOf(c().wheel_class or "SwatCommandWidget")
-    if not valid(widget) then return end
-    local ok, v = pcall(function() return widget[c().wheel_team_property or "ActiveTeamType"] end)
+    if not valid(wheel_widget) then
+        local ok, w = pcall(FindFirstOf, c().wheel_class or "SwatCommandWidget")
+        wheel_widget = ok and valid(w) and w or nil
+    end
+    if not wheel_widget then return end
+    local ok, v = pcall(function() return wheel_widget[c().wheel_team_property or "ActiveTeamType"] end)
     v = ok and tonumber(v) or nil
+    if v == RED or v == BLUE or v == GOLD then wheel_shows = v end
     if v == RED or v == BLUE then wheel_team = v end
+end
+
+local STOCK_NAMES = { [RED] = "red", [BLUE] = "blue", [GOLD] = "gold" }
+
+-- Who the command wheel commands right now: a called-in team, or the stock
+-- team it shows (nil until the wheel has been seen).
+function squads.commanding()
+    if selected then return selected end
+    return wheel_shows and STOCK_NAMES[wheel_shows] or nil
 end
 
 -- Every mod tick: put back a RoNTAK order's arrangement when its time is up,
@@ -252,12 +274,13 @@ function squads.tick()
         note(string.upper(selected) .. " is no longer on scene")
         squads.select(nil)
     end
-    if selected then read_wheel_team() end
+    read_wheel_team()
     squads.arrange()
-    -- On screen while a called-in team is selected.
-    if selected then
+    -- On screen during a mission: who the wheel commands, in that team's colour.
+    local team = squads.commanding()
+    if team and (selected or c().show_stock_team ~= false) and game.player_pawn() then
         local colors = c().colors or {}
-        overlay.show(string.format(c().label or "WHEEL: %s", string.upper(selected)), colors[selected])
+        overlay.show(string.format(c().label or "COMMANDING: %s", string.upper(team)), colors[team])
     else
         overlay.show(nil)
     end
@@ -265,7 +288,7 @@ end
 
 -- When the mission changes, forget the old officers.
 function squads.reset()
-    home, selected, swapped, wheel_team = {}, nil, nil, RED
+    home, selected, swapped, wheel_team, wheel_widget, wheel_shows = {}, nil, nil, RED, nil, nil
 end
 
 return squads

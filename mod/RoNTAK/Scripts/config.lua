@@ -13,7 +13,7 @@ config.tick_ms = 250
 
 -- Folder used to exchange files with the ATAK companion app.
 -- Which RoNTAK this is (shown in the UE4SS log when the mod loads).
-config.build = "2026-11-07 wheel label 4 (native widget), spawn pause"
+config.build = "2026-11-09 four call-in teams, coloured label"
 
 -- nil = the "bridge" folder inside this mod (recommended).
 config.bridge_dir = nil
@@ -33,6 +33,8 @@ config.keys = {
                              -- Not F11: that is the game's fullscreen / borderless toggle.
     request_green  = "PAGE_UP",   -- call in GREEN team (config.reinforcements)
     request_yellow = "PAGE_DOWN", -- call in YELLOW team
+    request_orange = "NUM_SEVEN", -- call in ORANGE team (numpad 7)
+    request_purple = "NUM_EIGHT", -- call in PURPLE team (numpad 8)
     select_team    = "INS",  -- Insert: the command wheel commands stock teams -> GREEN -> YELLOW (squads.lua)
     team_probe     = "END",  -- team analysis for GREEN / YELLOW orders: press, give orders, press again
                              -- -> bridge/team_report.txt (teamprobe.lua)
@@ -154,7 +156,11 @@ config.reinforcements = {
     teams = {
         green = { names = { "Echo", "Foxtrot" }, kits = { 0, 1 }, joins = "blue" },
         yellow = { names = { "Golf", "Hotel" }, kits = { 2, 3 }, joins = "red" },
+        orange = { names = { "India", "Juliet" }, kits = { 0, 2 }, joins = "blue" },
+        purple = { names = { "Kilo", "Lima" }, kits = { 1, 3 }, joins = "red" },
     },
+    -- The order teams come in when selecting with Insert, and on the ATAK screen.
+    order = { "green", "yellow", "orange", "purple" },
     manager = "SWATManager",
     -- "entry": at the mission's entry point (where your squad stood when the
     -- mission began), else near you. "player": always near you.
@@ -202,8 +208,16 @@ config.squads = {
     wheel_class = "SwatCommandWidget",
     wheel_team_property = "ActiveTeamType",
     -- While GREEN / YELLOW is selected, a label on screen says so (config.overlay).
-    label = "WHEEL: %s",
-    colors = { green = { R = 0.18, G = 0.8, B = 0.44 }, yellow = { R = 1, G = 0.9, B = 0 } },
+    -- The on-screen text: always shown during a mission, in the colour of the
+    -- team the command wheel commands.
+    label = "COMMANDING: %s",
+    show_stock_team = true,   -- also when RED / BLUE / GOLD is commanded
+    -- Colour of the on-screen "COMMANDING" text per team.
+    colors = {
+        red = { R = 0.95, G = 0.2, B = 0.2 }, blue = { R = 0.2, G = 0.55, B = 1 }, gold = { R = 1, G = 0.72, B = 0.1 },
+        green = { R = 0.18, G = 0.9, B = 0.44 }, yellow = { R = 1, G = 0.92, B = 0 },
+        orange = { R = 1, G = 0.5, B = 0.05 }, purple = { R = 0.7, G = 0.4, B = 1 },
+    },
     -- Also send the game's player message (Ready or Not didn't show it in testing).
     announce = false,
     announce_seconds = 3,
@@ -215,8 +229,10 @@ config.squads = {
 config.overlay = {
     enabled = true,
     position = { X = 24, Y = 110 },  -- top-left corner of the text, in screen pixels
-    size = { X = 520, Y = 48 },
-    font_size = 22,
+    size = { X = 640, Y = 60 },
+    font_size = 30,
+    outline_size = 3,                -- dark outline around the letters
+    outline_color = { R = 0, G = 0, B = 0, A = 1 },
     z_order = 1200,                  -- above the game's HUD
     widget_class = "/Script/CommonUI.CommonUserWidget",
 }

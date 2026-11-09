@@ -75,12 +75,14 @@ way round.
 
 ## Reinforcements: calling in more teams
 
-Two extra teams can be called in during a mission:
+Four extra teams can be called in during a mission:
 
 | Team | Operators | Gear copied from | Call in |
 | --- | --- | --- | --- |
 | **GREEN** | Echo, Foxtrot | Alpha, Beta | **Call in GREEN** on the ATAK screen, or **Page Up** in game |
 | **YELLOW** | Golf, Hotel | Charlie, Delta | **Call in YELLOW**, or **Page Down** in game |
+| **ORANGE** | India, Juliet | Alpha, Charlie | **Call in ORANGE**, or **numpad 7** in game |
+| **PURPLE** | Kilo, Lima | Beta, Delta | **Call in PURPLE**, or **numpad 8** in game |
 
 Calling in needs the native part of RoNTAK, **RoNTAKNative** (version 0.2 or newer: see `native/README.md`);
 without it the button says so and nothing is spawned.
@@ -93,11 +95,12 @@ UE4SS console also says `reinforcements: …`).
 
 They join the squad's officer list and take orders **as their own teams**:
 
-- **On the ATAK screen:** the **GREEN** and **YELLOW** team buttons appear next to RED / BLUE / GOLD while the
-  team is on scene. Orders sent with them go to that team only.
+- **On the ATAK screen:** a called-in team's button (**GREEN**, **YELLOW**, **ORANGE**, **PURPLE**) appears next
+  to RED / BLUE / GOLD while the team is on scene. Orders sent with them go to that team only.
 - **With the in-game command wheel:** press **Insert** to choose what the wheel commands: the stock teams
-  (as in the plain game) → **GREEN** → **YELLOW** → the stock teams. While GREEN or YELLOW is selected, a line near the top left of the
-  screen says so (**WHEEL: GREEN**, in the team's colour; needs RoNTAKNative 0.3; `config.overlay`). The **Command wheel** buttons on the
+  (as in the plain game) → **GREEN** → **YELLOW** → the stock teams. Near the top left of the screen, **COMMANDING: RED** (or BLUE,
+  GOLD, GREEN...) always shows who the wheel commands, in that team's colour (needs RoNTAKNative 0.3;
+  `config.overlay`, `config.squads.show_stock_team`). The **Command wheel** buttons on the
   ATAK screen show and change the selection too.
   - Stock teams selected: RED and BLUE reach the original squad only; **GOLD reaches everyone**.
   - GREEN selected: RED or BLUE on the wheel (either) commands **Echo and Foxtrot only**; GOLD still reaches

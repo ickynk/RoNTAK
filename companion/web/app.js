@@ -6,11 +6,13 @@
   const DOOR_HIT_PX = 20;
   const DOOR_ROOM_LINK_UNITS = 120;
 
-  const TEAM_COLORS = { red: "#e53935", blue: "#1e88e5", gold: "#f9a825", green: "#2ecc71", yellow: "#ffe600", unknown: "#9e9e9e" };
-  const TEAM_LABEL = { red: "RED", blue: "BLUE", gold: "GOLD", green: "GREEN", yellow: "YELLOW" };
+  const TEAM_COLORS = { red: "#e53935", blue: "#1e88e5", gold: "#f9a825", green: "#2ecc71", yellow: "#ffe600",
+    orange: "#ff8c1a", purple: "#b06cff", unknown: "#9e9e9e" };
+  const TEAM_LABEL = { red: "RED", blue: "BLUE", gold: "GOLD", green: "GREEN", yellow: "YELLOW", orange: "ORANGE", purple: "PURPLE" };
   // Teams called in during a mission (the mod's config.reinforcements).
   // [team, operators, stock team whose orders they also follow for now]
-  const CALL_IN_TEAMS = [["green", "Echo, Foxtrot", "blue"], ["yellow", "Golf, Hotel", "red"]];
+  const CALL_IN_TEAMS = [["green", "Echo, Foxtrot", "blue"], ["yellow", "Golf, Hotel", "red"],
+    ["orange", "India, Juliet", "blue"], ["purple", "Kilo, Lima", "red"]];
   const CALL_IN_SIZE = 2;
 
   const OPTION_CHOICES = {

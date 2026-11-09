@@ -96,13 +96,27 @@ local function build(pc)
         assert(valid(text), "no TextBlock")
         tree.RootWidget = text
         step = "font"
+        -- The text itself stays white; its colour comes from the widget's tint
+        -- (set_color). Written field by field: a whole FSlateColor passed from
+        -- Lua came out black in game.
+        pcall(function()
+            local slate = text.ColorAndOpacity
+            slate.SpecifiedColor.R, slate.SpecifiedColor.G, slate.SpecifiedColor.B, slate.SpecifiedColor.A = 1, 1, 1, 1
+            slate.ColorUseRule = 0
+        end)
         pcall(function()
             local font = text.Font
-            font.Size = c().font_size or 22
+            font.Size = c().font_size or 30
+            local outline = c().outline_color or { R = 0, G = 0, B = 0, A = 1 }
+            font.OutlineSettings.OutlineSize = c().outline_size or 3
+            font.OutlineSettings.OutlineColor.R = outline.R
+            font.OutlineSettings.OutlineColor.G = outline.G
+            font.OutlineSettings.OutlineColor.B = outline.B
+            font.OutlineSettings.OutlineColor.A = outline.A
             text:SetFont(font)
         end)
         pcall(function()
-            text:SetShadowOffset({ X = 2, Y = 2 })
+            text:SetShadowOffset({ X = 3, Y = 3 })
             text:SetShadowColorAndOpacity({ R = 0, G = 0, B = 0, A = 0.9 })
         end)
         step = "place"
@@ -151,13 +165,28 @@ function overlay.show(text, color)
     local ok, err = pcall(function()
         if text ~= "" then
             text_block:SetText(to_text(text))
-            text_block:SetColorAndOpacity({ SpecifiedColor = { R = color.R, G = color.G, B = color.B, A = 1 }, ColorUseRule = 0 })
+            -- White text tinted by the widget: the team's colour.
+            widget:SetColorAndOpacity({ R = color.R, G = color.G, B = color.B, A = 1 })
             widget:SetVisibility(3)
         else
             widget:SetVisibility(1)   -- Collapsed
         end
     end)
     if not ok then return fail("set text", err) end
+    if text ~= "" and not noted.colour then
+        -- What the game stored, for troubleshooting (once).
+        local parts = {}
+        pcall(function()
+            local tint = widget.ColorAndOpacity
+            parts[#parts + 1] = string.format("tint %.2f %.2f %.2f", tint.R, tint.G, tint.B)
+        end)
+        pcall(function()
+            local own = text_block.ColorAndOpacity.SpecifiedColor
+            parts[#parts + 1] = string.format("text %.2f %.2f %.2f", own.R, own.G, own.B)
+        end)
+        pcall(function() parts[#parts + 1] = "outline " .. tostring(text_block.Font.OutlineSettings.OutlineSize) end)
+        note_once("colour", "colours as stored: " .. table.concat(parts, ", "))
+    end
     shown = { text = text, r = color.R, g = color.G, b = color.B }
     if text ~= "" then note("showing \"" .. text .. "\"") end
 end

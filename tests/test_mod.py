@@ -817,6 +817,7 @@ class ModTest(unittest.TestCase):
                 w.SetPositionInViewport = function(self, p) label.position = p end
                 w.AddToViewport = function(self, z) label.z = z end
                 w.SetVisibility = function(self, v) label.visible = v == 3 end
+                w.SetColorAndOpacity = function(self, c) label.color = c end
                 by_path["/Engine/Transient.Widget_" .. label.built] = w
                 return "/Engine/Transient.Widget_" .. label.built
             end
@@ -826,7 +827,6 @@ class ModTest(unittest.TestCase):
                 if class.kind == "TextBlock" then
                     o.SetFont = function() end
                     o.SetText = function(self, t) label.text = t end
-                    o.SetColorAndOpacity = function(self, c) label.color = c.SpecifiedColor end
                 end
                 return o
             end
@@ -852,8 +852,8 @@ class ModTest(unittest.TestCase):
         g.keybinds["INS"]()
         self.assertEqual(self.tick()["selected_team"], "green")
         self.assertEqual(self.lua.eval("teams_now()"), "5,5,1,1,5,5")
-        # On screen: "WHEEL: GREEN", in green, above the game's HUD.
-        self.assertEqual(self.lua.eval("draw_frame()"), "WHEEL: GREEN")
+        # On screen: "COMMANDING: GREEN", in green, above the game's HUD.
+        self.assertEqual(self.lua.eval("draw_frame()"), "COMMANDING: GREEN")
         self.assertGreater(g.label.color.G, g.label.color.R)
         self.assertEqual(g.label.z, 1200)
         # Scrolling the wheel to BLUE: GREEN follows.
@@ -864,12 +864,17 @@ class ModTest(unittest.TestCase):
         g.keybinds["INS"]()
         self.tick()
         self.assertEqual(self.lua.eval("teams_now()"), "5,5,5,5,2,2")
-        self.assertEqual(self.lua.eval("draw_frame()"), "WHEEL: YELLOW")
+        self.assertEqual(self.lua.eval("draw_frame()"), "COMMANDING: YELLOW")
         # Insert again: back to the stock teams.
         g.keybinds["INS"]()
         self.assertNotIn("selected_team", self.tick())
         self.assertEqual(self.lua.eval("teams_now()"), "1,2,5,5,5,5")
-        self.assertIsNone(self.lua.eval("draw_frame()"))  # nothing on screen with the stock teams
+        # Back to the stock teams: the team the wheel shows (BLUE now), in blue.
+        self.assertEqual(self.lua.eval("draw_frame()"), "COMMANDING: BLUE")
+        self.assertGreater(g.label.color.B, g.label.color.R)
+        self.lua.execute("wheel.ActiveTeamType = 5")
+        self.tick()
+        self.assertEqual(self.lua.eval("draw_frame()"), "COMMANDING: GOLD")
         self.assertEqual(g.label.built, 1)  # made once, reused
 
     def test_teams_are_real_while_operators_arrive(self):
@@ -916,6 +921,26 @@ class ModTest(unittest.TestCase):
         self.lua.execute("clock = clock + 5")
         self.tick()
         self.assertEqual(self.lua.eval("teams_now()"), "5,5,1,1,5,5")  # arranged for GREEN again
+
+    def test_four_called_in_teams(self):
+        self.call_in_both_teams()
+        self.send("A", [{"id": 3, "team": "orange", "action": "request_team", "target": {}, "options": {}},
+                        {"id": 4, "team": "purple", "action": "request_team", "target": {}, "options": {}}])
+        for _ in range(6):
+            state = self.tick()
+        names = sorted((o["team"], o["name"]) for o in state["officers"] if o["team"] in ("orange", "purple"))
+        self.assertEqual(names, [("orange", "India"), ("orange", "Juliet"), ("purple", "Kilo"), ("purple", "Lima")])
+        # Insert goes GREEN, YELLOW, ORANGE, PURPLE, then back to the stock teams.
+        seen = []
+        for _ in range(5):
+            self.lua.globals().keybinds["INS"]()
+            seen.append(self.tick().get("selected_team"))
+        self.assertEqual(seen, ["green", "yellow", "orange", "purple", None])
+        # PURPLE selected: only Kilo and Lima take the wheel's team.
+        for _ in range(4):
+            self.lua.globals().keybinds["INS"]()
+        self.tick()
+        self.assertEqual(self.lua.eval("teams_now()"), "5,5,5,5,5,5,5,5,1,1")
 
     def test_selection_skips_teams_not_on_scene(self):
         self.add_reinforcement_world()

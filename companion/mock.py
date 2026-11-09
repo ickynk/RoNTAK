@@ -278,7 +278,8 @@ class MockGame:
             return result
         return self.execute(cmd)
 
-    CALL_INS = {"green": ("Echo", "Foxtrot"), "yellow": ("Golf", "Hotel")}
+    CALL_INS = {"green": ("Echo", "Foxtrot"), "yellow": ("Golf", "Hotel"),
+                "orange": ("India", "Juliet"), "purple": ("Kilo", "Lima")}
 
     def request_team(self, cmd, result):
         """Like the mod's reinforcements: one operator per second next to the player."""
