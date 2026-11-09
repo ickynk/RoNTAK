@@ -2,7 +2,7 @@
 //
 // Gives RoNTAK's Lua mod the few things Lua can't do safely on UE4SS 3.0.1:
 //
-//   RoNTAK_NativeVersion() -> "0.3.0"
+//   RoNTAK_NativeVersion() -> "0.4.0"
 //
 //   RoNTAK_BeginSpawn(context, class, x, y, z, yaw, collision, owner)
 //       -> actor path | nil, error
@@ -29,6 +29,10 @@
 //   RoNTAK_CreateWidget(class, owner) -> widget path | nil, error
 //     UWidgetBlueprintLibrary::Create(owner, class, owner): a widget made the
 //     game's way (a widget constructed from Lua never showed).
+//
+//   RoNTAK_DumpCode(out_dir, seed_filters, classes, max_depth, max_mb)
+//     Read-only: saves the game code around the wheel / squad functions for
+//     reverse-engineering (see dump_code below).
 //
 // Objects are passed as object paths (obj:GetFullName() without the class
 // name), never as raw addresses, and every one is looked up and type-checked
@@ -58,12 +62,26 @@
 #include <Unreal/UScriptStruct.hpp>
 #pragma warning(default : 4005)
 
+#include <algorithm>
+#include <deque>
+#include <filesystem>
+#include <fstream>
+#include <map>
+#include <set>
+#include <sstream>
+#include <unordered_set>
+
+#include <Zydis/Zydis.h>
+
+#define NOMINMAX
+#include <Windows.h>
+
 using namespace RC;
 using namespace RC::Unreal;
 
 namespace
 {
-    constexpr const char* NATIVE_VERSION = "0.3.0";
+    constexpr const char* NATIVE_VERSION = "0.4.0";
     constexpr const RC::CharType* LUA_MOD_NAME = STR("RoNTAK");
 
     // ---- Lua arguments ------------------------------------------------------
@@ -515,6 +533,267 @@ namespace
         return 1;
     }
 
+    // ---- code dump (reverse-engineering the wheel and squad code) -----------
+    //
+    // RoNTAK_DumpCode(out_dir, seed_filters, classes, max_depth, max_mb)
+    //   -> summary | nil, error
+    // Read-only. Writes into out_dir:
+    //   header.txt     image base, size, sections
+    //   functions.txt  every native ReadyOrNot UFunction: rva, name
+    //   vtables.txt    vtables of live objects of the given classes
+    //   index.txt      the dumped functions: rva, size, offset in code.bin, depth, why
+    //   code.bin       their bytes
+    //   pdata.bin      the exception directory (every function's start / end)
+    //   data.txt       rip-relative data the dumped code reads (rva, 64 bytes hex)
+    // Seeds: the native UFunctions whose names contain one of seed_filters
+    // (comma separated, e.g. "SWATManager:,SwatCommandWidget:") and the vtable
+    // entries of live objects of classes (comma separated). From each seed the
+    // direct calls and jumps are followed to max_depth (Zydis decoding, the
+    // function bounds from .pdata), up to max_mb of code.
+
+    struct RuntimeFunction
+    {
+        uint32_t begin;
+        uint32_t end;
+        uint32_t unwind;
+    };
+
+    struct Image
+    {
+        uint8_t* base{};
+        uint32_t size{};
+        uint32_t text_begin{}, text_end{};
+        std::vector<RuntimeFunction> functions{};
+        uint32_t pdata_rva{}, pdata_size{};
+        std::string sections{};
+    };
+
+    auto read_image() -> Image
+    {
+        Image img{};
+        img.base = reinterpret_cast<uint8_t*>(GetModuleHandleW(nullptr));
+        auto* dos = reinterpret_cast<IMAGE_DOS_HEADER*>(img.base);
+        auto* nt = reinterpret_cast<IMAGE_NT_HEADERS64*>(img.base + dos->e_lfanew);
+        img.size = nt->OptionalHeader.SizeOfImage;
+        auto* section = IMAGE_FIRST_SECTION(nt);
+        std::ostringstream out;
+        for (int i = 0; i < nt->FileHeader.NumberOfSections; ++i, ++section)
+        {
+            char name[9]{};
+            std::memcpy(name, section->Name, 8);
+            out << name << " rva=" << std::hex << section->VirtualAddress << " size=" << section->Misc.VirtualSize
+                << " flags=" << section->Characteristics << std::dec << "\n";
+            if ((section->Characteristics & IMAGE_SCN_MEM_EXECUTE) && img.text_end == 0)
+            {
+                img.text_begin = section->VirtualAddress;
+                img.text_end = section->VirtualAddress + section->Misc.VirtualSize;
+            }
+        }
+        img.sections = out.str();
+        auto& dir = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXCEPTION];
+        img.pdata_rva = dir.VirtualAddress;
+        img.pdata_size = dir.Size;
+        auto* entries = reinterpret_cast<RuntimeFunction*>(img.base + dir.VirtualAddress);
+        img.functions.assign(entries, entries + dir.Size / sizeof(RuntimeFunction));
+        std::sort(img.functions.begin(), img.functions.end(), [](auto& a, auto& b) { return a.begin < b.begin; });
+        return img;
+    }
+
+    auto function_at(const Image& img, uint32_t rva) -> const RuntimeFunction*
+    {
+        auto it = std::upper_bound(img.functions.begin(), img.functions.end(), rva,
+                                   [](uint32_t value, const RuntimeFunction& f) { return value < f.begin; });
+        if (it == img.functions.begin()) return nullptr;
+        --it;
+        return rva < it->end ? &*it : nullptr;
+    }
+
+    auto split(const std::string& text) -> std::vector<std::string>
+    {
+        std::vector<std::string> out;
+        std::string part;
+        std::istringstream in(text);
+        while (std::getline(in, part, ','))
+        {
+            if (!part.empty()) out.push_back(part);
+        }
+        return out;
+    }
+
+    auto hex(uint64_t v) -> std::string
+    {
+        std::ostringstream o;
+        o << std::hex << v;
+        return o.str();
+    }
+
+    auto dump_code(const LuaMadeSimple::Lua& lua) -> int
+    {
+        Args args{lua};
+        auto out_dir = args.string("out_dir");
+        auto filters = split(args.string("seed_filters"));
+        auto classes = split(args.string("classes"));
+        int max_depth = static_cast<int>(args.number("max_depth"));
+        double max_mb = args.number("max_mb");
+        if (!args.error.empty()) return fail(lua, args.error);
+
+        Image img = read_image();
+        if (img.functions.empty() || img.text_end == 0) return fail(lua, "could not read the game's image");
+        auto in_text = [&](uint64_t rva) { return rva >= img.text_begin && rva < img.text_end; };
+        auto rva_of = [&](const void* p) -> uint64_t {
+            auto a = reinterpret_cast<const uint8_t*>(p);
+            return (a >= img.base && a < img.base + img.size) ? static_cast<uint64_t>(a - img.base) : 0;
+        };
+
+        std::wstring dir = to_wstring(out_dir);
+        std::error_code mkdir_error;
+        std::filesystem::create_directories(dir, mkdir_error);
+        std::ofstream functions_out(dir + L"\\functions.txt");
+        std::ofstream vtables_out(dir + L"\\vtables.txt");
+        if (!functions_out) return fail(lua, "could not write to " + out_dir);
+
+        std::deque<std::pair<uint32_t, int>> queue;
+        std::map<uint32_t, std::string> why;
+
+        // Native UFunctions: all listed, the filtered ones seeded.
+        size_t ufunctions = 0;
+        UObjectGlobals::ForEachUObject([&](void* raw, int32_t, int32_t) {
+            auto* object = static_cast<UObject*>(raw);
+            if (!object || !object->IsA<UFunction>()) return LoopAction::Continue;
+            auto* function = static_cast<UFunction*>(object);
+            if (!function->HasAnyFunctionFlags(FUNC_Native)) return LoopAction::Continue;
+            auto name = to_string(function->GetFullName());
+            if (name.find("/Script/ReadyOrNot.") == std::string::npos) return LoopAction::Continue;
+            uint64_t rva = rva_of(reinterpret_cast<const void*>(function->GetFunc()));
+            if (!rva) return LoopAction::Continue;
+            functions_out << hex(rva) << " " << name << "\n";
+            ++ufunctions;
+            for (auto& f : filters)
+            {
+                if (name.find(f) != std::string::npos)
+                {
+                    queue.emplace_back(static_cast<uint32_t>(rva), 0);
+                    why.emplace(static_cast<uint32_t>(rva), "ufunction " + name);
+                    break;
+                }
+            }
+            return LoopAction::Continue;
+        });
+
+        // Vtables of live objects (virtual calls can't be followed otherwise).
+        for (auto& class_name : classes)
+        {
+            std::vector<UObject*> found;
+            UObjectGlobals::FindAllOf(to_wstring(class_name), found);
+            if (found.empty())
+            {
+                vtables_out << class_name << ": no live object\n";
+                continue;
+            }
+            UObject* object = found.front();
+            auto vtable = *reinterpret_cast<uintptr_t**>(object);
+            vtables_out << class_name << " " << to_string(object->GetFullName()) << " vtable=" << hex(rva_of(vtable)) << "\n";
+            if (!rva_of(vtable)) continue;
+            for (int i = 0; i < 512; ++i)
+            {
+                uint64_t entry = rva_of(reinterpret_cast<const void*>(vtable[i]));
+                if (!entry || !in_text(entry)) break;
+                vtables_out << "  [" << i << "] " << hex(entry) << "\n";
+                queue.emplace_back(static_cast<uint32_t>(entry), 1);
+                why.emplace(static_cast<uint32_t>(entry), class_name + " vtable[" + std::to_string(i) + "]");
+            }
+        }
+
+        ZydisDecoder decoder{};
+        ZydisDecoderInit(&decoder, ZYDIS_MACHINE_MODE_LONG_64, ZYDIS_STACK_WIDTH_64);
+
+        std::ofstream code_out(dir + L"\\code.bin", std::ios::binary);
+        std::ofstream index_out(dir + L"\\index.txt");
+        std::ofstream data_out(dir + L"\\data.txt");
+        std::set<uint32_t> dumped;
+        std::set<uint32_t> data_seen;
+        uint64_t written = 0;
+        const uint64_t limit = static_cast<uint64_t>(max_mb * 1024 * 1024);
+        size_t count = 0;
+
+        while (!queue.empty() && written < limit)
+        {
+            auto [rva, depth] = queue.front();
+            queue.pop_front();
+            const RuntimeFunction* f = function_at(img, rva);
+            uint32_t begin = f ? f->begin : rva;
+            uint32_t end = f ? f->end : rva + 256;
+            if (!in_text(begin) || dumped.count(begin)) continue;
+            dumped.insert(begin);
+            uint32_t size = std::min<uint32_t>(end - begin, 256 * 1024);
+            code_out.write(reinterpret_cast<const char*>(img.base + begin), size);
+            index_out << hex(begin) << " " << hex(size) << " " << hex(written) << " " << depth << " "
+                      << (why.count(rva) ? why[rva] : "call") << "\n";
+            written += size;
+            ++count;
+
+            // Follow direct calls / jumps; note rip-relative data.
+            ZydisDecodedInstruction instruction{};
+            ZydisDecodedOperand operands[ZYDIS_MAX_OPERAND_COUNT]{};
+            uint32_t offset = 0;
+            while (offset < size)
+            {
+                const uint8_t* at = img.base + begin + offset;
+                if (!ZYAN_SUCCESS(ZydisDecoderDecodeFull(&decoder, at, size - offset, &instruction, operands)))
+                {
+                    offset += 1;
+                    continue;
+                }
+                uint64_t runtime = reinterpret_cast<uint64_t>(at);
+                for (int i = 0; i < instruction.operand_count_visible; ++i)
+                {
+                    auto& op = operands[i];
+                    bool branch = instruction.meta.category == ZYDIS_CATEGORY_CALL ||
+                                  instruction.meta.category == ZYDIS_CATEGORY_UNCOND_BR;
+                    bool relative_imm = op.type == ZYDIS_OPERAND_TYPE_IMMEDIATE && op.imm.is_relative;
+                    bool rip_mem = op.type == ZYDIS_OPERAND_TYPE_MEMORY && op.mem.base == ZYDIS_REGISTER_RIP;
+                    if (!relative_imm && !rip_mem) continue;
+                    ZyanU64 target{};
+                    if (!ZYAN_SUCCESS(ZydisCalcAbsoluteAddress(&instruction, &op, runtime, &target))) continue;
+                    uint64_t target_rva = rva_of(reinterpret_cast<const void*>(target));
+                    if (!target_rva) continue;
+                    if (relative_imm && branch && in_text(target_rva))
+                    {
+                        if (depth < max_depth) queue.emplace_back(static_cast<uint32_t>(target_rva), depth + 1);
+                    }
+                    else if (rip_mem && !in_text(target_rva) && data_seen.size() < 50000 &&
+                             data_seen.insert(static_cast<uint32_t>(target_rva)).second &&
+                             target_rva + 64 <= img.size)
+                    {
+                        data_out << hex(target_rva) << " ";
+                        for (int b = 0; b < 64; ++b)
+                        {
+                            static const char* digits = "0123456789abcdef";
+                            uint8_t v = img.base[target_rva + b];
+                            data_out << digits[v >> 4] << digits[v & 15];
+                        }
+                        data_out << "\n";
+                    }
+                }
+                offset += instruction.length;
+            }
+        }
+
+        std::ofstream pdata_out(dir + L"\\pdata.bin", std::ios::binary);
+        pdata_out.write(reinterpret_cast<const char*>(img.base + img.pdata_rva), img.pdata_size);
+        std::ofstream header_out(dir + L"\\header.txt");
+        header_out << "base=" << hex(reinterpret_cast<uint64_t>(img.base)) << " size=" << hex(img.size)
+                   << " text=" << hex(img.text_begin) << "-" << hex(img.text_end)
+                   << " pdata=" << hex(img.pdata_rva) << "+" << hex(img.pdata_size) << "\n"
+                   << img.sections;
+
+        std::ostringstream summary;
+        summary << count << " functions (" << written / 1024 << " KB), " << ufunctions << " UFunctions listed, "
+                << data_seen.size() << " data references" << (queue.empty() ? "" : " (size limit reached)");
+        lua.set_string(summary.str());
+        return 1;
+    }
+
     auto register_functions(const LuaMadeSimple::Lua& lua) -> void
     {
         lua.register_function("RoNTAK_NativeVersion", &native_version);
@@ -523,6 +802,7 @@ namespace
         lua.register_function("RoNTAK_AppendObject", &append_object);
         lua.register_function("RoNTAK_ArrayCount", &array_count);
         lua.register_function("RoNTAK_CreateWidget", &create_widget);
+        lua.register_function("RoNTAK_DumpCode", &dump_code);
     }
 } // namespace
 
@@ -532,10 +812,10 @@ class RoNTAKNative : public CppUserModBase
     RoNTAKNative() : CppUserModBase()
     {
         ModName = STR("RoNTAKNative");
-        ModVersion = STR("0.3.0");
+        ModVersion = STR("0.4.0");
         ModDescription = STR("Native helpers for the RoNTAK mod");
         ModAuthors = STR("RoNTAK");
-        Output::send<LogLevel::Verbose>(STR("[RoNTAKNative] loaded, version 0.3.0\n"));
+        Output::send<LogLevel::Verbose>(STR("[RoNTAKNative] loaded, version 0.4.0\n"));
     }
 
     ~RoNTAKNative() override = default;

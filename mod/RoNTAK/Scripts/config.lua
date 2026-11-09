@@ -13,7 +13,7 @@ config.tick_ms = 250
 
 -- Folder used to exchange files with the ATAK companion app.
 -- Which RoNTAK this is (shown in the UE4SS log when the mod loads).
-config.build = "2026-11-09 command groups RED/BLUE, GREEN/YELLOW, GOLD all"
+config.build = "2026-11-09 code dump"
 
 -- nil = the "bridge" folder inside this mod (recommended).
 config.bridge_dir = nil
@@ -34,6 +34,7 @@ config.keys = {
     request_green  = "PAGE_UP",   -- call in GREEN team (config.reinforcements)
     request_yellow = "PAGE_DOWN", -- call in YELLOW team
     select_team    = "INS",  -- Insert: the command wheel commands RED / BLUE <-> GREEN / YELLOW (squads.lua)
+    code_dump      = "DEL",  -- Delete: save the game's command code for reverse-engineering (RoNTAKNative 0.4)
     team_probe     = "END",  -- team analysis for GREEN / YELLOW orders: press, give orders, press again
                              -- -> bridge/team_report.txt (teamprobe.lua)
 }
@@ -236,6 +237,22 @@ config.overlay = {
     outline_color = { R = 0, G = 0, B = 0, A = 1 },
     z_order = 1200,                  -- above the game's HUD
     widget_class = "/Script/CommonUI.CommonUserWidget",
+}
+
+-- Code dump (Delete key, discovery.dump_code): read-only. The game's code of
+-- these UFunctions (names containing one of seed_filters) and of the live
+-- objects' vtables (classes), with the calls they make to max_depth.
+config.code_dump = {
+    folder = "code_dump",
+    seed_filters = { "SWATManager:", "SwatCommandWidget:", "SwatCommandEntryWidget:", "CommandWheel:",
+                     "ReadyOrNotCommandFunctionLibrary:", "ActivityData:OnSwatCommand", "PlayerCharacter:",
+                     "ReadyOrNotPlayerController:", "SwatTeamStatusWidget:", "TeamStatusWidget:",
+                     "HumanCharacterHUD_V2:", "ConsoleHotkeys:", "CyberneticController:GetTeam",
+                     "ReadyOrNotCharacter:GetTeam", "ReadyOrNotCharacter:IsOnSameTeam", "TeamBaseActivity:" },
+    classes = { "SWATManager", "SwatCommandWidget", "CommandWheel", "ReadyOrNotPlayerController",
+                "PlayerCharacter", "HumanCharacterHUD_V2", "SwatAIController", "CyberneticController" },
+    max_depth = 3,
+    max_mb = 24,
 }
 
 -- Team analysis (End key, teamprobe.lua): read-only.

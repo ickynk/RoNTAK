@@ -166,6 +166,7 @@ bind(config.keys.sniff_toggle, discovery.toggle_sniff)
 bind(config.keys.test_order, test_order)
 bind(config.keys.floor_capture, floorplan.capture)
 bind(config.keys.team_probe, teamprobe.toggle)
+bind(config.keys.code_dump, discovery.dump_code)
 bind(config.keys.select_team, squads.cycle)
 for team in pairs((config.reinforcements or {}).teams or {}) do
     bind(config.keys["request_" .. team], function() remember(reinforcements.request_from_key(team)) end)

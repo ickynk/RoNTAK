@@ -156,4 +156,27 @@ function discovery.toggle_sniff()
     log.info(string.format("sniffer started on %d functions; give orders in game, press F9 again to stop", #hooks))
 end
 
+-- Code dump (config.keys.code_dump): saves the game's code around the wheel
+-- and squad functions with RoNTAKNative 0.4+, for reverse-engineering the
+-- command wheel (GREEN / YELLOW on the wheel). Read-only.
+function discovery.dump_code()
+    local fn = rawget(_G, "RoNTAK_DumpCode")
+    if type(fn) ~= "function" then
+        log.info("code dump: needs RoNTAKNative 0.4 or newer")
+        return
+    end
+    local c = config.code_dump or {}
+    local dir = bridge.dir .. "\\" .. (c.folder or "code_dump")
+    log.info("code dump: saving the game's command code to " .. dir .. " (the game may freeze for a few seconds)...")
+    local ok, summary, err = pcall(fn, dir, table.concat(c.seed_filters or {}, ","), table.concat(c.classes or {}, ","),
+        c.max_depth or 3, c.max_mb or 24)
+    if not ok then
+        log.info("code dump failed: " .. tostring(summary))
+    elseif not summary then
+        log.info("code dump failed: " .. tostring(err))
+    else
+        log.info("code dump: " .. tostring(summary) .. ". Zip the folder " .. dir .. " and send it.")
+    end
+end
+
 return discovery
