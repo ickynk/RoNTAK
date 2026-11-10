@@ -43,6 +43,11 @@
 // name), never as raw addresses, and every one is looked up and type-checked
 // here. Functions are registered into every Lua state of the "RoNTAK" Lua mod.
 
+// PolyHook (and its asmjit) first: UE4SS's headers define short macros
+// (TEXT-style string helpers) that break asmjit's headers when included later.
+#define NOMINMAX
+#include <polyhook2/Detour/x64Detour.hpp>
+
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -78,9 +83,7 @@
 #include <unordered_set>
 
 #include <Zydis/Zydis.h>
-#include <polyhook2/Detour/x64Detour.hpp>
 
-#define NOMINMAX
 #include <Windows.h>
 
 using namespace RC;
