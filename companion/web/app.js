@@ -6,8 +6,12 @@
   const DOOR_HIT_PX = 20;
   const DOOR_ROOM_LINK_UNITS = 120;
 
-  const TEAM_COLORS = { red: "#e53935", blue: "#1e88e5", gold: "#f9a825", green: "#2ecc71", yellow: "#ffe600", unknown: "#9e9e9e" };
-  const TEAM_LABEL = { red: "RED", blue: "BLUE", gold: "GOLD", green: "GREEN", yellow: "YELLOW" };
+  const TEAM_COLORS = { red: "#e53935", blue: "#1e88e5", gold: "#f9a825", green: "#2ecc71", yellow: "#ffe600",
+    red_blue: "#b06cff", green_yellow: "#b8f02a", orange: "#ff8c1a", purple: "#b06cff", unknown: "#9e9e9e" };
+  const TEAM_LABEL = { red: "RED", blue: "BLUE", gold: "FULL ELEMENT", green: "GREEN", yellow: "YELLOW",
+    red_blue: "RED+BLUE", green_yellow: "GREEN+YELLOW", orange: "ORANGE", purple: "PURPLE" };
+  // Order teams made of other teams (gold: everyone).
+  const TEAM_GROUPS = { red_blue: ["red", "blue"], green_yellow: ["green", "yellow"] };
   // Teams called in during a mission (the mod's config.reinforcements).
   // [team, operators, stock team whose orders they also follow for now]
   const CALL_IN_TEAMS = [["green", "Echo, Foxtrot", "blue"], ["yellow", "Golf, Hotel", "red"]];
@@ -216,7 +220,7 @@
 
   function teamMembers(team) {
     const officers = (app.state && app.state.officers) || [];
-    return officers.filter((o) => team === "gold" || o.team === team);
+    return officers.filter((o) => team === "gold" || o.team === team || (TEAM_GROUPS[team] || []).includes(o.team));
   }
 
   function setHint(text) {
@@ -1958,8 +1962,8 @@
     const s = app.state || {};
     const live = Boolean(s.connected) && viewingLiveLevel();
     const results = s.results || [];
-    const key = JSON.stringify([live, (s.officers || []).map((o) => [o.team, o.status]),
-      results.filter((r) => r.action === "request_team").slice(0, 4)]);
+    const key = JSON.stringify([live, (s.officers || []).map((o) => [o.team, o.status]), s.selected_team || "stock", !!s.squad_routing,
+      app.team, results.filter((r) => r.action === "request_team").slice(0, 4)]);
     if (box.dataset.key === key) return;
     box.dataset.key = key;
     box.innerHTML = "";
@@ -1974,11 +1978,49 @@
         : alive >= CALL_IN_SIZE ? `${TEAM_LABEL[team]} on scene`
         : `Call in ${TEAM_LABEL[team]} · ${names}`;
       b.title = last && last.status === "error" ? `Last call-in failed: ${last.message}`
-        : `Spawn ${names} next to you. For now they also take ${TEAM_LABEL[joins]}'s orders.`;
+        : `Spawn ${names} at the entry point. Order them with the ${TEAM_LABEL[team]} team button, or select them for the in-game command wheel (Insert key).`;
       b.disabled = !live || coming || alive >= CALL_IN_SIZE;
       b.onclick = () => api("POST", "/api/command", { team, action: "request_team" })
         .catch((e) => alert("Could not call in the team: " + e.message));
       box.appendChild(b);
+    }
+    // Team buttons for the called-in teams, while they are on scene.
+    let anyOnScene = false;
+    for (const [team] of CALL_IN_TEAMS) {
+      const alive = (s.officers || []).some((o) => o.team === team && o.status !== "dead");
+      anyOnScene = anyOnScene || alive;
+      const btn = document.querySelector(`.team[data-team="${team}"]`);
+      if (btn) btn.hidden = !alive;
+      if (!alive && app.team === team) selectTeam("red");
+    }
+    // RED+BLUE and GREEN+YELLOW: separate squads exist only with native squad
+    // routing, and only matter while a called-in team is up.
+    const groupsOn = Boolean(s.squad_routing) && anyOnScene;
+    for (const team of ["red_blue", "green_yellow"]) {
+      const btn = document.querySelector(`.team[data-team="${team}"]`);
+      if (btn) btn.hidden = !groupsOn;
+      if (!groupsOn && app.team === team) selectTeam("gold");
+    }
+    // Which officers the in-game command wheel commands.
+    const wheel = $("wheel-team");
+    wheel.hidden = !live || !anyOnScene;
+    wheel.innerHTML = "<span>Command wheel:</span>";
+    wheel.title = s.squad_routing
+      ? "Which squad the in-game command wheel commands (Insert key or the wheel's team scroll in game): its GOLD commands the whole group."
+      : "Which officers the in-game command wheel's RED and BLUE command (Insert key in game). GOLD always commands everyone.";
+    const selected = s.selected_team || "stock";
+    const groups = [["stock", "RED / BLUE", ["red", "blue"]],
+      ["called_in", CALL_IN_TEAMS.map(([t]) => TEAM_LABEL[t]).join(" / "), CALL_IN_TEAMS.map(([t]) => t)]];
+    // With native squad routing the wheel can also command everyone's teams together.
+    if (s.squad_routing) groups.push(["full", "FULL ELEMENT", ["red", "blue", ...CALL_IN_TEAMS.map(([t]) => t)]]);
+    for (const [team, label, colors] of groups) {
+      const b = document.createElement("button");
+      b.textContent = label;
+      b.className = selected === team ? "active" : "";
+      b.style.borderImage = `linear-gradient(90deg, ${colors.map((c) => TEAM_COLORS[c]).join(", ")}) 1`;
+      b.onclick = () => api("POST", "/api/command", { team, action: "select_team" })
+        .catch((e) => alert("Could not select the team: " + e.message));
+      wheel.appendChild(b);
     }
   }
   $("clear-held").onclick = () => sendControl("clear_held");
@@ -2004,6 +2046,11 @@
     renderCalibration();
     redraw();
   };
+
+  function selectTeam(team) {
+    app.team = team;
+    document.querySelectorAll(".team").forEach((b) => b.classList.toggle("active", b.dataset.team === team));
+  }
 
   $("teams").addEventListener("click", (e) => {
     const team = e.target.dataset && e.target.dataset.team;

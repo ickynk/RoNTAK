@@ -80,14 +80,31 @@ button.danger { color: var(--err); }
   border-left: 1px solid var(--line);
 }
 
-.teams { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
-.team { font-weight: 800; letter-spacing: 1px; padding: 10px 0; border-width: 2px; }
+.teams { display: flex; flex-wrap: wrap; gap: 6px; }
+.teams .team { flex: 1 1 56px; }
+.teams .team[hidden] { display: none; }
+.team { font-weight: 800; letter-spacing: 0; font-size: 13px; padding: 10px 0; border-width: 2px; min-width: 0; overflow: hidden; }
 .team.red { color: var(--red); }
 .team.blue { color: var(--blue); }
 .team.gold { color: var(--gold); }
 .team.active.red { background: var(--red); color: #fff; border-color: var(--red); }
 .team.active.blue { background: var(--blue); color: #fff; border-color: var(--blue); }
 .team.active.gold { background: var(--gold); color: #111; border-color: var(--gold); }
+.team.green { color: #2ecc71; }
+.team.yellow { color: #ffe600; }
+.team.active.green { background: #2ecc71; color: #111; border-color: #2ecc71; }
+.team.active.yellow { background: #ffe600; color: #111; border-color: #ffe600; }
+.team.red_blue { color: #b06cff; }
+.team.green_yellow { color: #b8f02a; }
+.team.active.red_blue { background: linear-gradient(90deg, var(--red), var(--blue)); color: #fff; border-color: #b06cff; }
+.team.active.green_yellow { background: linear-gradient(90deg, #2ecc71, #ffe600); color: #111; border-color: #b8f02a; }
+.team.orange { color: #ff8c1a; }
+.team.purple { color: #b06cff; }
+.team.active.orange { background: #ff8c1a; color: #111; border-color: #ff8c1a; }
+.team.active.purple { background: #b06cff; color: #111; border-color: #b06cff; }
+.wheel-team { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-top: 6px; font-size: 13px; }
+.wheel-team button { padding: 4px 8px; }
+.wheel-team button.active { font-weight: 800; border-width: 2px; }
 
 .card { margin-top: 10px; padding: 10px; background: var(--card); border-radius: 8px; }
 .label, .section-title { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 1px; }

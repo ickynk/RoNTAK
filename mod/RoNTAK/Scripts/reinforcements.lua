@@ -32,6 +32,7 @@
 local config = require("config")
 local game = require("game")
 local log = require("log")
+local squads = require("squads")
 
 local reinforcements = {}
 
@@ -102,16 +103,39 @@ local function on_nav(nav, world_ctx, x, y, z)
     return nil
 end
 
+-- Without the navigation check: a spot is fine if nothing blocks the way
+-- from the centre (a standing officer's centre) and there is floor under it.
+-- Returns the floor point, or nil and why ("blocked", "no_floor").
+local function traced_spot(system, pawn, centre, x, y)
+    if not valid(system) then return nil, "no_floor" end
+    local function trace(from, to)
+        local hit = {}
+        local ok, blocked = pcall(function()
+            return system:LineTraceSingle(pawn, from, to, 0, false, {}, 0, hit, true,
+                { R = 0, G = 0, B = 0, A = 0 }, { R = 0, G = 0, B = 0, A = 0 }, 0.0)
+        end)
+        if not ok or not blocked then return nil end
+        local got, z = pcall(function() return hit.Location.Z end)
+        return got and type(z) == "number" and z or false
+    end
+    local at = { X = x, Y = y, Z = centre.z }
+    if trace({ X = centre.x, Y = centre.y, Z = centre.z }, at) ~= nil then return nil, "blocked" end
+    local floor = trace(at, { X = x, Y = y, Z = centre.z - 250 })
+    if not floor then return nil, "no_floor" end
+    return { x = x, y = y, z = floor }
+end
+
 -- A free spot to spawn at: { x, y, z, centre } where centre means z is a
 -- standing officer's centre (an entry position), else the floor. Tries the
 -- entry positions themselves, then around them, then around the player.
 -- Returns nil and the reasons spots were turned down.
 local function spawn_spot(pawn, world_ctx, half)
     local nav = StaticFindObject and StaticFindObject("/Script/NavigationSystem.Default__NavigationSystemV1")
+    local system = StaticFindObject and StaticFindObject("/Script/Engine.Default__KismetSystemLibrary")
     local here = game.location(pawn)
     local taken = {}
     for _, o in ipairs(game.officer_actors()) do taken[#taken + 1] = o.pos end
-    local rejected = { occupied = 0, off_nav = 0, other_floor = 0 }
+    local rejected = { occupied = 0, off_nav = 0, other_floor = 0, blocked = 0, no_floor = 0 }
     local function free(p)
         -- Officers stood at the entry positions side by side, so those need less room.
         local clearance = p.centre and (c().entry_clearance_cm or 50) or (c().clearance_cm or 90)
@@ -133,7 +157,11 @@ local function spawn_spot(pawn, world_ctx, half)
                 spot = on_nav(nav, world_ctx, centre.x + off[1], centre.y + off[2], centre.z)
                 if not spot then
                     rejected.off_nav = rejected.off_nav + 1
-                elseif math.abs(spot.z + half - centre.z) > 150 then
+                    local why
+                    spot, why = traced_spot(system, pawn, centre, centre.x + off[1], centre.y + off[2])
+                    if not spot then rejected[why] = rejected[why] + 1 end
+                end
+                if spot and math.abs(spot.z + half - centre.z) > 150 then
                     rejected.other_floor = rejected.other_floor + 1
                     spot = nil
                 end
@@ -191,20 +219,30 @@ local COLLISION_ALWAYS, COLLISION_ADJUST = 1, 2
 
 -- Starts spawning an actor of class at a spot (deferred: not built yet).
 -- Returns the actor, or nil and why.
+-- config.reinforcements.trace_spawns: log every spawn before and after it
+-- (finding the officer-spawn crash; the log line before a crash names it).
+local function trace(line)
+    if c().trace_spawns then note("trace: " .. line) end
+end
+
 local function begin_spawn(fns, context, class, at, yaw, collision, owner)
+    trace("spawning " .. tostring(path_of(class)))
     local ok, path, err = pcall(fns.RoNTAK_BeginSpawn, path_of(context) or "", path_of(class) or "",
         at.X, at.Y, at.Z, yaw or 0, collision, owner and path_of(owner) or "")
     if not ok then return nil, tostring(path) end
     if not path then return nil, tostring(err) end
     local actor = find(path)
     if not actor then return nil, "spawned " .. tostring(path) .. " but could not find it" end
+    trace("spawned " .. tostring(path))
     return actor
 end
 
 local function finish_spawn(fns, actor, at, yaw)
+    trace("finishing " .. tostring(path_of(actor)))
     local ok, done, err = pcall(fns.RoNTAK_FinishSpawn, path_of(actor) or "", at.X, at.Y, at.Z, yaw or 0)
     if not ok then return false, tostring(done) end
     if not done then return false, tostring(err) end
+    trace("finished")
     return true
 end
 
@@ -269,13 +307,17 @@ function STEPS.spawn(job)
     local stock = stock_by_slot()
     local donor = stock[job.kit] or stock[0] or stock[1] or stock[2] or stock[3]
     check(donor, "no ready stock officer to copy")
+    if c().trace_spawns then
+        trace(string.format("%s from %s (slot %s, team %s); %s", job.name, game.object_name(donor),
+            tostring(slot_of(donor)), tostring(donor.DefaultTeam), squads.describe()))
+    end
     local half = 90
     pcall(function() half = donor.CapsuleComponent:GetScaledCapsuleHalfHeight() end)
     local spot, rejected = spawn_spot(pawn, donor, half)
     if not spot then
-        error(string.format("no free spot at the entry point or near you (%s; entry point %s; spots taken %d, off the nav mesh %d, other floor %d)",
+        error(string.format("no free spot at the entry point or near you (%s; entry point %s; spots taken %d, off the nav mesh %d, other floor %d, wall in the way %d, no floor %d)",
             entry.spots and "entry known" or "entry not recorded", entry.spots and #entry.spots .. " positions" or "-",
-            rejected.occupied, rejected.off_nav, rejected.other_floor), 0)
+            rejected.occupied, rejected.off_nav, rejected.other_floor, rejected.blocked, rejected.no_floor), 0)
     end
     -- An entry position is a standing officer's centre; a nav-mesh point is the floor.
     local z = spot.centre and spot.z + 10 or spot.z + half + 10
@@ -390,7 +432,12 @@ function STEPS.register(job)
     check(valid(job.op), "operator gone")
     local manager = game.resolve_target(c().manager or "SWATManager")
     check(valid(manager), "no squad manager")
-    if c().add_to_squad_list == false then
+    if squads.native_ready() then
+        -- Their own squad manager (squads.lua, native squad routing).
+        local count, err = squads.native_register(job.op)
+        check(count, "not added to the called-in teams' squad manager: " .. tostring(err))
+        step_note(job, string.format("added to the called-in teams' squad manager (%d officers)", count))
+    elseif c().add_to_squad_list == false then
         step_note(job, "not added to the squad list (config.reinforcements.add_to_squad_list = false)")
     else
         local count, err = append(job.fns, manager, "SwatAI", job.op)
@@ -399,6 +446,12 @@ function STEPS.register(job)
     end
     game.forget_officers()
     return "done"
+end
+
+-- The called-in team an actor (by name) belongs to, or nil.
+function reinforcements.team_of(actor_name)
+    local m = members[actor_name]
+    return m and m.team or nil
 end
 
 -- Starts calling in a team. Returns a result for RoNTAK's order list.
@@ -412,6 +465,21 @@ function reinforcements.request(cmd)
     end
     if not game.player_pawn() then
         result.message = "no mission running"
+        return result
+    end
+    -- The game's squad has 8 places (squad slots Alpha..India): a 9th
+    -- officer in its list crashed the game (Nov 2026). Room for the whole team?
+    local listed = squads.callin_list_count()
+    local queued_total = #queue
+    local wanted_now = 0
+    for _, call_sign in ipairs(def.names or {}) do
+        if not on_scene(team, call_sign) then wanted_now = wanted_now + 1 end
+    end
+    local room = (c().max_squad or 8) - listed - queued_total
+    if wanted_now > 0 and room < wanted_now then
+        result.message = string.format("the squad is full (%d of %d places taken): the game allows %d officers",
+            listed + queued_total, c().max_squad or 8, c().max_squad or 8)
+        note(string.format("%s not called in: %s", string.upper(team), result.message))
         return result
     end
     if not native() then
@@ -441,13 +509,21 @@ function reinforcements.request(cmd)
 end
 
 -- Sets up the next operator, completely; called once per mod tick.
+local next_spawn_at = nil   -- os.clock(): the next operator waits for this
+
 function reinforcements.tick()
     record_entry()
     local job = queue[1]
     if not job then return end
+    -- A pause between operators (config.reinforcements.spawn_gap_s): the game
+    -- finishes setting up the last one (animation, AI) before the next spawns.
+    if next_spawn_at and os.clock() < next_spawn_at then return end
+    next_spawn_at = os.clock() + (c().spawn_gap_s or 0)
     job.step = job.step or "spawn"
     job.made = job.made or {}
     job.fns = job.fns or native()
+    -- Everyone on their real team while the game takes the new operator in.
+    squads.pause()
     local result = results[job.id]
     local ok, next_step = true, nil
     if not job.fns then

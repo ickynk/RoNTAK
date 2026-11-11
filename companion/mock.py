@@ -154,8 +154,10 @@ class MockGame:
         self.last_id = 0
         self.seq = 0
 
+    GROUPS = {"red_blue": ("red", "blue"), "green_yellow": ("green", "yellow")}
+
     def team(self, team):
-        return [o for o in self.officers if team == "gold" or o.team == team]
+        return [o for o in self.officers if team == "gold" or o.team == team or o.team in self.GROUPS.get(team, ())]
 
     def update_player(self, dt):
         self.player_t += dt * 0.15
@@ -255,6 +257,10 @@ class MockGame:
         result = {"id": cmd["id"], "team": cmd["team"], "action": cmd["action"]}
         if cmd["action"] == "request_team":
             return self.request_team(cmd, result)
+        if cmd["action"] == "select_team":
+            team = cmd["team"]
+            self.selected_team = None if team == "stock" else ("full" if team == "full" else "called_in")
+            return dict(result, status="ok")
         if cmd["action"] == "go":
             held, self.held = self.held, {}
             for entry in held.values():
@@ -266,10 +272,16 @@ class MockGame:
             self.held = {}
             return dict(result, status="ok")
         if cmd.get("hold"):
-            if cmd["team"] == "gold":
+            team = cmd["team"]
+            if team == "gold":
                 self.held = {}
             else:
                 self.held.pop("gold", None)
+                for part in self.GROUPS.get(team, ()):
+                    self.held.pop(part, None)
+                for whole, parts in self.GROUPS.items():
+                    if team in parts:
+                        self.held.pop(whole, None)
             result["status"] = "held"
             self.held[cmd["team"]] = {"cmd": cmd, "result": result}
             return result
@@ -401,6 +413,7 @@ class MockGame:
             "cameras": cameras,
             "held": [{"id": e["cmd"]["id"], "team": t, "action": e["cmd"]["action"]} for t, e in self.held.items()],
             "configured_actions": sorted(set(ALL_ACTIONS) - UNCONFIGURED),
+            "selected_team": getattr(self, "selected_team", None),
         }
         tmp = bridge / "state.json.tmp"
         tmp.write_text(json.dumps(state), encoding="utf-8")

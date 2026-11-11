@@ -137,7 +137,7 @@ objects = {
 
 function FindAllOf(class) return objects[class] end
 function FindFirstOf(class) return objects[class] and objects[class][1] end
-Key = { F5 = "F5", F6 = "F6", F7 = "F7", F8 = "F8", F9 = "F9", F10 = "F10", HOME = "HOME" }
+Key = { F5 = "F5", F6 = "F6", F7 = "F7", F8 = "F8", F9 = "F9", F10 = "F10", HOME = "HOME", END = "END", INS = "INS" }
 keybinds = {}
 function RegisterKeyBind(key, fn) keybinds[key] = fn end
 function ExecuteInGameThread(fn) fn() end
@@ -576,6 +576,8 @@ class ModTest(unittest.TestCase):
         a navigation mesh, and stock officers with gear."""
         self.lua.execute(f"""
             equip_ok = {str(equip_ok).lower()}
+            require("config").squads.pause_after_spawn_s = 0  -- tests below look at teams right after a call-in
+            require("config").reinforcements.spawn_gap_s = 0  -- one operator per tick
             by_path = {{}}
             local function named(o, path)  -- objects are passed to the native functions by path
                 o.GetFullName = function() return "Class " .. path end
@@ -702,7 +704,7 @@ class ModTest(unittest.TestCase):
         # They keep their gear source's squad slot (the game's tables only have 0-3; 4-7 crashed it).
         self.assertEqual({o.SquadPosition for o in new}, {0})  # Alpha's gear (Beta isn't in this squad)
         self.assertEqual({o.finished_with_slot for o in new}, {0})  # set before the game built it
-        self.assertEqual({o.DefaultTeam for o in new}, {2})  # follows BLUE orders until the teams get their own
+        self.assertEqual({o.DefaultTeam for o in new}, {5})  # rest on GOLD: only GOLD or GREEN orders reach them (squads.lua)
         for o in new:
             items = [o.InventoryComp.InventoryItems[i] for i in (1, 2)]
             self.assertIsNone(o.InventoryComp.InventoryItems[3])  # rifle and flashbang copied, nothing else
@@ -764,6 +766,348 @@ class ModTest(unittest.TestCase):
             state = self.tick()
         self.assertEqual(next(r for r in state["results"] if r["id"] == 2)["status"], "ok")
         self.assertEqual(self.spawned_positions(), [(100, 200), (150, 250)])
+
+    def test_call_in_without_navigation_uses_traces(self):
+        """On Datacenter every nav check failed: spots next to the entry point are checked with traces."""
+        self.add_reinforcement_world()
+        self.lua.execute(r"""
+            traces = 0
+            local system = { IsValid = function() return true end }
+            system.LineTraceSingle = function(self, pawn, from, to, channel, complex, ignore, draw, hit)
+                traces = traces + 1
+                if to.Z < from.Z - 100 then  -- looking down: the floor 100 below an officer's centre
+                    hit.Location = { X = to.X, Y = to.Y, Z = from.Z - 100 }
+                    return true
+                end
+                return false  -- nothing in the way sideways
+            end
+            StaticFindObject = function(path)
+                if path:find("KismetSystemLibrary") then return system end
+                return by_path[path]  -- no navigation system
+            end
+        """)
+        self.tick()  # entry point recorded; the squad still stands on it
+        self.run_orders({"id": 1, "team": "green", "action": "request_team", "target": {}, "options": {}})
+        for _ in range(5):
+            state = self.tick()
+        self.assertEqual(next(r for r in state["results"] if r["id"] == 1)["status"], "ok")
+        self.assertGreater(self.lua.globals().traces, 0)
+        # Next to the entry positions (100,200 / 150,250), 120 cm away, not on top of the squad.
+        for x, y in self.spawned_positions():
+            self.assertTrue(any(abs(x - ex) + abs(y - ey) in (120, 240) for ex, ey in ((100, 200), (150, 250))), (x, y))
+
+    def add_squad_routing(self):
+        """Stand-ins for RoNTAKNative 0.5's squad routing (a second squad manager and the game hooks)."""
+        self.lua.execute(r"""
+            routing = { installs = 0, sets = {} }
+            local main = objects.SWATManager[1]
+            local world = { IsValid = function() return true end, ExtraReferencedObjects = list(),
+                            GetFullName = function() return "World /Game/Map.Map" end }
+            by_path["/Game/Map.Map"] = world
+            main.GetOuter = function() return world end
+            main.GetAddress = function() return 1000 end
+            main.SquadLeader = "player"
+            function RoNTAK_SquadInstall() routing.installs = routing.installs + 1 return "installed" end
+            function RoNTAK_SquadCreate(main_path)
+                assert(main_path == "/Game/SWATManager_0", main_path)
+                local m = { IsValid = function() return true end, SwatAI = list(),
+                            GetFName = function() return { ToString = function() return "SWATManager_1" end } end,
+                            GetFullName = function() return "SWATManager /Game/Map.Map:SWATManager_1" end }
+                by_path["/Game/Map.Map:SWATManager_1"] = m
+                table.insert(objects.SWATManager, m)
+                element = m
+                return "/Game/Map.Map:SWATManager_1"
+            end
+            function RoNTAK_SquadSet(manager, members, group)
+                routing.sets[#routing.sets + 1] = manager .. "|" .. members .. "|" .. group
+                return true
+            end
+            function element_teams()
+                local out = {}
+                for _, a in ipairs(element.SwatAI) do out[#out + 1] = a.DefaultTeam end
+                return table.concat(out, ",")
+            end
+        """)
+
+    def call_in_both_teams(self, routing=False):
+        self.add_reinforcement_world()
+        if routing:
+            self.add_squad_routing()
+        self.lua.execute(r"""
+            clock = 100 os.clock = function() return clock end
+            wheel = { IsValid = function() return true end, ActiveTeamType = 1 }
+            objects.SwatCommandWidget = { wheel }
+            -- The on-screen text (overlay.lua): a widget made by RoNTAKNative 0.3, set up from Lua.
+            label = { text = nil, visible = false, built = 0 }
+            local classes = {}
+            for _, n in ipairs({ "WidgetTree", "TextBlock" }) do
+                classes["/Script/UMG." .. n] = { IsValid = function() return true end, kind = n }
+            end
+            local find = StaticFindObject
+            StaticFindObject = function(path) return classes[path] or find(path) end
+            function RoNTAK_CreateWidget(class, owner)
+                assert(class == "/Script/CommonUI.CommonUserWidget", class)
+                label.built = label.built + 1
+                local w = { IsValid = function() return true end }
+                w.SetDesiredSizeInViewport = function() end
+                w.SetPositionInViewport = function(self, p) label.position = p end
+                w.AddToViewport = function(self, z) label.z = z end
+                w.SetVisibility = function(self, v) label.visible = v == 3 end
+                w.SetColorAndOpacity = function(self, c) label.color = c end
+                by_path["/Engine/Transient.Widget_" .. label.built] = w
+                return "/Engine/Transient.Widget_" .. label.built
+            end
+            function FText(s) return s end
+            function StaticConstructObject(class, outer)
+                local o = { IsValid = function() return true end, Font = {} }
+                if class.kind == "TextBlock" then
+                    o.SetFont = function() end
+                    o.SetText = function(self, t) label.text = t end
+                end
+                return o
+            end
+            function draw_frame() return label.visible and label.text or nil end
+            function teams_now()
+                local out = {}
+                for _, a in ipairs(objects.SWATManager[1].SwatAI) do out[#out + 1] = a.DefaultTeam end
+                return table.concat(out, ",")
+            end
+        """)
+        self.run_orders({"id": 1, "team": "green", "action": "request_team", "target": {}, "options": {}},
+                        {"id": 2, "team": "yellow", "action": "request_team", "target": {}, "options": {}})
+        for _ in range(6):
+            self.tick()
+        if routing:
+            return
+        # Stock RED and BLUE keep their teams; Echo, Foxtrot, Golf and Hotel rest on GOLD (5),
+        # so the wheel's RED / BLUE orders reach the original squad only and GOLD reaches everyone.
+        self.assertEqual(self.lua.eval("teams_now()"), "1,2,5,5,5,5")
+
+    def test_native_squad_routing(self):
+        """RoNTAKNative 0.5: the called-in teams get their own squad manager; Insert picks who the wheel commands."""
+        self.call_in_both_teams(routing=True)
+        g = self.lua.globals()
+        self.assertEqual(g.routing.installs, 1)
+        # The game's list keeps the original squad; the call-ins are in their own manager, on the team
+        # they joined (GREEN -> BLUE, YELLOW -> RED), nobody parked on GOLD.
+        self.assertEqual(self.lua.eval("teams_now()"), "1,2")
+        self.assertEqual(self.lua.eval("element_teams()"), "2,2,1,1")
+        self.assertEqual(self.lua.eval("#by_path['/Game/Map.Map'].ExtraReferencedObjects"), 1)  # kept alive by the world
+        self.assertEqual(self.lua.eval("element.SquadLeader"), "player")
+        last = self.lua.eval("routing.sets[#routing.sets]").split("|")
+        self.assertEqual((last[0], len(last[1].split(",")), last[2]), ("/Game/Map.Map:SWATManager_1", 4, "0"))
+        state = self.tick()
+        self.assertTrue(state["squad_routing"])
+        green = sorted(o["name"] for o in state["officers"] if o["team"] == "green")
+        self.assertEqual(green, ["Echo", "Foxtrot"])
+        # RED / BLUE group: the wheel's GOLD is RED + BLUE.
+        self.assertEqual(self.lua.eval("draw_frame()"), "COMMANDING: RED")
+        self.lua.execute("wheel.ActiveTeamType = 5")
+        self.tick()
+        self.assertEqual(self.lua.eval("draw_frame()"), "COMMANDING: RED + BLUE")
+        # Insert: GREEN / YELLOW.
+        g.keybinds["INS"]()
+        self.assertEqual(self.tick()["selected_team"], "called_in")
+        self.assertTrue(self.lua.eval("routing.sets[#routing.sets]").endswith("|1"))
+        self.assertEqual(self.lua.eval("draw_frame()"), "COMMANDING: GREEN + YELLOW")
+        self.lua.execute("wheel.ActiveTeamType = 1")
+        self.tick()
+        self.assertEqual(self.lua.eval("draw_frame()"), "COMMANDING: YELLOW")
+        # Insert: FULL ELEMENT.
+        g.keybinds["INS"]()
+        self.assertEqual(self.tick()["selected_team"], "full")
+        self.assertTrue(self.lua.eval("routing.sets[#routing.sets]").endswith("|2"))
+        self.assertEqual(self.lua.eval("draw_frame()"), "COMMANDING: RED + YELLOW")
+        self.lua.execute("wheel.ActiveTeamType = 5")
+        self.tick()
+        self.assertEqual(self.lua.eval("draw_frame()"), "COMMANDING: FULL ELEMENT")
+        # Insert: back to RED / BLUE. No team was ever parked.
+        g.keybinds["INS"]()
+        self.assertNotIn("selected_team", self.tick())
+        self.assertEqual(self.lua.eval("teams_now()") + "|" + self.lua.eval("element_teams()"), "1,2|2,2,1,1")
+        # Companion orders: to the manager of the team (GOLD: both), with the team's own value.
+        self.lua.execute(r"""
+            moves = {}
+            for i, m in ipairs(objects.SWATManager) do
+                m.GiveMoveCommand = function(self, team, location) moves[#moves + 1] = i .. ":" .. team end
+            end
+        """)
+        for i, team in enumerate(["green", "yellow", "red", "gold"]):
+            self.send("A", [{"id": 20 + i, "team": team, "action": "move_to",
+                             "target": {"location": {"x": 1, "y": 2, "z": 0}}, "options": {}}])
+            self.tick()
+        self.assertEqual(self.lua.eval("table.concat(moves, ' ')"), "2:2 2:1 1:1 1:5 2:5")
+        # RED+BLUE: the game's squad as GOLD; GREEN+YELLOW: the called-in squad as GOLD.
+        self.lua.execute("moves = {}")
+        for i, team in enumerate(["red_blue", "green_yellow"]):
+            self.send("A", [{"id": 30 + i, "team": team, "action": "move_to",
+                             "target": {"location": {"x": 1, "y": 2, "z": 0}}, "options": {}}])
+            self.tick()
+        self.assertEqual(self.lua.eval("table.concat(moves, ' ')"), "1:5 2:5")
+        # The wheel's own scroll (RoNTAKNative 0.6) changes the group: RoNTAK follows it.
+        self.lua.execute("native_group = 2 function RoNTAK_SquadGroup() return native_group end")
+        state = self.tick()
+        self.assertEqual(state["selected_team"], "full")
+        self.assertEqual(self.lua.eval("draw_frame()"), "COMMANDING: FULL ELEMENT")
+        sets = self.lua.eval("#routing.sets")
+        self.lua.execute("native_group = 1")
+        self.assertEqual(self.tick()["selected_team"], "called_in")
+        self.assertEqual(self.lua.eval("#routing.sets"), sets)  # followed, not pushed back
+        self.assertEqual(self.lua.eval("draw_frame()"), "COMMANDING: GREEN + YELLOW")
+        self.lua.execute("RoNTAK_SquadGroup = nil")
+        # A new mission (another squad manager): routing is cleared.
+        self.lua.execute("objects.SWATManager[1].GetAddress = function() return 2000 end")
+        self.tick()
+        self.assertEqual(self.lua.eval("routing.sets[#routing.sets]"), "||0")
+
+    def test_wheel_commands_the_selected_group(self):
+        self.call_in_both_teams()
+        g = self.lua.globals()
+        # RED / BLUE selected: the label follows the wheel (RED now), in red.
+        self.assertEqual(self.lua.eval("draw_frame()"), "COMMANDING: RED")
+        self.assertGreater(g.label.color.R, g.label.color.B)
+        # Insert selects GREEN / YELLOW: Echo, Foxtrot on BLUE, Golf, Hotel on RED, the original squad on GOLD.
+        g.keybinds["INS"]()
+        self.assertEqual(self.tick()["selected_team"], "called_in")
+        self.assertEqual(self.lua.eval("teams_now()"), "5,5,2,2,1,1")
+        # The wheel's RED commands YELLOW, its BLUE commands GREEN, its GOLD the full element.
+        self.assertEqual(self.lua.eval("draw_frame()"), "COMMANDING: YELLOW")
+        self.assertEqual(g.label.z, 1200)
+        self.lua.execute("wheel.ActiveTeamType = 2")
+        self.tick()
+        self.assertEqual(self.lua.eval("draw_frame()"), "COMMANDING: GREEN")
+        self.assertGreater(g.label.color.G, g.label.color.R)
+        self.lua.execute("wheel.ActiveTeamType = 5")
+        self.tick()
+        self.assertEqual(self.lua.eval("draw_frame()"), "COMMANDING: GOLD (FULL ELEMENT)")
+        self.assertEqual(self.lua.eval("teams_now()"), "5,5,2,2,1,1")  # GOLD reaches every officer anyway
+        # Insert again: back to RED / BLUE.
+        g.keybinds["INS"]()
+        self.assertNotIn("selected_team", self.tick())
+        self.assertEqual(self.lua.eval("teams_now()"), "1,2,5,5,5,5")
+        self.lua.execute("wheel.ActiveTeamType = 2")
+        self.tick()
+        self.assertEqual(self.lua.eval("draw_frame()"), "COMMANDING: BLUE")
+        self.assertEqual(g.label.built, 1)  # made once, reused
+
+    def test_teams_are_real_while_operators_arrive(self):
+        """GREEN / YELLOW selected, then YELLOW called in: everyone is on their real team until it is in."""
+        self.add_reinforcement_world()
+        self.lua.execute(r"""
+            clock = 100 os.clock = function() return clock end
+            require("config").squads.pause_after_spawn_s = 3
+            objects.SwatCommandWidget = { { IsValid = function() return true end, ActiveTeamType = 1 } }
+            function teams_now()
+                local out = {}
+                for _, a in ipairs(objects.SWATManager[1].SwatAI) do out[#out + 1] = a.DefaultTeam end
+                return table.concat(out, ",")
+            end
+            -- The game's own end of spawning looks at the teams.
+            local begin = RoNTAK_BeginSpawn
+            RoNTAK_BeginSpawn = function(...)
+                local path = begin(...)
+                local o = by_path[path]
+                if o and o.SpawnDefaultController then
+                    local make = o.SpawnDefaultController
+                    o.SpawnDefaultController = function(op)
+                        make(op)
+                        op.Controller.OnAIFinishSpawning = function() teams_at_finish = teams_now() end
+                    end
+                end
+                return path
+            end
+        """)
+        self.run_orders({"id": 1, "team": "green", "action": "request_team", "target": {}, "options": {}})
+        self.tick()  # Foxtrot
+        self.lua.execute("clock = clock + 5")
+        self.tick()
+        self.lua.globals().keybinds["INS"]()  # GREEN / YELLOW
+        self.tick()
+        self.assertEqual(self.lua.eval("teams_now()"), "5,5,2,2")
+        self.send("A", [{"id": 2, "team": "yellow", "action": "request_team", "target": {}, "options": {}}])
+        self.tick()
+        # Golf was taken in with everyone on RED / BLUE (no one parked on GOLD).
+        self.assertEqual(self.lua.eval("teams_at_finish"), "1,2,2,2")
+        self.lua.execute("clock = clock + 1")
+        self.tick()  # Hotel
+        self.assertEqual(self.lua.eval("teams_at_finish"), "1,2,2,2,1")
+        self.lua.execute("clock = clock + 5")
+        self.tick()
+        self.assertEqual(self.lua.eval("teams_now()"), "5,5,2,2,1,1")  # arranged for GREEN / YELLOW again
+
+    def test_operators_spawn_with_a_gap(self):
+        self.add_reinforcement_world()
+        self.lua.execute('clock = 100 os.clock = function() return clock end require("config").reinforcements.spawn_gap_s = 1.5')
+        self.run_orders({"id": 1, "team": "green", "action": "request_team", "target": {}, "options": {}})
+        g = self.lua.globals()
+        self.assertEqual(g.finished, 1)  # Echo
+        self.tick()
+        self.assertEqual(g.finished, 1)  # Foxtrot waits
+        self.lua.execute("clock = clock + 2")
+        self.tick()
+        self.assertEqual(g.finished, 2)
+
+    def test_squad_never_grows_past_eight(self):
+        """A 9th officer in the squad list crashed the game: a call-in that wouldn't fit is refused."""
+        self.add_reinforcement_world()
+        self.lua.execute('require("config").reinforcements.max_squad = 5')
+        self.run_orders({"id": 1, "team": "green", "action": "request_team", "target": {}, "options": {}})
+        for _ in range(3):
+            self.tick()
+        self.assertEqual(self.lua.eval("#objects.SWATManager[1].SwatAI"), 4)  # 2 stock + GREEN
+        self.send("A", [{"id": 2, "team": "yellow", "action": "request_team", "target": {}, "options": {}}])
+        state = self.tick()
+        result = next(r for r in state["results"] if r["id"] == 2)
+        self.assertEqual(result["status"], "error")
+        self.assertIn("the squad is full", result["message"])
+        self.assertEqual(self.lua.eval("#objects.SWATManager[1].SwatAI"), 4)
+
+    def test_selection_skips_teams_not_on_scene(self):
+        self.add_reinforcement_world()
+        self.tick()
+        self.lua.globals().keybinds["INS"]()  # nobody called in: stays on the stock teams
+        self.assertNotIn("selected_team", self.tick())
+
+    def test_companion_orders_for_a_called_in_team(self):
+        self.call_in_both_teams()
+        self.lua.execute(r"""
+            objects.SWATManager[1].GiveMoveCommand = function(self, team, location)
+                move_call = { team = team, teams = teams_now() }
+            end
+        """)
+        self.send("A", [{"id": 9, "team": "yellow", "action": "move_to",
+                         "target": {"location": {"x": 1, "y": 2, "z": 0}}, "options": {}}])
+        state = self.tick()
+        self.assertEqual(next(r for r in state["results"] if r["id"] == 9)["status"], "ok")
+        # Sent as RED (the team YELLOW joined), with only Golf and Hotel on RED at that moment.
+        self.assertEqual(self.lua.eval("move_call.team"), 1)
+        self.assertEqual(self.lua.eval("move_call.teams"), "0,2,5,5,1,1")
+        self.lua.execute("clock = clock + 1")
+        self.tick()
+        self.assertEqual(self.lua.eval("teams_now()"), "1,2,5,5,5,5")  # arranged for the wheel again
+        # A stock RED order from the companion while GREEN / YELLOW is selected still reaches the stock RED officer only.
+        self.send("A", [{"id": 10, "team": "called_in", "action": "select_team", "target": {}, "options": {}}])
+        self.assertEqual(self.tick()["selected_team"], "called_in")
+        self.send("A", [{"id": 11, "team": "red", "action": "move_to",
+                         "target": {"location": {"x": 1, "y": 2, "z": 0}}, "options": {}}])
+        self.tick()
+        self.assertEqual(self.lua.eval("move_call.teams"), "1,5,2,2,0,0")
+
+    def test_combined_teams_without_native_routing(self):
+        """Without separate squads, RED+BLUE is everyone while nobody is called in; GREEN+YELLOW can't be sent."""
+        self.add_reinforcement_world()
+        self.lua.execute(r"""
+            moves = {}
+            objects.SWATManager[1].GiveMoveCommand = function(self, team) moves[#moves + 1] = team end
+        """)
+        state = self.run_orders({"id": 1, "team": "red_blue", "action": "move_to",
+                                 "target": {"location": {"x": 1, "y": 2, "z": 0}}, "options": {}},
+                                {"id": 2, "team": "green_yellow", "action": "move_to",
+                                 "target": {"location": {"x": 1, "y": 2, "z": 0}}, "options": {}})
+        self.assertEqual(self.lua.eval("table.concat(moves, ' ')"), "5")
+        result = next(r for r in state["results"] if r["id"] == 2)
+        self.assertEqual(result["status"], "error")
+        self.assertIn("native squad routing", result["message"])
 
     def test_call_in_needs_the_native_mod(self):
         """Without RoNTAKNative 0.2 nothing is spawned (the Lua-only way corrupted game memory)."""
@@ -840,6 +1184,63 @@ class ModTest(unittest.TestCase):
         self.assertIn("officer", list(g.destroyed.values()))
         self.assertEqual(self.lua.eval("#objects.SWATManager[1].SwatAI"), 2)  # nothing registered
         self.assertFalse(any(o["team"] == "yellow" for o in state["officers"]))
+
+    def test_team_probe_reports_who_an_order_reached(self):
+        self.lua.execute(r"""
+            clock = 100
+            os.clock = function() return clock end
+            local function n(s) return { ToString = function() return s end } end
+            local function prop(pname, ptype, enum)
+                return { GetFName = function() return n(pname) end,
+                         GetClass = function() return { GetFName = function() return n(ptype) end } end,
+                         GetEnum = function() return { GetFName = function() return n(enum) end } end }
+            end
+            local function uobj(kind, full, name, props)
+                return { GetClass = function() return { GetFName = function() return n(kind) end } end,
+                         GetFullName = function() return full end,
+                         GetFName = function() return n(name) end,
+                         ForEachProperty = function(self, fn) for _, p in ipairs(props) do fn(p) end end }
+            end
+            local uobjects = {
+                uobj("Function", "Function /Script/ReadyOrNot.SWATManager:GiveMoveCommand", "GiveMoveCommand",
+                     { prop("Team", "EnumProperty", "ETeamType"), prop("Location", "StructProperty") }),
+                uobj("Function", "Function /Script/Engine.Actor:K2_DestroyActor", "K2_DestroyActor", {}),
+                uobj("Class", "Class /Script/ReadyOrNot.ReadyOrNotPlayerController", "ReadyOrNotPlayerController",
+                     { prop("SelectedTeam", "EnumProperty", "ETeamType"), prop("Health", "FloatProperty") }),
+            }
+            function ForEachUObject(fn) for _, o in ipairs(uobjects) do fn(o) end end
+            local enum = { IsValid = function() return true end,
+                           ForEachName = function(self, fn) fn(n("RED"), 1) fn(n("BLUE"), 2) fn(n("GOLD"), 5) end }
+            StaticFindObject = function(path) if path:find("ETeamType") then return enum end end
+            objects.ReadyOrNotPlayerController = { { IsValid = function() return true end, SelectedTeam = 2,
+                                                     GetFName = function() return n("PC_0") end } }
+            local officer = objects.CyberneticsSwat_V2_C[1]
+            officer.DefaultTeam = 2
+            officer.Controller = { IsValid = function() return true end,
+                                   GetClass = function() return { GetFName = function() return n("SwatAIController") end } end }
+        """)
+        self.tick()
+        g = self.lua.globals()
+        g.keybinds["END"]()
+        self.assertIsNotNone(g.hooks["/Script/ReadyOrNot.SWATManager:GiveMoveCommand"])
+        self.assertIsNone(g.hooks["/Script/Engine.Actor:K2_DestroyActor"])
+        # A BLUE move order from the command wheel; the first officer gets a new job.
+        self.lua.execute(r"""
+            hooks["/Script/ReadyOrNot.SWATManager:GiveMoveCommand"][1](nil, { get = function() return 2 end }, {})
+            local job = { IsValid = function() return true end,
+                          GetFName = function() return { ToString = function() return "MoveTo_1" end } end,
+                          GetClass = function() return { GetFName = function() return { ToString = function() return "MoveActivity" end } end } end }
+            objects.CyberneticsSwat_V2_C[1].Controller.CurrentActivity = job
+            clock = clock + 2
+        """)
+        self.tick()
+        g.keybinds["END"]()
+        report = (self.bridge / "team_report.txt").read_text()
+        self.assertIn("SWATManager:GiveMoveCommand  TeamType=2", report)
+        self.assertIn("none -> MoveActivity#MoveTo_1", report)
+        self.assertIn("2 = BLUE", report)
+        self.assertIn("ReadyOrNotPlayerController PC_0: SelectedTeam=2", report)
+        self.assertIn("/Script/ReadyOrNot.SWATManager:GiveMoveCommand   [watched]   team = param 1 (Team)", report)
 
     def add_people(self):
         self.lua.execute(r"""

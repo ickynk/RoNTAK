@@ -8,6 +8,8 @@ local config = require("config")
 local discovery = require("discovery")
 local floorplan = require("floorplan")
 local reinforcements = require("reinforcements")
+local teamprobe = require("teamprobe")
+local squads = require("squads")
 local game = require("game")
 local log = require("log")
 local mapinfo = require("mapinfo")
@@ -58,12 +60,19 @@ local function tick()
     for _, cmd in ipairs(bridge.new_commands()) do
         if cmd.action == "request_team" then
             remember(reinforcements.request(cmd))
+        elseif cmd.action == "select_team" then
+            local team = cmd.team ~= "stock" and cmd.team or nil
+            local ok = squads.select(team)
+            remember({ id = cmd.id, team = cmd.team, action = cmd.action, status = ok and "ok" or "error",
+                       message = ok and nil or ("unknown team " .. tostring(cmd.team)) })
         else
             remember(orders.dispatch(cmd))
         end
     end
     orders.run_checks()
     reinforcements.tick()
+    squads.tick()
+    teamprobe.tick()
 
     local doors = level and game.doors(level) or {}
     local rooms_version = rooms.update(level)
@@ -91,6 +100,8 @@ local function tick()
         configured_actions = configured_actions(),
         capture_progress = walls.progress(),
         native = native_version,
+        selected_team = squads.selected(),
+        squad_routing = squads.routed(),
     })
 end
 
@@ -155,17 +166,21 @@ bind(config.keys.discovery_dump, discovery.dump)
 bind(config.keys.sniff_toggle, discovery.toggle_sniff)
 bind(config.keys.test_order, test_order)
 bind(config.keys.floor_capture, floorplan.capture)
+bind(config.keys.team_probe, teamprobe.toggle)
+bind(config.keys.code_dump, discovery.dump_code)
+bind(config.keys.select_team, squads.cycle)
 for team in pairs((config.reinforcements or {}).teams or {}) do
     bind(config.keys["request_" .. team], function() remember(reinforcements.request_from_key(team)) end)
 end
 
 orders.install_class_hooks()
 cameras.install_hooks()
+squads.set_member_lookup(reinforcements.team_of)
 
 LoopAsync(config.tick_ms, function()
     ExecuteInGameThread(safe_tick)
     return false -- keep looping
 end)
 
-log.info("loaded, bridge folder: " .. bridge.dir)
+log.info("loaded (" .. tostring(config.build or "?") .. "), bridge folder: " .. bridge.dir)
 log.info("CreateInvalidObject available: " .. tostring(CreateInvalidObject ~= nil))

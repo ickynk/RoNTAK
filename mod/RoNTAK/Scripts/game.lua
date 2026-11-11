@@ -247,6 +247,10 @@ function game.set_officer_override(name, info)
     officers_this_tick.tick = nil
 end
 
+function game.officer_override(name)
+    return officer_overrides[name]
+end
+
 -- After an officer is added (reinforcements): rescan on the next scan slot.
 function game.forget_officers()
     officer_cache.at = -math.huge
@@ -273,6 +277,8 @@ function game.officer_actors()
 end
 
 local function on_team(officer, team)
+    if team == "red_blue" then return officer.team == "red" or officer.team == "blue" end
+    if team == "green_yellow" then return officer.team == "green" or officer.team == "yellow" end
     return team == "gold" or officer.team == team
 end
 
@@ -569,6 +575,13 @@ function game.nearest_door_id(pos)
 end
 
 local target_cache = {}
+local excluded_targets = {}   -- object name -> true: never an order's target (squads.lua's second squad manager)
+
+-- Keeps an object from being found as a configured target (by class).
+function game.exclude_target(obj)
+    if valid(obj) then excluded_targets[object_name(obj)] = true end
+    target_cache = {}
+end
 
 -- Builds the object a configured order is called on.
 function game.resolve_target(target, door)
@@ -578,6 +591,13 @@ function game.resolve_target(target, door)
     local obj = target_cache[target]
     if valid(obj) then return obj end
     obj = FindFirstOf(target)
+    if valid(obj) and next(excluded_targets) ~= nil and excluded_targets[object_name(obj)] then
+        obj = nil
+        local ok, all = pcall(FindAllOf, target)
+        for _, o in ipairs(ok and all or {}) do
+            if valid(o) and not excluded_targets[object_name(o)] then obj = o break end
+        end
+    end
     if valid(obj) then
         target_cache[target] = obj
         return obj

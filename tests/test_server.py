@@ -126,13 +126,22 @@ class ServerTest(unittest.TestCase):
     def test_request_team(self):
         status, body = self.call("POST", "/api/command", {"team": "green", "action": "request_team"})
         self.assertEqual(status, 200)
-        status, body = self.call("POST", "/api/command", {"team": "purple", "action": "request_team"})
+        status, body = self.call("POST", "/api/command", {"team": "pink", "action": "request_team"})
         self.assertEqual(status, 400)
-        status, body = self.call("POST", "/api/command", {"team": "green", "action": "move_to", "target": {}})
-        self.assertEqual(status, 400)  # orders for called-in teams come in stage 2
+        status, body = self.call("POST", "/api/command", {"team": "green", "action": "move_to",
+                                                          "target": {"location": {"x": 1, "y": 2, "z": 0}}})
+        self.assertEqual(status, 200)  # called-in teams take orders of their own
+        self.assertEqual(self.call("POST", "/api/command", {"team": "yellow", "action": "select_team"})[0], 200)
+        self.assertEqual(self.call("POST", "/api/command", {"team": "stock", "action": "select_team"})[0], 200)
+        self.assertEqual(self.call("POST", "/api/command", {"team": "called_in", "action": "select_team"})[0], 200)
+        self.assertEqual(self.call("POST", "/api/command", {"team": "full", "action": "select_team"})[0], 200)
+        self.assertEqual(self.call("POST", "/api/command", {"team": "red_blue", "action": "fall_in"})[0], 200)
+        self.assertEqual(self.call("POST", "/api/command", {"team": "green_yellow", "action": "fall_in"})[0], 200)
+        self.assertEqual(self.call("POST", "/api/command", {"team": "orange", "action": "request_team"})[0], 400)
+        self.assertEqual(self.call("POST", "/api/command", {"team": "red", "action": "select_team"})[0], 400)
 
     def test_command_validation(self):
-        self.assertEqual(self.call("POST", "/api/command", {"team": "green", "action": "hold"})[0], 400)
+        self.assertEqual(self.call("POST", "/api/command", {"team": "pink", "action": "hold"})[0], 400)
         self.assertEqual(self.call("POST", "/api/command", {"team": "red", "action": "dance"})[0], 400)
 
     def test_map_save_load_and_image(self):

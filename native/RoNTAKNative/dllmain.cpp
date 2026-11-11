@@ -2,7 +2,7 @@
 //
 // Gives RoNTAK's Lua mod the few things Lua can't do safely on UE4SS 3.0.1:
 //
-//   RoNTAK_NativeVersion() -> "0.2.0"
+//   RoNTAK_NativeVersion() -> "0.6.0"
 //
 //   RoNTAK_BeginSpawn(context, class, x, y, z, yaw, collision, owner)
 //       -> actor path | nil, error
@@ -26,9 +26,27 @@
 //
 //   RoNTAK_ArrayCount(owner, property) -> count | nil, error
 //
+//   RoNTAK_CreateWidget(class, owner) -> widget path | nil, error
+//     UWidgetBlueprintLibrary::Create(owner, class, owner): a widget made the
+//     game's way (a widget constructed from Lua never showed).
+//
+//   RoNTAK_SquadInstall / RoNTAK_SquadCreate / RoNTAK_SquadSet / RoNTAK_SquadStatus
+//     The called-in teams' own squad manager and the hooks that route wheel
+//     orders and their AI to it (see "squad routing" below).
+//
+//   RoNTAK_DumpCode(out_dir, seed_filters, classes, max_depth, max_mb,
+//                   extra_rvas, xref_targets, field_disps)
+//     Read-only: saves the game code around the wheel / squad functions for
+//     reverse-engineering (see dump_code below).
+//
 // Objects are passed as object paths (obj:GetFullName() without the class
 // name), never as raw addresses, and every one is looked up and type-checked
 // here. Functions are registered into every Lua state of the "RoNTAK" Lua mod.
+
+// PolyHook (and its asmjit) first: UE4SS's headers define short macros
+// (TEXT-style string helpers) that break asmjit's headers when included later.
+#define NOMINMAX
+#include <polyhook2/Detour/x64Detour.hpp>
 
 #include <cmath>
 #include <cstdint>
@@ -54,12 +72,26 @@
 #include <Unreal/UScriptStruct.hpp>
 #pragma warning(default : 4005)
 
+#include <algorithm>
+#include <deque>
+#include <filesystem>
+#include <fstream>
+#include <map>
+#include <memory>
+#include <set>
+#include <sstream>
+#include <unordered_set>
+
+#include <Zydis/Zydis.h>
+
+#include <Windows.h>
+
 using namespace RC;
 using namespace RC::Unreal;
 
 namespace
 {
-    constexpr const char* NATIVE_VERSION = "0.2.0";
+    constexpr const char* NATIVE_VERSION = "0.6.0";
     constexpr const RC::CharType* LUA_MOD_NAME = STR("RoNTAK");
 
     // ---- Lua arguments ------------------------------------------------------
@@ -285,13 +317,13 @@ namespace
         alignas(16) uint8_t params[PARAMS_SIZE]{};
         std::string error{};
 
-        explicit Call(const wchar_t* function_path)
+        explicit Call(const wchar_t* function_path, const wchar_t* target_path = STR("/Script/Engine.Default__GameplayStatics"))
         {
-            target = UObjectGlobals::StaticFindObject<UObject*>(nullptr, nullptr, STR("/Script/Engine.Default__GameplayStatics"));
+            target = UObjectGlobals::StaticFindObject<UObject*>(nullptr, nullptr, target_path);
             function = UObjectGlobals::StaticFindObject<UFunction*>(nullptr, nullptr, function_path);
             if (!target || !function)
             {
-                error = "GameplayStatics function not found: " + to_string(std::wstring(function_path));
+                error = "function not found: " + to_string(std::wstring(function_path));
             }
         }
 
@@ -433,6 +465,32 @@ namespace
         return 1;
     }
 
+    // UWidgetBlueprintLibrary::Create, the game's own way to make a widget
+    // (initialised, ready for AddToViewport). Lua can't pass its class argument.
+    auto create_widget(const LuaMadeSimple::Lua& lua) -> int
+    {
+        Args args{lua};
+        auto class_path = args.string("class");
+        auto owner_path = args.string("owner");
+        if (!args.error.empty()) return fail(lua, args.error);
+
+        UObject* class_object = find_object(class_path);
+        if (!class_object || !class_object->IsA<UClass>()) return fail(lua, "class not found: " + class_path);
+        UObject* owner = find_object(owner_path);
+        if (!owner) return fail(lua, "owner not found: " + owner_path);
+
+        Call call{STR("/Script/UMG.WidgetBlueprintLibrary:Create"), STR("/Script/UMG.Default__WidgetBlueprintLibrary")};
+        call.set_object(STR("WorldContextObject"), owner, true);
+        call.set_object(STR("WidgetType"), class_object, true);
+        call.set_object(STR("OwningPlayer"), owner, false);
+        if (!call.error.empty()) return fail(lua, call.error);
+        call.run();
+        UObject* widget = call.result_object();
+        if (!widget) return fail(lua, "the game did not create " + class_path);
+        lua.set_string(path_of(widget));
+        return 1;
+    }
+
     auto append_object(const LuaMadeSimple::Lua& lua) -> int
     {
         Args args{lua};
@@ -485,6 +543,681 @@ namespace
         return 1;
     }
 
+    // ---- code dump (reverse-engineering the wheel and squad code) -----------
+    //
+    // RoNTAK_DumpCode(out_dir, seed_filters, classes, max_depth, max_mb,
+    //                 extra_rvas, xref_targets, field_disps) -> summary | nil, error
+    //   extra_rvas: more seeds by address; xref_targets: list every call / jump
+    //   to these (xrefs.txt); field_disps: list every memory use of these
+    //   displacements (fields.txt). All comma-separated hex, may be empty.
+    // Read-only. Writes into out_dir:
+    //   header.txt     image base, size, sections
+    //   functions.txt  every native ReadyOrNot UFunction: rva, name
+    //   vtables.txt    vtables of live objects of the given classes
+    //   index.txt      the dumped functions: rva, size, offset in code.bin, depth, why
+    //   code.bin       their bytes
+    //   pdata.bin      the exception directory (every function's start / end)
+    //   data.txt       rip-relative data the dumped code reads (rva, 64 bytes hex)
+    // Seeds: the native UFunctions whose names contain one of seed_filters
+    // (comma separated, e.g. "SWATManager:,SwatCommandWidget:") and the vtable
+    // entries of live objects of classes (comma separated). From each seed the
+    // direct calls and jumps are followed to max_depth (Zydis decoding, the
+    // function bounds from .pdata), up to max_mb of code.
+
+    struct RuntimeFunction
+    {
+        uint32_t begin;
+        uint32_t end;
+        uint32_t unwind;
+    };
+
+    struct Image
+    {
+        uint8_t* base{};
+        uint32_t size{};
+        uint32_t text_begin{}, text_end{};
+        std::vector<RuntimeFunction> functions{};
+        uint32_t pdata_rva{}, pdata_size{};
+        std::string sections{};
+    };
+
+    auto read_image() -> Image
+    {
+        Image img{};
+        img.base = reinterpret_cast<uint8_t*>(GetModuleHandleW(nullptr));
+        auto* dos = reinterpret_cast<IMAGE_DOS_HEADER*>(img.base);
+        auto* nt = reinterpret_cast<IMAGE_NT_HEADERS64*>(img.base + dos->e_lfanew);
+        img.size = nt->OptionalHeader.SizeOfImage;
+        auto* section = IMAGE_FIRST_SECTION(nt);
+        std::ostringstream out;
+        for (int i = 0; i < nt->FileHeader.NumberOfSections; ++i, ++section)
+        {
+            char name[9]{};
+            std::memcpy(name, section->Name, 8);
+            out << name << " rva=" << std::hex << section->VirtualAddress << " size=" << section->Misc.VirtualSize
+                << " flags=" << section->Characteristics << std::dec << "\n";
+            if ((section->Characteristics & IMAGE_SCN_MEM_EXECUTE) && img.text_end == 0)
+            {
+                img.text_begin = section->VirtualAddress;
+                img.text_end = section->VirtualAddress + section->Misc.VirtualSize;
+            }
+        }
+        img.sections = out.str();
+        auto& dir = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXCEPTION];
+        img.pdata_rva = dir.VirtualAddress;
+        img.pdata_size = dir.Size;
+        auto* entries = reinterpret_cast<RuntimeFunction*>(img.base + dir.VirtualAddress);
+        img.functions.assign(entries, entries + dir.Size / sizeof(RuntimeFunction));
+        std::sort(img.functions.begin(), img.functions.end(), [](auto& a, auto& b) { return a.begin < b.begin; });
+        return img;
+    }
+
+    auto function_at(const Image& img, uint32_t rva) -> const RuntimeFunction*
+    {
+        auto it = std::upper_bound(img.functions.begin(), img.functions.end(), rva,
+                                   [](uint32_t value, const RuntimeFunction& f) { return value < f.begin; });
+        if (it == img.functions.begin()) return nullptr;
+        --it;
+        return rva < it->end ? &*it : nullptr;
+    }
+
+    auto split(const std::string& text) -> std::vector<std::string>
+    {
+        std::vector<std::string> out;
+        std::string part;
+        std::istringstream in(text);
+        while (std::getline(in, part, ','))
+        {
+            if (!part.empty()) out.push_back(part);
+        }
+        return out;
+    }
+
+    auto hex(uint64_t v) -> std::string
+    {
+        std::ostringstream o;
+        o << std::hex << v;
+        return o.str();
+    }
+
+    auto dump_code(const LuaMadeSimple::Lua& lua) -> int
+    {
+        Args args{lua};
+        auto out_dir = args.string("out_dir");
+        auto filters = split(args.string("seed_filters"));
+        auto classes = split(args.string("classes"));
+        int max_depth = static_cast<int>(args.number("max_depth"));
+        double max_mb = args.number("max_mb");
+        auto extra_rvas = split(args.string("extra_rvas"));
+        auto xref_list = split(args.string("xref_targets"));
+        auto field_list = split(args.string("field_disps"));
+        if (!args.error.empty()) return fail(lua, args.error);
+        auto parse_hex = [](const std::string& t) -> uint64_t {
+            try { return std::stoull(t, nullptr, 16); } catch (...) { return 0; }
+        };
+
+        Image img = read_image();
+        if (img.functions.empty() || img.text_end == 0) return fail(lua, "could not read the game's image");
+        auto in_text = [&](uint64_t rva) { return rva >= img.text_begin && rva < img.text_end; };
+        auto rva_of = [&](const void* p) -> uint64_t {
+            auto a = reinterpret_cast<const uint8_t*>(p);
+            return (a >= img.base && a < img.base + img.size) ? static_cast<uint64_t>(a - img.base) : 0;
+        };
+
+        std::wstring dir = to_wstring(out_dir);
+        std::error_code mkdir_error;
+        std::filesystem::create_directories(dir, mkdir_error);
+        std::ofstream functions_out(dir + L"\\functions.txt");
+        std::ofstream vtables_out(dir + L"\\vtables.txt");
+        if (!functions_out) return fail(lua, "could not write to " + out_dir);
+
+        std::deque<std::pair<uint32_t, int>> queue;
+        std::map<uint32_t, std::string> why;
+
+        // Native UFunctions: all listed, the filtered ones seeded.
+        size_t ufunctions = 0;
+        UObjectGlobals::ForEachUObject([&](void* raw, int32_t, int32_t) {
+            auto* object = static_cast<UObject*>(raw);
+            if (!object || !object->IsA<UFunction>()) return LoopAction::Continue;
+            auto* function = static_cast<UFunction*>(object);
+            if (!function->HasAnyFunctionFlags(FUNC_Native)) return LoopAction::Continue;
+            auto name = to_string(function->GetFullName());
+            if (name.find("/Script/ReadyOrNot.") == std::string::npos) return LoopAction::Continue;
+            uint64_t rva = rva_of(reinterpret_cast<const void*>(function->GetFunc()));
+            if (!rva) return LoopAction::Continue;
+            functions_out << hex(rva) << " " << name << "\n";
+            ++ufunctions;
+            for (auto& f : filters)
+            {
+                if (name.find(f) != std::string::npos)
+                {
+                    queue.emplace_back(static_cast<uint32_t>(rva), 0);
+                    why.emplace(static_cast<uint32_t>(rva), "ufunction " + name);
+                    break;
+                }
+            }
+            return LoopAction::Continue;
+        });
+
+        // Vtables of live objects (virtual calls can't be followed otherwise).
+        for (auto& class_name : classes)
+        {
+            std::vector<UObject*> found;
+            UObjectGlobals::FindAllOf(to_wstring(class_name), found);
+            if (found.empty())
+            {
+                vtables_out << class_name << ": no live object\n";
+                continue;
+            }
+            UObject* object = found.front();
+            auto vtable = *reinterpret_cast<uintptr_t**>(object);
+            vtables_out << class_name << " " << to_string(object->GetFullName()) << " vtable=" << hex(rva_of(vtable)) << "\n";
+            if (!rva_of(vtable)) continue;
+            for (int i = 0; i < 512; ++i)
+            {
+                uint64_t entry = rva_of(reinterpret_cast<const void*>(vtable[i]));
+                if (!entry || !in_text(entry)) break;
+                vtables_out << "  [" << i << "] " << hex(entry) << "\n";
+                queue.emplace_back(static_cast<uint32_t>(entry), 1);
+                why.emplace(static_cast<uint32_t>(entry), class_name + " vtable[" + std::to_string(i) + "]");
+            }
+        }
+
+        ZydisDecoder decoder{};
+        ZydisDecoderInit(&decoder, ZYDIS_MACHINE_MODE_LONG_64, ZYDIS_STACK_WIDTH_64);
+
+        // Extra seeds by address.
+        for (auto& t : extra_rvas)
+        {
+            uint64_t rva = parse_hex(t);
+            if (rva && in_text(rva))
+            {
+                queue.emplace_front(static_cast<uint32_t>(rva), 0);
+                why.emplace(static_cast<uint32_t>(rva), "requested");
+            }
+        }
+
+        // Whole-program scan: calls / jumps to xref_targets, and memory
+        // operands with a displacement in field_disps (who reads / writes a
+        // field). The containing functions are dumped too.
+        std::set<uint64_t> xref_targets, field_disps;
+        for (auto& t : xref_list) if (auto v = parse_hex(t)) xref_targets.insert(v);
+        for (auto& t : field_list) if (auto v = parse_hex(t)) field_disps.insert(v);
+        size_t xref_count = 0, field_count = 0;
+        if (!xref_targets.empty() || !field_disps.empty())
+        {
+            std::ofstream xrefs_out(dir + L"\\xrefs.txt");
+            std::ofstream fields_out(dir + L"\\fields.txt");
+            std::map<uint64_t, size_t> per_field;
+            ZydisDecodedInstruction ins{};
+            ZydisDecodedOperand ops[ZYDIS_MAX_OPERAND_COUNT]{};
+            for (auto& f : img.functions)
+            {
+                if (!in_text(f.begin) || f.end <= f.begin || f.end - f.begin > 1024 * 1024) continue;
+                uint32_t off = 0, len = f.end - f.begin;
+                while (off < len)
+                {
+                    const uint8_t* at = img.base + f.begin + off;
+                    if (!ZYAN_SUCCESS(ZydisDecoderDecodeFull(&decoder, at, len - off, &ins, ops)))
+                    {
+                        off += 1;
+                        continue;
+                    }
+                    for (int i = 0; i < ins.operand_count_visible; ++i)
+                    {
+                        auto& op = ops[i];
+                        if (!xref_targets.empty() && op.type == ZYDIS_OPERAND_TYPE_IMMEDIATE && op.imm.is_relative)
+                        {
+                            ZyanU64 target{};
+                            if (ZYAN_SUCCESS(ZydisCalcAbsoluteAddress(&ins, &op, reinterpret_cast<uint64_t>(at), &target)))
+                            {
+                                uint64_t trva = rva_of(reinterpret_cast<const void*>(target));
+                                if (xref_targets.count(trva))
+                                {
+                                    xrefs_out << hex(trva) << " " << hex(f.begin + off) << " " << hex(f.begin) << "\n";
+                                    ++xref_count;
+                                    if (xref_count < 3000)
+                                    {
+                                        queue.emplace_back(f.begin, 0);
+                                        why.emplace(f.begin, "xref " + hex(trva));
+                                    }
+                                }
+                            }
+                        }
+                        if (!field_disps.empty() && op.type == ZYDIS_OPERAND_TYPE_MEMORY && op.mem.base != ZYDIS_REGISTER_RIP &&
+                            op.mem.base != ZYDIS_REGISTER_RSP && op.mem.base != ZYDIS_REGISTER_RBP)
+                        {
+                            uint64_t disp = static_cast<uint64_t>(op.mem.disp.value);
+                            if (field_disps.count(disp) && per_field[disp] < 4000)
+                            {
+                                bool write = (op.actions & ZYDIS_OPERAND_ACTION_MASK_WRITE) != 0;
+                                fields_out << hex(disp) << " " << (write ? "w" : "r") << " " << op.size << " "
+                                           << hex(f.begin + off) << " " << hex(f.begin) << "\n";
+                                ++per_field[disp];
+                                ++field_count;
+                                if (write && op.size == 8)
+                                {
+                                    queue.emplace_back(f.begin, 0);
+                                    why.emplace(f.begin, "writes " + hex(disp));
+                                }
+                            }
+                        }
+                    }
+                    off += ins.length;
+                }
+            }
+        }
+
+        std::ofstream code_out(dir + L"\\code.bin", std::ios::binary);
+        std::ofstream index_out(dir + L"\\index.txt");
+        std::ofstream data_out(dir + L"\\data.txt");
+        std::set<uint32_t> dumped;
+        std::set<uint32_t> data_seen;
+        uint64_t written = 0;
+        const uint64_t limit = static_cast<uint64_t>(max_mb * 1024 * 1024);
+        size_t count = 0;
+
+        while (!queue.empty() && written < limit)
+        {
+            auto [rva, depth] = queue.front();
+            queue.pop_front();
+            const RuntimeFunction* f = function_at(img, rva);
+            uint32_t begin = f ? f->begin : rva;
+            uint32_t end = f ? f->end : rva + 256;
+            if (!in_text(begin) || dumped.count(begin)) continue;
+            dumped.insert(begin);
+            uint32_t size = std::min<uint32_t>(end - begin, 256 * 1024);
+            // A function piece that runs straight into the next .pdata entry
+            // (no padding between them) continues the same function.
+            if (f)
+            {
+                const RuntimeFunction* next = function_at(img, f->end);
+                if (next && next->begin == f->end && !dumped.count(next->begin))
+                {
+                    queue.emplace_front(next->begin, depth);
+                }
+            }
+            code_out.write(reinterpret_cast<const char*>(img.base + begin), size);
+            index_out << hex(begin) << " " << hex(size) << " " << hex(written) << " " << depth << " "
+                      << (why.count(rva) ? why[rva] : "call") << "\n";
+            written += size;
+            ++count;
+
+            // Follow direct calls / jumps; note rip-relative data.
+            ZydisDecodedInstruction instruction{};
+            ZydisDecodedOperand operands[ZYDIS_MAX_OPERAND_COUNT]{};
+            uint32_t offset = 0;
+            while (offset < size)
+            {
+                const uint8_t* at = img.base + begin + offset;
+                if (!ZYAN_SUCCESS(ZydisDecoderDecodeFull(&decoder, at, size - offset, &instruction, operands)))
+                {
+                    offset += 1;
+                    continue;
+                }
+                uint64_t runtime = reinterpret_cast<uint64_t>(at);
+                for (int i = 0; i < instruction.operand_count_visible; ++i)
+                {
+                    auto& op = operands[i];
+                    bool branch = instruction.meta.category == ZYDIS_CATEGORY_CALL ||
+                                  instruction.meta.category == ZYDIS_CATEGORY_UNCOND_BR;
+                    bool jump = instruction.meta.category == ZYDIS_CATEGORY_COND_BR ||
+                                instruction.meta.category == ZYDIS_CATEGORY_UNCOND_BR;
+                    bool relative_imm = op.type == ZYDIS_OPERAND_TYPE_IMMEDIATE && op.imm.is_relative;
+                    bool rip_mem = op.type == ZYDIS_OPERAND_TYPE_MEMORY && op.mem.base == ZYDIS_REGISTER_RIP;
+                    if (!relative_imm && !rip_mem) continue;
+                    ZyanU64 target{};
+                    if (!ZYAN_SUCCESS(ZydisCalcAbsoluteAddress(&instruction, &op, runtime, &target))) continue;
+                    uint64_t target_rva = rva_of(reinterpret_cast<const void*>(target));
+                    if (!target_rva) continue;
+                    bool outside = target_rva < begin || target_rva >= begin + size;
+                    if (relative_imm && jump && in_text(target_rva) && outside)
+                    {
+                        // Another part of the same function (the compiler splits
+                        // large functions into separate .pdata entries).
+                        queue.emplace_front(static_cast<uint32_t>(target_rva), depth);
+                    }
+                    else if (relative_imm && branch && in_text(target_rva))
+                    {
+                        if (depth < max_depth) queue.emplace_back(static_cast<uint32_t>(target_rva), depth + 1);
+                    }
+                    else if (rip_mem && !in_text(target_rva) && data_seen.size() < 50000 &&
+                             data_seen.insert(static_cast<uint32_t>(target_rva)).second &&
+                             target_rva + 64 <= img.size)
+                    {
+                        data_out << hex(target_rva) << " ";
+                        for (int b = 0; b < 64; ++b)
+                        {
+                            static const char* digits = "0123456789abcdef";
+                            uint8_t v = img.base[target_rva + b];
+                            data_out << digits[v >> 4] << digits[v & 15];
+                        }
+                        data_out << "\n";
+                    }
+                }
+                offset += instruction.length;
+            }
+        }
+
+        std::ofstream pdata_out(dir + L"\\pdata.bin", std::ios::binary);
+        pdata_out.write(reinterpret_cast<const char*>(img.base + img.pdata_rva), img.pdata_size);
+        std::ofstream header_out(dir + L"\\header.txt");
+        header_out << "base=" << hex(reinterpret_cast<uint64_t>(img.base)) << " size=" << hex(img.size)
+                   << " text=" << hex(img.text_begin) << "-" << hex(img.text_end)
+                   << " pdata=" << hex(img.pdata_rva) << "+" << hex(img.pdata_size) << "\n"
+                   << img.sections;
+
+        std::ostringstream summary;
+        summary << count << " functions (" << written / 1024 << " KB), " << ufunctions << " UFunctions listed, "
+                << data_seen.size() << " data references, " << xref_count << " xrefs, " << field_count << " field uses"
+                << (queue.empty() ? "" : " (size limit reached)");
+        lua.set_string(summary.str());
+        return 1;
+    }
+
+    // ---- squad routing (the called-in teams' own squad manager) ------------
+    //
+    // The command wheel's DoCommand asks a resolver for the world's squad
+    // manager (USWATManager) and gives it the order; the officers' team
+    // activities ask the same resolver while they run. RoNTAK gives the
+    // called-in teams a second manager and hooks:
+    //   resolver   a wheel order marked for the call-ins, or a call-in officer
+    //              (or anything inside one: its controller, activities,
+    //              components) asking, gets the second manager;
+    //   DoCommand  marks the order: group 0 the main manager (plain game),
+    //              1 the call-ins' manager, 2 both (the full element).
+    // The hooks are installed only if the game code at these addresses is
+    // exactly what was analysed (native/RE_NOTES.md); after a game update
+    // they stay off.
+
+    namespace route
+    {
+        constexpr uint32_t RESOLVER_RVA = 0x4dd1090;
+        constexpr uint32_t DOCOMMAND_RVA = 0x4ca7e10;
+        constexpr uint32_t SCROLL_RVA = 0x4ca7710;     // the wheel's team scroll (widget, forward, bool)
+        constexpr uint32_t SET_TEAM_RVA = 0x4cc32d0;   // the wheel's set team (widget, team)
+        constexpr uint32_t TEAM_DEAD_RVA = 0x4de8b50;  // USWATManager::IsSWATTeamDead (manager, team)
+        constexpr uint32_t WIDGET_TEAM = 0x348;        // SwatCommandWidget::ActiveTeamType
+        constexpr uint32_t MANAGER_INITIALIZE_SLOT = 88;
+        const uint8_t RESOLVER_BYTES[] = {0x48, 0x89, 0x5c, 0x24, 0x08, 0x57, 0x48, 0x83, 0xec, 0x20, 0x48, 0x8b, 0x01, 0xff, 0x90, 0x88, 0x01, 0x00, 0x00};
+        const uint8_t DOCOMMAND_BYTES[] = {0x48, 0x8b, 0xc4, 0x48, 0x89, 0x58, 0x18, 0x44, 0x88, 0x48, 0x20, 0x48, 0x89, 0x50, 0x10, 0x48, 0x89, 0x48, 0x08};
+        const uint8_t SCROLL_BYTES[] = {0x44, 0x88, 0x44, 0x24, 0x18, 0x55, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x57, 0x48, 0x8b, 0xec, 0x48, 0x83, 0xec, 0x60};
+        const uint8_t SET_TEAM_BYTES[] = {0x48, 0x89, 0x5c, 0x24, 0x18, 0x56, 0x48, 0x83, 0xec, 0x20, 0x0f, 0xb6, 0x81, 0x48, 0x03, 0x00, 0x00};
+        const uint8_t TEAM_DEAD_BYTES[] = {0x48, 0x83, 0xec, 0x28, 0x83, 0xb9, 0xd8, 0x00, 0x00, 0x00, 0x00, 0x75, 0x07, 0xb0, 0x01};
+
+        uint64_t resolver_trampoline = 0;
+        uint64_t docommand_trampoline = 0;
+        uint64_t scroll_trampoline = 0;
+        std::unique_ptr<PLH::x64Detour> resolver_detour;
+        std::unique_ptr<PLH::x64Detour> docommand_detour;
+        std::unique_ptr<PLH::x64Detour> scroll_detour;
+        bool installed = false;
+        bool scroll_installed = false;
+        uint8_t* game_base = nullptr;
+
+        UObject* element_manager = nullptr;      // the call-ins' manager
+        UObject* command_manager = nullptr;      // set while a wheel order is routed
+        int group = 0;                           // 0 main, 1 call-ins, 2 both
+        bool in_command = false;
+        std::unordered_set<const void*> members; // call-in actors and their controllers (compared, never used)
+        uint64_t redirects = 0, commands = 0, scrolls = 0;
+
+        using ResolverFn = UObject* (*)(UObject*);
+        using DoCommandFn = uint64_t (*)(void*, void*, uint64_t, uint64_t, void*);
+        using ScrollFn = void (*)(void*, uint64_t, uint64_t);
+        using SetTeamFn = void (*)(void*, uint64_t);
+        using TeamDeadFn = bool (*)(UObject*, uint64_t);
+
+        UObject* main_manager = nullptr;         // the world's own manager when routing was set
+
+        UObject* resolver_hook(UObject* context)
+        {
+            auto original = reinterpret_cast<ResolverFn>(resolver_trampoline);
+            if (!element_manager) return original(context);
+            // Only in the world the call-ins' manager was made for: after a
+            // map change the old pointers are stale and must never be used.
+            UObject* main = original(context);
+            if (main != main_manager) return main;
+            if (command_manager)
+            {
+                ++redirects;
+                return command_manager;
+            }
+            if (context && !members.empty())
+            {
+                UObject* o = context;
+                for (int i = 0; i < 6 && o; ++i)
+                {
+                    if (members.count(o))
+                    {
+                        ++redirects;
+                        return element_manager;
+                    }
+                    o = o->GetOuterPrivate();
+                }
+            }
+            return main;
+        }
+
+        uint64_t docommand_hook(void* widget, void* command, uint64_t a3, uint64_t a4, void* a5)
+        {
+            auto original = reinterpret_cast<DoCommandFn>(docommand_trampoline);
+            if (!element_manager || group == 0 || in_command)
+            {
+                return original(widget, command, a3, a4, a5);
+            }
+            in_command = true;
+            ++commands;
+            uint64_t result = 0;
+            if (group == 2)
+            {
+                // DoCommand adjusts the command's location in place: give the
+                // second run the same command as the first.
+                alignas(16) uint8_t saved[0x200];
+                if (a5) std::memcpy(saved, a5, sizeof(saved));
+                result = original(widget, command, a3, a4, a5);
+                if (a5) std::memcpy(a5, saved, sizeof(saved));
+            }
+            command_manager = element_manager;
+            result = original(widget, command, a3, a4, a5);
+            command_manager = nullptr;
+            in_command = false;
+            return result;
+        }
+
+        // The wheel's team scroll with the called-in teams' manager on: one list
+        //   RED, BLUE, RED+BLUE, GREEN, YELLOW, GREEN+YELLOW, FULL ELEMENT
+        // as (group, wheel team): the wheel keeps showing red / blue / gold and
+        // RoNTAK's on-screen label names the real choice. Teams that are down
+        // are skipped, like the game does.
+        struct WheelEntry
+        {
+            int group;
+            uint8_t team;
+        };
+        constexpr WheelEntry WHEEL[] = {{0, 1}, {0, 2}, {0, 5}, {1, 2}, {1, 1}, {1, 5}, {2, 5}};
+        constexpr int WHEEL_SIZE = sizeof(WHEEL) / sizeof(WHEEL[0]);
+        bool in_scroll = false;
+
+        auto team_dead(UObject* manager, uint8_t team) -> bool
+        {
+            return reinterpret_cast<TeamDeadFn>(game_base + TEAM_DEAD_RVA)(manager, team);
+        }
+
+        auto entry_usable(const WheelEntry& e) -> bool
+        {
+            if (e.group == 0) return !team_dead(main_manager, e.team);
+            if (e.group == 1) return !team_dead(element_manager, e.team);
+            return !team_dead(main_manager, 5) && !team_dead(element_manager, 5);
+        }
+
+        void scroll_hook(void* widget, uint64_t forward, uint64_t flag)
+        {
+            auto original = reinterpret_cast<ScrollFn>(scroll_trampoline);
+            UObject* main = widget ? reinterpret_cast<ResolverFn>(resolver_trampoline)(static_cast<UObject*>(widget)) : nullptr;
+            // The game's own scroll unless the call-ins have a manager in this
+            // world with someone up in it.
+            if (in_scroll || !element_manager || !main || main != main_manager || team_dead(element_manager, 5))
+            {
+                if (element_manager && main == main_manager && !in_scroll) group = 0;
+                original(widget, forward, flag);
+                return;
+            }
+            in_scroll = true;
+            ++scrolls;
+            uint8_t shown = *(static_cast<uint8_t*>(widget) + WIDGET_TEAM);
+            int at = -1;
+            for (int i = 0; i < WHEEL_SIZE; ++i)
+            {
+                if (WHEEL[i].group == group && WHEEL[i].team == shown) at = i;
+            }
+            if (at < 0) at = 0;
+            int step = (forward & 0xff) ? 1 : -1;
+            int next = at;
+            for (int k = 1; k <= WHEEL_SIZE; ++k)
+            {
+                int i = ((at + step * k) % WHEEL_SIZE + WHEEL_SIZE) % WHEEL_SIZE;
+                if (entry_usable(WHEEL[i]))
+                {
+                    next = i;
+                    break;
+                }
+            }
+            group = WHEEL[next].group;
+            // Set the wheel's team with the chosen squad's manager answering
+            // (the game's set-team checks that team in it).
+            command_manager = group == 1 ? element_manager : nullptr;
+            reinterpret_cast<SetTeamFn>(game_base + SET_TEAM_RVA)(widget, WHEEL[next].team);
+            command_manager = nullptr;
+            in_scroll = false;
+        }
+
+        auto code_matches(uint8_t* base, uint32_t rva, const uint8_t* bytes, size_t n) -> bool
+        {
+            return std::memcmp(base + rva, bytes, n) == 0;
+        }
+    } // namespace route
+
+    // RoNTAK_SquadInstall() -> "installed" | nil, why
+    auto squad_install(const LuaMadeSimple::Lua& lua) -> int
+    {
+        if (route::installed)
+        {
+            lua.set_string("installed");
+            return 1;
+        }
+        auto* base = reinterpret_cast<uint8_t*>(GetModuleHandleW(nullptr));
+        if (!route::code_matches(base, route::RESOLVER_RVA, route::RESOLVER_BYTES, sizeof(route::RESOLVER_BYTES)) ||
+            !route::code_matches(base, route::DOCOMMAND_RVA, route::DOCOMMAND_BYTES, sizeof(route::DOCOMMAND_BYTES)))
+        {
+            return fail(lua, "the game's code differs from the analysed build (game updated?); squad routing stays off");
+        }
+        route::resolver_detour = std::make_unique<PLH::x64Detour>(reinterpret_cast<uint64_t>(base + route::RESOLVER_RVA),
+                                                                  reinterpret_cast<uint64_t>(&route::resolver_hook),
+                                                                  &route::resolver_trampoline);
+        if (!route::resolver_detour->hook()) return fail(lua, "could not hook the squad manager resolver");
+        route::docommand_detour = std::make_unique<PLH::x64Detour>(reinterpret_cast<uint64_t>(base + route::DOCOMMAND_RVA),
+                                                                   reinterpret_cast<uint64_t>(&route::docommand_hook),
+                                                                   &route::docommand_trampoline);
+        if (!route::docommand_detour->hook())
+        {
+            route::resolver_detour->unHook();
+            return fail(lua, "could not hook the command wheel's DoCommand");
+        }
+        route::installed = true;
+        route::game_base = base;
+        // The wheel's team scroll (RED .. FULL ELEMENT): optional, the rest works without it.
+        if (route::code_matches(base, route::SCROLL_RVA, route::SCROLL_BYTES, sizeof(route::SCROLL_BYTES)) &&
+            route::code_matches(base, route::SET_TEAM_RVA, route::SET_TEAM_BYTES, sizeof(route::SET_TEAM_BYTES)) &&
+            route::code_matches(base, route::TEAM_DEAD_RVA, route::TEAM_DEAD_BYTES, sizeof(route::TEAM_DEAD_BYTES)))
+        {
+            route::scroll_detour = std::make_unique<PLH::x64Detour>(reinterpret_cast<uint64_t>(base + route::SCROLL_RVA),
+                                                                    reinterpret_cast<uint64_t>(&route::scroll_hook),
+                                                                    &route::scroll_trampoline);
+            route::scroll_installed = route::scroll_detour->hook();
+        }
+        lua.set_string(route::scroll_installed ? "installed" : "installed (no wheel scroll)");
+        return 1;
+    }
+
+    // RoNTAK_SquadCreate(main_manager) -> new manager path | nil, error
+    // A second USWATManager in the main one's world, initialised like the
+    // game's (its setup, tick). Lua then keeps it referenced from the world
+    // (ExtraReferencedObjects), so it lives exactly as long as the mission.
+    auto squad_create(const LuaMadeSimple::Lua& lua) -> int
+    {
+        Args args{lua};
+        auto main_path = args.string("main_manager");
+        if (!args.error.empty()) return fail(lua, args.error);
+        UObject* main = find_object(main_path);
+        if (!main) return fail(lua, "squad manager not found: " + main_path);
+        FStaticConstructObjectParameters params{main->GetClassPrivate(), main->GetOuterPrivate()};
+        UObject* manager = UObjectGlobals::StaticConstructObject(params);
+        if (!manager) return fail(lua, "could not create a squad manager");
+        // Initialize(FSubsystemCollectionBase&): the engine part only sets the
+        // initialised flag and the tick type; the collection isn't used.
+        alignas(16) static uint8_t collection[0x200]{};
+        auto vtable = *reinterpret_cast<void***>(manager);
+        using InitializeFn = void (*)(UObject*, void*);
+        reinterpret_cast<InitializeFn>(vtable[route::MANAGER_INITIALIZE_SLOT])(manager, collection);
+        lua.set_string(path_of(manager));
+        return 1;
+    }
+
+    // RoNTAK_SquadSet(manager, members, group) -> true | nil, error
+    //   manager: the call-ins' manager path ("" = none: routing off)
+    //   members: comma-separated actor paths (their controllers are added)
+    //   group:   0 main, 1 call-ins, 2 both, for the command wheel
+    auto squad_set(const LuaMadeSimple::Lua& lua) -> int
+    {
+        Args args{lua};
+        auto manager_path = args.string("manager");
+        auto member_list = split(args.string("members"));
+        int group = static_cast<int>(args.number("group"));
+        if (!args.error.empty()) return fail(lua, args.error);
+        UObject* manager = manager_path.empty() ? nullptr : find_object(manager_path);
+        if (!manager_path.empty() && !manager) return fail(lua, "squad manager not found: " + manager_path);
+        std::unordered_set<const void*> members;
+        for (auto& path : member_list)
+        {
+            UObject* actor = find_object(path);
+            if (!actor) continue;
+            members.insert(actor);
+            if (auto controller = actor->GetValuePtrByPropertyNameInChain<UObject*>(STR("Controller")))
+            {
+                if (*controller) members.insert(*controller);
+            }
+        }
+        // The manager the game itself resolves in that world (see resolver_hook).
+        route::main_manager = (manager && route::installed) ? reinterpret_cast<route::ResolverFn>(route::resolver_trampoline)(manager) : nullptr;
+        route::element_manager = route::main_manager ? manager : nullptr;
+        if (route::element_manager) members.insert(route::element_manager); // its own calls
+        route::members = std::move(members);
+        route::group = (group >= 0 && group <= 2) ? group : 0;
+        lua.set_bool(true);
+        return 1;
+    }
+
+    // RoNTAK_SquadStatus() -> "installed=1 manager=1 members=4 group=1 redirects=N commands=N"
+    auto squad_status(const LuaMadeSimple::Lua& lua) -> int
+    {
+        std::ostringstream o;
+        o << "installed=" << route::installed << " manager=" << (route::element_manager != nullptr)
+          << " members=" << route::members.size() << " group=" << route::group
+          << " redirects=" << route::redirects << " commands=" << route::commands
+          << " wheel_scroll=" << route::scroll_installed << " scrolls=" << route::scrolls;
+        lua.set_string(o.str());
+        return 1;
+    }
+
+    // RoNTAK_SquadGroup() -> the group the wheel commands now (0 RED / BLUE,
+    // 1 GREEN / YELLOW, 2 FULL ELEMENT): the wheel's scroll changes it too.
+    auto squad_group(const LuaMadeSimple::Lua& lua) -> int
+    {
+        lua.set_integer(route::group);
+        return 1;
+    }
+
     auto register_functions(const LuaMadeSimple::Lua& lua) -> void
     {
         lua.register_function("RoNTAK_NativeVersion", &native_version);
@@ -492,6 +1225,13 @@ namespace
         lua.register_function("RoNTAK_FinishSpawn", &finish_spawn);
         lua.register_function("RoNTAK_AppendObject", &append_object);
         lua.register_function("RoNTAK_ArrayCount", &array_count);
+        lua.register_function("RoNTAK_CreateWidget", &create_widget);
+        lua.register_function("RoNTAK_DumpCode", &dump_code);
+        lua.register_function("RoNTAK_SquadInstall", &squad_install);
+        lua.register_function("RoNTAK_SquadCreate", &squad_create);
+        lua.register_function("RoNTAK_SquadSet", &squad_set);
+        lua.register_function("RoNTAK_SquadStatus", &squad_status);
+        lua.register_function("RoNTAK_SquadGroup", &squad_group);
     }
 } // namespace
 
@@ -501,10 +1241,10 @@ class RoNTAKNative : public CppUserModBase
     RoNTAKNative() : CppUserModBase()
     {
         ModName = STR("RoNTAKNative");
-        ModVersion = STR("0.2.0");
+        ModVersion = STR("0.6.0");
         ModDescription = STR("Native helpers for the RoNTAK mod");
         ModAuthors = STR("RoNTAK");
-        Output::send<LogLevel::Verbose>(STR("[RoNTAKNative] loaded, version 0.2.0\n"));
+        Output::send<LogLevel::Verbose>(STR("[RoNTAKNative] loaded, version 0.6.0\n"));
     }
 
     ~RoNTAKNative() override = default;

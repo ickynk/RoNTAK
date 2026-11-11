@@ -12,6 +12,9 @@ local config = {}
 config.tick_ms = 250
 
 -- Folder used to exchange files with the ATAK companion app.
+-- Which RoNTAK this is (shown in the UE4SS log when the mod loads).
+config.build = "2026-11-11 squad routing 3 (wheel scroll, quiet log)"
+
 -- nil = the "bridge" folder inside this mod (recommended).
 config.bridge_dir = nil
 
@@ -30,6 +33,10 @@ config.keys = {
                              -- Not F11: that is the game's fullscreen / borderless toggle.
     request_green  = "PAGE_UP",   -- call in GREEN team (config.reinforcements)
     request_yellow = "PAGE_DOWN", -- call in YELLOW team
+    select_team    = "INS",  -- Insert: the command wheel commands RED / BLUE <-> GREEN / YELLOW (squads.lua)
+    code_dump      = "DEL",  -- Delete: save the game's command code for reverse-engineering (RoNTAKNative 0.4)
+    team_probe     = "END",  -- team analysis for GREEN / YELLOW orders: press, give orders, press again
+                             -- -> bridge/team_report.txt (teamprobe.lua)
 }
 
 ---------------------------------------------------------------------------
@@ -101,7 +108,8 @@ config.rooms = {
 -- ReadyOrNot_enums.hpp) and the sniffer.
 
 -- ETeamType: TT_SERT_RED = 1, TT_SERT_BLUE = 2, TT_SQUAD = 5 (gold).
-config.team_args = { red = 1, blue = 2, gold = 5 }
+-- red_blue / green_yellow: one squad as GOLD (needs native squad routing).
+config.team_args = { red = 1, blue = 2, gold = 5, red_blue = 5, green_yellow = 5 }
 
 -- EDoorBreachType, passed as "$breach".
 -- "move" is Move & Clear, used for doors that are already open.
@@ -149,6 +157,17 @@ config.reinforcements = {
         green = { names = { "Echo", "Foxtrot" }, kits = { 0, 1 }, joins = "blue" },
         yellow = { names = { "Golf", "Hotel" }, kits = { 2, 3 }, joins = "red" },
     },
+    -- The game's squad list has 8 places (squad slots Alpha..India); a 9th
+    -- officer crashed it. Call-ins that wouldn't fit are refused, so with the
+    -- original four there is room for these two teams.
+    max_squad = 8,
+    -- Log every spawn before and after it (finding the YELLOW spawn crash, Nov 2026).
+    trace_spawns = false,
+    -- Seconds between two operators' spawns (a crash while spawning one right
+    -- after another was seen now and then, Nov 2026).
+    spawn_gap_s = 1.5,
+    -- The order teams are listed in.
+    order = { "green", "yellow" },
     manager = "SWATManager",
     -- "entry": at the mission's entry point (where your squad stood when the
     -- mission began), else near you. "player": always near you.
@@ -178,6 +197,138 @@ config.reinforcements = {
     -- The parts of InventoryComp.SpawnedGear that point at items.
     gear_slots = { "Primary", "Secondary", "Armor", "Helmet", "HelmetMount", "Facewear", "RandomGear", "LongTactical" },
     gear_lists = { "Grenades", "TacticalDevices", "Miscelaneous" },  -- (sic: the game's spelling)
+}
+
+-- Orders for the called-in teams on their own (squads.lua).
+config.squads = {
+    enabled = true,
+    -- RoNTAKNative 0.5+: the called-in teams get their own squad manager,
+    -- so the command wheel commands them like RED / BLUE (Insert picks
+    -- RED / BLUE, GREEN / YELLOW or FULL ELEMENT). false: the older team
+    -- parking below.
+    native_routing = true,
+    -- On-screen names with native routing (wheel GOLD per group; "red+yellow"
+    -- etc. in the FULL ELEMENT group).
+    group_labels = { stock = "RED + BLUE", full = "FULL ELEMENT" },
+    -- The team called-in operators rest on while not commanded by the wheel:
+    -- GOLD (5) is the squad-wide team, so RED / BLUE wheel orders miss them
+    -- and GOLD orders reach them.
+    rest_team = 5,
+    -- While operators are called in, and this long after, everyone stays on
+    -- their real team (the game's spawning may expect RED / BLUE only).
+    pause_after_spawn_s = 3,
+    -- How long a RoNTAK order's team arrangement lasts (ms).
+    restore_ms = 500,
+    -- Which team the wheel shows (the selected team takes it).
+    wheel_class = "SwatCommandWidget",
+    wheel_team_property = "ActiveTeamType",
+    -- While GREEN / YELLOW is selected, a label on screen says so (config.overlay).
+    -- The on-screen text: always shown during a mission, in the colour of the
+    -- team the command wheel commands.
+    label = "COMMANDING: %s",
+    gold_label = "GOLD (FULL ELEMENT)",
+    show_stock_team = true,   -- also when RED / BLUE / GOLD is commanded
+    -- Colour of the on-screen "COMMANDING" text per team.
+    colors = {
+        red = { R = 0.95, G = 0.2, B = 0.2 }, blue = { R = 0.2, G = 0.55, B = 1 }, gold = { R = 1, G = 0.72, B = 0.1 },
+        green = { R = 0.18, G = 0.9, B = 0.44 }, yellow = { R = 1, G = 0.92, B = 0 },
+        orange = { R = 1, G = 0.5, B = 0.05 }, purple = { R = 0.7, G = 0.4, B = 1 },
+        -- native routing groups: RED + BLUE, GREEN + YELLOW, FULL ELEMENT
+        stock = { R = 1, G = 0.72, B = 0.1 }, called_in = { R = 0.65, G = 1, B = 0.15 }, full = { R = 1, G = 1, B = 1 },
+    },
+    -- Also send the game's player message (Ready or Not didn't show it in testing).
+    announce = false,
+    announce_seconds = 3,
+    log_routes = true,
+}
+
+-- RoNTAK's on-screen text (overlay.lua), e.g. which team the wheel commands.
+-- Needs RoNTAKNative 0.3+ (it creates the widget the game's way).
+config.overlay = {
+    enabled = true,
+    position = { X = 24, Y = 110 },  -- top-left corner of the text, in screen pixels
+    size = { X = 640, Y = 60 },
+    font_size = 30,
+    outline_size = 3,                -- dark outline around the letters
+    outline_color = { R = 0, G = 0, B = 0, A = 1 },
+    z_order = 1200,                  -- above the game's HUD
+    widget_class = "/Script/CommonUI.CommonUserWidget",
+}
+
+-- Code dump (Delete key, discovery.dump_code): read-only. The game's code of
+-- these UFunctions (names containing one of seed_filters) and of the live
+-- objects' vtables (classes), with the calls they make to max_depth.
+config.code_dump = {
+    folder = "code_dump",
+    seed_filters = { "SWATManager:", "SwatCommandWidget:", "SwatCommandEntryWidget:", "CommandWheel:",
+                     "ReadyOrNotCommandFunctionLibrary:", "ActivityData:OnSwatCommand", "PlayerCharacter:",
+                     "ReadyOrNotPlayerController:", "SwatTeamStatusWidget:", "TeamStatusWidget:",
+                     "HumanCharacterHUD_V2:", "ConsoleHotkeys:", "CyberneticController:GetTeam",
+                     "ReadyOrNotCharacter:GetTeam", "ReadyOrNotCharacter:IsOnSameTeam", "TeamBaseActivity:" },
+    classes = { "SWATManager", "SwatCommandWidget", "CommandWheel", "ReadyOrNotPlayerController",
+                "PlayerCharacter", "HumanCharacterHUD_V2", "SwatAIController", "CyberneticController" },
+    max_depth = 3,
+    max_mb = 24,
+    -- Addresses (RVAs) found in the first dumps, for this game build only
+    -- (ReadyOrNotSteam-Win64-Shipping.exe of Nov 2026):
+    --   4ca7e10 the wheel's DoCommand        4dd1090 the squad manager resolver
+    --   4ca7710 the wheel's team scroll      4ccd250 the wheel's refresh
+    --   4cbd2e3 the wheel's tick part        4de8b50 IsSWATTeamDead
+    --   4de3260 / 4de2b40 / 4de5e10 / 4de2f90 / 4de5a90 Give Move / FallIn / StackUp / Hold / Search
+    --   4de8f30 / 4de7f50 manager checks     4dc91c0 CanGiveActivityToSWAT
+    --   4def4d0 the manager's world callback  4dfb010 the manager's Tick
+    --   4df9070 the manager's setup          4cc32d0 the wheel's set team
+    extra_rvas = { "4def4d0", "4dfb010", "4df9070", "4cc32d0", "4de7c60", "4dcb150",
+                   "4ca7e10", "4dd1090", "4ca7710", "4ccd250", "4cbd2e3", "4de8b50", "4de8f30", "4de7f50",
+                   "4de3260", "4de2b40", "4de5e10", "4de2f90", "4de5a90", "4dc91c0", "4cafa30", "4ca5c70",
+                   -- The officer-spawn crash (writing address 4, Nov 2026): the game functions
+                   -- on its call stack, innermost first.
+                   "e54140", "e54090", "d5f360", "2bbe6b0", "2e10da4", "2dff58c", "2e03750", "2d60fd0",
+                   "2d77f6e", "2b46780", "2b4bf40", "2b4ad55", "30b0d9c", "2f1c7e0", "2f4cc70" },
+    -- Classes whose property offsets are written to offsets.txt.
+    offset_classes = { "SWATManager", "SwatCommandWidget", "ReadyOrNotCharacter", "SWATCharacter", "CyberneticCharacter",
+                       "CyberneticController", "BaseActivity", "TeamBaseActivity", "TeamStackUpActivity",
+                       "TeamBreachAndClearActivity", "TeamFallinActivity" },
+    -- Every call to these (who scrolls the wheel's team, who asks for the manager).
+    xref_targets = { "4ca7710", "4ca7e10", "4dd1090", "4de8b50", "494eb50" },
+    -- Every use of these field offsets: the wheel's team bytes 0x348..0x34c and
+    -- the squad manager's ActiveCommandTeam 0xcb9.
+    field_disps = { "348", "34a", "34b", "34c", "cb8", "cb9" },
+}
+
+-- Team analysis (End key, teamprobe.lua): read-only.
+config.team_probe = {
+    team_enum = "ETeamType",
+    team_enum_path = "/Script/ReadyOrNot.ETeamType",
+    max_live_instances = 12,
+    -- Functions watched while the probe runs; team = which parameter is the
+    -- team (from the order signatures above), nil = no team parameter.
+    watch = {
+        { path = "/Script/ReadyOrNot.SWATManager:GiveStackUpCommand", team = 2 },
+        { path = "/Script/ReadyOrNot.SWATManager:GiveBreachAndClearCommand", team = 3 },
+        { path = "/Script/ReadyOrNot.SWATManager:GiveCheckForContactsCommand", team = 2 },
+        { path = "/Script/ReadyOrNot.SWATManager:GiveWedgeDoorCommand", team = 2 },
+        { path = "/Script/ReadyOrNot.SWATManager:GiveMoveCommand", team = 1 },
+        { path = "/Script/ReadyOrNot.SWATManager:GiveFallInCommand", team = 1 },
+        { path = "/Script/ReadyOrNot.SWATManager:GiveHoldCommand", team = 1 },
+        { path = "/Script/ReadyOrNot.SWATManager:GiveSearchAndSecureCommand", team = 1 },
+        { path = "/Script/ReadyOrNot.SWATManager:GivePickLockCommand", team = 2 },
+        { path = "/Script/ReadyOrNot.SWATManager:GiveCloseDoorCommand", team = 2 },
+        { path = "/Script/ReadyOrNot.SWATManager:GiveRemoveWedgeCommand", team = 2 },
+        { path = "/Script/ReadyOrNot.SWATManager:GiveCheckForTrapsCommand", team = 2 },
+        { path = "/Script/ReadyOrNot.SWATManager:GiveScanDoorCommand", team = 2 },
+        { path = "/Script/ReadyOrNot.SWATManager:GiveCoverAreaCommand", team = 1 },
+        { path = "/Script/ReadyOrNot.SWATManager:GiveRestrainCommand", team = 2 },
+        { path = "/Script/ReadyOrNot.SWATManager:GiveReportTargetCommand", team = 2 },
+        { path = "/Script/ReadyOrNot.SWATManager:RemoveHoldCommand" },
+        { path = "/Script/ReadyOrNot.SwatCommandWidget:DoCommand" },
+        { path = "/Script/ReadyOrNot.SwatCommandWidget:OnCommandIssued" },
+    },
+    -- Team state read at every watched call.
+    state = {
+        { class = "SwatCommandWidget", props = { "ActiveTeamType", "PreviousActiveTeamType", "OverrideActiveTeamType", "ExecutionTeamType" } },
+        { class = "SWATManager", props = { "ActiveCommandTeam" } },
+    },
 }
 
 -- Helicopter, drone and CCTV cameras, drawn on the map as view cones
