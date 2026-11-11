@@ -13,7 +13,7 @@ config.tick_ms = 250
 
 -- Folder used to exchange files with the ATAK companion app.
 -- Which RoNTAK this is (shown in the UE4SS log when the mod loads).
-config.build = "2026-11-11 squad routing 3 (wheel scroll)"
+config.build = "2026-11-11 squad routing 3 (wheel scroll, quiet log)"
 
 -- nil = the "bridge" folder inside this mod (recommended).
 config.bridge_dir = nil
@@ -162,7 +162,7 @@ config.reinforcements = {
     -- original four there is room for these two teams.
     max_squad = 8,
     -- Log every spawn before and after it (finding the YELLOW spawn crash, Nov 2026).
-    trace_spawns = true,
+    trace_spawns = false,
     -- Seconds between two operators' spawns (a crash while spawning one right
     -- after another was seen now and then, Nov 2026).
     spawn_gap_s = 1.5,
