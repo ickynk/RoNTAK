@@ -13,7 +13,7 @@ config.tick_ms = 250
 
 -- Folder used to exchange files with the ATAK companion app.
 -- Which RoNTAK this is (shown in the UE4SS log when the mod loads).
-config.build = "2026-11-09 squad routing 1"
+config.build = "2026-11-11 squad routing 1 + crash dump"
 
 -- nil = the "bridge" folder inside this mod (recommended).
 config.bridge_dir = nil
@@ -274,7 +274,11 @@ config.code_dump = {
     --   4df9070 the manager's setup          4cc32d0 the wheel's set team
     extra_rvas = { "4def4d0", "4dfb010", "4df9070", "4cc32d0", "4de7c60", "4dcb150",
                    "4ca7e10", "4dd1090", "4ca7710", "4ccd250", "4cbd2e3", "4de8b50", "4de8f30", "4de7f50",
-                   "4de3260", "4de2b40", "4de5e10", "4de2f90", "4de5a90", "4dc91c0", "4cafa30", "4ca5c70" },
+                   "4de3260", "4de2b40", "4de5e10", "4de2f90", "4de5a90", "4dc91c0", "4cafa30", "4ca5c70",
+                   -- The officer-spawn crash (writing address 4, Nov 2026): the game functions
+                   -- on its call stack, innermost first.
+                   "e54140", "e54090", "d5f360", "2bbe6b0", "2e10da4", "2dff58c", "2e03750", "2d60fd0",
+                   "2d77f6e", "2b46780", "2b4bf40", "2b4ad55", "30b0d9c", "2f1c7e0", "2f4cc70" },
     -- Classes whose property offsets are written to offsets.txt.
     offset_classes = { "SWATManager", "SwatCommandWidget", "ReadyOrNotCharacter", "SWATCharacter", "CyberneticCharacter",
                        "CyberneticController", "BaseActivity", "TeamBaseActivity", "TeamStackUpActivity",
