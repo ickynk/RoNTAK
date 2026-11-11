@@ -577,6 +577,7 @@ class ModTest(unittest.TestCase):
         self.lua.execute(f"""
             equip_ok = {str(equip_ok).lower()}
             require("config").squads.pause_after_spawn_s = 0  -- tests below look at teams right after a call-in
+            require("config").reinforcements.spawn_gap_s = 0  -- one operator per tick
             by_path = {{}}
             local function named(o, path)  -- objects are passed to the native functions by path
                 o.GetFullName = function() return "Class " .. path end
@@ -1015,6 +1016,18 @@ class ModTest(unittest.TestCase):
         self.lua.execute("clock = clock + 5")
         self.tick()
         self.assertEqual(self.lua.eval("teams_now()"), "5,5,2,2,1,1")  # arranged for GREEN / YELLOW again
+
+    def test_operators_spawn_with_a_gap(self):
+        self.add_reinforcement_world()
+        self.lua.execute('clock = 100 os.clock = function() return clock end require("config").reinforcements.spawn_gap_s = 1.5')
+        self.run_orders({"id": 1, "team": "green", "action": "request_team", "target": {}, "options": {}})
+        g = self.lua.globals()
+        self.assertEqual(g.finished, 1)  # Echo
+        self.tick()
+        self.assertEqual(g.finished, 1)  # Foxtrot waits
+        self.lua.execute("clock = clock + 2")
+        self.tick()
+        self.assertEqual(g.finished, 2)
 
     def test_squad_never_grows_past_eight(self):
         """A 9th officer in the squad list crashed the game: a call-in that wouldn't fit is refused."""

@@ -509,10 +509,16 @@ function reinforcements.request(cmd)
 end
 
 -- Sets up the next operator, completely; called once per mod tick.
+local next_spawn_at = nil   -- os.clock(): the next operator waits for this
+
 function reinforcements.tick()
     record_entry()
     local job = queue[1]
     if not job then return end
+    -- A pause between operators (config.reinforcements.spawn_gap_s): the game
+    -- finishes setting up the last one (animation, AI) before the next spawns.
+    if next_spawn_at and os.clock() < next_spawn_at then return end
+    next_spawn_at = os.clock() + (c().spawn_gap_s or 0)
     job.step = job.step or "spawn"
     job.made = job.made or {}
     job.fns = job.fns or native()
