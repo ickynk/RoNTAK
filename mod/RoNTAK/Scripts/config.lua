@@ -13,7 +13,7 @@ config.tick_ms = 250
 
 -- Folder used to exchange files with the ATAK companion app.
 -- Which RoNTAK this is (shown in the UE4SS log when the mod loads).
-config.build = "2026-11-11 squad routing 3 (wheel scroll, quiet log)"
+config.build = "2026-11-11 squad routing 4 (finds game code)"
 
 -- nil = the "bridge" folder inside this mod (recommended).
 config.bridge_dir = nil

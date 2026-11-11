@@ -125,6 +125,7 @@ function squads.native_ready()
     if ok and done then
         native.installed = true
         note("native squad routing installed: the called-in teams get their own squad manager")
+        note("native squad routing found: " .. tostring(done))
     else
         note("native squad routing unavailable (" .. tostring(ok and err or done) .. "); using team parking")
     end

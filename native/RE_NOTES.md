@@ -3,8 +3,9 @@
 Found with RoNTAKNative's code dump (Delete key, `RoNTAK_DumpCode`) and
 analysed offline with Capstone. **Addresses are RVAs in
 `ReadyOrNotSteam-Win64-Shipping.exe` of November 2026 (154 511 872 bytes)
-and change with every game update**: the native hooks will find them by
-byte patterns made from this code, not by these numbers.
+and change with every game update**: since native 0.7 the hooks find the
+functions by what they do (see "Finding the code after a game update"), not
+by these numbers.
 
 ## How a command-wheel order travels
 
@@ -71,3 +72,24 @@ skips the game's voice line. Prologue bytes checked before hooking:
 | `4ca7710` team scroll | `44 88 44 24 18 55 57 41 54 41 55 41 57 48 8b ec 48 83 ec 60` |
 | `4cc32d0` set team | `48 89 5c 24 18 56 48 83 ec 20 0f b6 81 48 03 00 00` |
 | `4de8b50` IsSWATTeamDead | `48 83 ec 28 83 b9 d8 00 00 00 00 75 07 b0 01` |
+
+## Finding the code after a game update (native 0.7)
+
+`find_game_code` in `dllmain.cpp` recognises each function from anchors a
+game update keeps: UFunction exec thunks (looked up by name), property
+offsets (reflection) and the code's shape (decoded with Zydis; function
+bounds from `.pdata`, chained pieces included).
+
+| Function | How it is found |
+| --- | --- |
+| IsSWATTeamDead | the last call in the exec thunk of `SWATManager:IsSWATTeamDead` |
+| DoCommand | the call in the exec thunk of `SwatCommandWidget:DoCommand` whose code first calls a resolver-shaped function and uses `ExecutionTeamType` |
+| resolver | that function: a virtual call (GetWorld) first, one class asked (StaticClass, twice), a tail jump, under 0x100 bytes |
+| team scroll | among the resolver's callers (every `call rel32` to it): first call the resolver, `IsSWATTeamDead` asked with 5, writes 0 to `ActiveTeamType`, calls set-team |
+| set-team | reads `ActiveTeamType` and writes the byte after it in its first 0x40 bytes, calls the resolver and `IsSWATTeamDead` |
+| Initialize (vtable slot) | the slot near 88 whose function first calls the parent class's function in the same slot (`Super::Initialize`) |
+
+Each must be found exactly once; otherwise that part stays off and the log
+says why (routing falls back to team parking; the wheel scroll to the game's
+own). The log line `native squad routing found: …` lists every address and
+marks the ones that moved.
