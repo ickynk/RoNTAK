@@ -182,6 +182,20 @@ local function native_group()
     return 0
 end
 
+local GROUP_SELECTED = { [0] = nil, [1] = CALLED_IN, [2] = FULL }
+
+-- RoNTAKNative 0.6+: the wheel's own scroll changes the group too; follow it.
+local function follow_wheel_group()
+    local get = native.installed and native_fn("RoNTAK_SquadGroup")
+    if not get or not valid(native.element) then return end
+    local ok, g = pcall(get)
+    g = ok and tonumber(g) or nil
+    if g == nil or g == native_group() then return end
+    selected = GROUP_SELECTED[g]
+    native.group = g
+    note("Command wheel (scroll): " .. (g == 2 and "FULL ELEMENT" or g == 1 and "GREEN / YELLOW" or "RED / BLUE"))
+end
+
 -- Tells RoNTAKNative the manager, its officers and the wheel's group (when changed).
 local function push_routing()
     if not native.installed then return end
@@ -199,10 +213,13 @@ end
 
 -- Who a RoNTAK order goes to with native routing: the managers to call it
 -- on (main: the game's own). nil without native routing (squads.route then).
+--   gold          both squads (FULL ELEMENT)
+--   red_blue      the game's squad as GOLD
+--   green_yellow  the called-in squad as GOLD
 function squads.order_targets(team, main)
     if not routed() then return nil end
     if team == "gold" then return { main, native.element } end
-    if team_defs()[team] then return { native.element } end
+    if team == "green_yellow" or team_defs()[team] then return { native.element } end
     return { main }
 end
 
@@ -369,6 +386,9 @@ local function has_members(team)
     return false
 end
 
+-- Is any called-in operator up?
+function squads.callins_up() return has_members(nil) end
+
 local function group_label(group)
     if group == FULL then return "FULL ELEMENT" end
     if group == CALLED_IN then
@@ -487,6 +507,7 @@ function squads.tick()
     end
     read_wheel_team()
     squads.native_ready()
+    follow_wheel_group()
     squads.arrange()
     push_routing()
     -- On screen during a mission: who the wheel commands, in that team's colour.

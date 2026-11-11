@@ -277,6 +277,8 @@ function game.officer_actors()
 end
 
 local function on_team(officer, team)
+    if team == "red_blue" then return officer.team == "red" or officer.team == "blue" end
+    if team == "green_yellow" then return officer.team == "green" or officer.team == "yellow" end
     return team == "gold" or officer.team == team
 end
 

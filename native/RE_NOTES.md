@@ -56,14 +56,18 @@ Widget fields: `0x348` ActiveTeamType, `0x34a` OverrideActiveTeamType,
    FULL ELEMENT (the wheel shows red / blue / gold; RoNTAK's label shows the
    real name).
 
-### Status (native 0.5.0)
+### Status (native 0.6.0)
 
-Steps 1-3 are in `RoNTAKNative` (`RoNTAK_Squad*`, the "squad routing"
+Steps 1-4 are in `RoNTAKNative` (`RoNTAK_Squad*`, the "squad routing"
 section of `dllmain.cpp`) and `mod/RoNTAK/Scripts/squads.lua`; Insert picks
-the group for now. Prologue bytes checked before hooking:
+or the wheel's scroll picks the group. The scroll hook calls set-team `4cc32d0(widget, team)` with the
+chosen squad's manager answering the resolver (set-team checks the team with `IsSWATTeamDead` in it) and
+skips the game's voice line. Prologue bytes checked before hooking:
 
 | RVA | First bytes |
 | --- | --- |
 | `4dd1090` resolver | `48 89 5c 24 08 57 48 83 ec 20 48 8b 01 ff 90 88 01 00 00` |
 | `4ca7e10` DoCommand | `48 8b c4 48 89 58 18 44 88 48 20 48 89 50 10 48 89 48 08` |
-| `4ca7710` team scroll | `44 88 44 24 18 55 57 41 54 41 55 41 57 48 8b ec 48 83 ec 60` (step 4) |
+| `4ca7710` team scroll | `44 88 44 24 18 55 57 41 54 41 55 41 57 48 8b ec 48 83 ec 60` |
+| `4cc32d0` set team | `48 89 5c 24 18 56 48 83 ec 20 0f b6 81 48 03 00 00` |
+| `4de8b50` IsSWATTeamDead | `48 83 ec 28 83 b9 d8 00 00 00 00 75 07 b0 01` |

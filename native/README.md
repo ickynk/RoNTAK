@@ -5,17 +5,18 @@ safely on UE4SS 3.0.1. Calling in reinforcement teams needs it.
 
 | Function | What it does |
 | --- | --- |
-| `RoNTAK_NativeVersion()` | `"0.5.0"`: shows the native mod is loaded |
+| `RoNTAK_NativeVersion()` | `"0.6.0"`: shows the native mod is loaded |
 | `RoNTAK_BeginSpawn(context, class, x, y, z, yaw, collision, owner)` | starts a deferred spawn through the game's `GameplayStatics` (Lua's `World:SpawnActor` returns a broken object on this game); gives the actor's path |
 | `RoNTAK_FinishSpawn(actor, x, y, z, yaw)` | finishes it, after Lua set the actor up |
 | `RoNTAK_AppendObject(owner, property, element)` | appends to an object array (`"SwatAI"`, `"SpawnedGear.Grenades"`) with the engine's allocator (a Lua write past the end of an array writes into game memory) |
 | `RoNTAK_ArrayCount(owner, property)` | an object array's length |
 | `RoNTAK_CreateWidget(class, owner)` | a widget made the game's way (`WidgetBlueprintLibrary::Create`), for RoNTAK's on-screen text |
 | `RoNTAK_DumpCode(...)` | writes the game's code around the squad manager and command wheel to files, for offline analysis (Delete key; see `RE_NOTES.md`) |
-| `RoNTAK_SquadInstall()` | hooks the game's squad-manager lookup and the command wheel's `DoCommand` (only if their code is exactly the analysed build's) |
+| `RoNTAK_SquadInstall()` | hooks the game's squad-manager lookup, the command wheel's `DoCommand` and its team scroll (only if their code is exactly the analysed build's) |
 | `RoNTAK_SquadCreate(main_manager)` | a second squad manager (`USWATManager`) in the same world, for the called-in teams |
 | `RoNTAK_SquadSet(manager, members, group)` | the called-in teams' manager, their officers (comma-separated paths) and the wheel's group: 0 RED / BLUE, 1 GREEN / YELLOW, 2 FULL ELEMENT |
 | `RoNTAK_SquadStatus()` | the routing's state and counters, for the log |
+| `RoNTAK_SquadGroup()` | the group the wheel commands now; the wheel's team scroll (hooked in 0.6) changes it: RED, BLUE, RED+BLUE, GREEN, YELLOW, GREEN+YELLOW, FULL ELEMENT |
 
 Objects are passed as object paths, never as raw addresses, and checked.
 
@@ -55,4 +56,4 @@ cmake --build native/build --target RoNTAKNative
 
 The mod folder goes next to RoNTAK in UE4SS's Mods folder:
 `Mods\RoNTAKNative\dlls\main.dll` plus `Mods\RoNTAKNative\enabled.txt`.
-RoNTAK's UE4SS console line `native: version 0.5.0` shows it's working.
+RoNTAK's UE4SS console line `native: version 0.6.0` shows it's working.

@@ -193,6 +193,14 @@ function orders.execute(cmd)
         -- manager: the order goes to theirs, the game's, or both (GOLD).
         local targets = spec.target == ((config.reinforcements or {}).manager or "SWATManager")
             and squads.order_targets(cmd.team, target) or nil
+        local combined = cmd.team == "red_blue" or cmd.team == "green_yellow"
+        if not targets and combined then
+            -- Without separate squads only GOLD exists, and it reaches everyone.
+            if cmd.team == "green_yellow" or squads.callins_up() then
+                error("RED+BLUE / GREEN+YELLOW need native squad routing (RoNTAKNative 0.5+)")
+            end
+            targets = { target }   -- nobody called in: RED+BLUE is everyone
+        end
         if not targets then
             -- Exactly this team gets it (the called-in teams share the game's RED / BLUE).
             local value = orders.team_value(cmd.team)
@@ -226,16 +234,17 @@ end
 -- Held orders ("Hold for GO") ---------------------------------------------
 
 -- team -> { cmd = order, result = its result table }. GOLD means both teams,
--- so holding GOLD replaces held RED / BLUE orders and the other way round.
+-- so holding GOLD replaces every other held order and the other way round;
+-- RED+BLUE replaces held RED / BLUE orders (and GREEN+YELLOW GREEN / YELLOW).
 local held = {}
-local HELD_ORDER = { "gold", "red", "blue" }
+local HELD_ORDER = { "gold", "red_blue", "green_yellow", "red", "blue", "green", "yellow" }
+local PARTS = { gold = HELD_ORDER, red_blue = { "red", "blue" }, green_yellow = { "green", "yellow" } }
+local WHOLE = { red = "red_blue", blue = "red_blue", green = "green_yellow", yellow = "green_yellow" }
 
 function orders.hold(cmd)
-    if cmd.team == "gold" then
-        held.red, held.blue = nil, nil
-    else
-        held.gold = nil
-    end
+    for _, part in ipairs(PARTS[cmd.team] or {}) do held[part] = nil end
+    if cmd.team ~= "gold" then held.gold = nil end
+    if WHOLE[cmd.team] then held[WHOLE[cmd.team]] = nil end
     local result = { id = cmd.id, team = cmd.team, action = cmd.action, status = "held" }
     held[cmd.team] = { cmd = cmd, result = result }
     log.info(string.format("order %d: %s %s held for GO", cmd.id, cmd.team, cmd.action))

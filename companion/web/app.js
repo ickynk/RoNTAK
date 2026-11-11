@@ -7,8 +7,11 @@
   const DOOR_ROOM_LINK_UNITS = 120;
 
   const TEAM_COLORS = { red: "#e53935", blue: "#1e88e5", gold: "#f9a825", green: "#2ecc71", yellow: "#ffe600",
-    orange: "#ff8c1a", purple: "#b06cff", unknown: "#9e9e9e" };
-  const TEAM_LABEL = { red: "RED", blue: "BLUE", gold: "GOLD", green: "GREEN", yellow: "YELLOW", orange: "ORANGE", purple: "PURPLE" };
+    red_blue: "#b06cff", green_yellow: "#b8f02a", orange: "#ff8c1a", purple: "#b06cff", unknown: "#9e9e9e" };
+  const TEAM_LABEL = { red: "RED", blue: "BLUE", gold: "FULL ELEMENT", green: "GREEN", yellow: "YELLOW",
+    red_blue: "RED+BLUE", green_yellow: "GREEN+YELLOW", orange: "ORANGE", purple: "PURPLE" };
+  // Order teams made of other teams (gold: everyone).
+  const TEAM_GROUPS = { red_blue: ["red", "blue"], green_yellow: ["green", "yellow"] };
   // Teams called in during a mission (the mod's config.reinforcements).
   // [team, operators, stock team whose orders they also follow for now]
   const CALL_IN_TEAMS = [["green", "Echo, Foxtrot", "blue"], ["yellow", "Golf, Hotel", "red"]];
@@ -217,7 +220,7 @@
 
   function teamMembers(team) {
     const officers = (app.state && app.state.officers) || [];
-    return officers.filter((o) => team === "gold" || o.team === team);
+    return officers.filter((o) => team === "gold" || o.team === team || (TEAM_GROUPS[team] || []).includes(o.team));
   }
 
   function setHint(text) {
@@ -1990,12 +1993,20 @@
       if (btn) btn.hidden = !alive;
       if (!alive && app.team === team) selectTeam("red");
     }
+    // RED+BLUE and GREEN+YELLOW: separate squads exist only with native squad
+    // routing, and only matter while a called-in team is up.
+    const groupsOn = Boolean(s.squad_routing) && anyOnScene;
+    for (const team of ["red_blue", "green_yellow"]) {
+      const btn = document.querySelector(`.team[data-team="${team}"]`);
+      if (btn) btn.hidden = !groupsOn;
+      if (!groupsOn && app.team === team) selectTeam("gold");
+    }
     // Which officers the in-game command wheel commands.
     const wheel = $("wheel-team");
     wheel.hidden = !live || !anyOnScene;
     wheel.innerHTML = "<span>Command wheel:</span>";
     wheel.title = s.squad_routing
-      ? "Which squad the in-game command wheel commands (Insert key in game): its GOLD commands the whole group."
+      ? "Which squad the in-game command wheel commands (Insert key or the wheel's team scroll in game): its GOLD commands the whole group."
       : "Which officers the in-game command wheel's RED and BLUE command (Insert key in game). GOLD always commands everyone.";
     const selected = s.selected_team || "stock";
     const groups = [["stock", "RED / BLUE", ["red", "blue"]],

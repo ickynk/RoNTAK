@@ -2,7 +2,7 @@
 //
 // Gives RoNTAK's Lua mod the few things Lua can't do safely on UE4SS 3.0.1:
 //
-//   RoNTAK_NativeVersion() -> "0.5.0"
+//   RoNTAK_NativeVersion() -> "0.6.0"
 //
 //   RoNTAK_BeginSpawn(context, class, x, y, z, yaw, collision, owner)
 //       -> actor path | nil, error
@@ -91,7 +91,7 @@ using namespace RC::Unreal;
 
 namespace
 {
-    constexpr const char* NATIVE_VERSION = "0.5.0";
+    constexpr const char* NATIVE_VERSION = "0.6.0";
     constexpr const RC::CharType* LUA_MOD_NAME = STR("RoNTAK");
 
     // ---- Lua arguments ------------------------------------------------------
@@ -934,25 +934,39 @@ namespace
     {
         constexpr uint32_t RESOLVER_RVA = 0x4dd1090;
         constexpr uint32_t DOCOMMAND_RVA = 0x4ca7e10;
+        constexpr uint32_t SCROLL_RVA = 0x4ca7710;     // the wheel's team scroll (widget, forward, bool)
+        constexpr uint32_t SET_TEAM_RVA = 0x4cc32d0;   // the wheel's set team (widget, team)
+        constexpr uint32_t TEAM_DEAD_RVA = 0x4de8b50;  // USWATManager::IsSWATTeamDead (manager, team)
+        constexpr uint32_t WIDGET_TEAM = 0x348;        // SwatCommandWidget::ActiveTeamType
         constexpr uint32_t MANAGER_INITIALIZE_SLOT = 88;
         const uint8_t RESOLVER_BYTES[] = {0x48, 0x89, 0x5c, 0x24, 0x08, 0x57, 0x48, 0x83, 0xec, 0x20, 0x48, 0x8b, 0x01, 0xff, 0x90, 0x88, 0x01, 0x00, 0x00};
         const uint8_t DOCOMMAND_BYTES[] = {0x48, 0x8b, 0xc4, 0x48, 0x89, 0x58, 0x18, 0x44, 0x88, 0x48, 0x20, 0x48, 0x89, 0x50, 0x10, 0x48, 0x89, 0x48, 0x08};
+        const uint8_t SCROLL_BYTES[] = {0x44, 0x88, 0x44, 0x24, 0x18, 0x55, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x57, 0x48, 0x8b, 0xec, 0x48, 0x83, 0xec, 0x60};
+        const uint8_t SET_TEAM_BYTES[] = {0x48, 0x89, 0x5c, 0x24, 0x18, 0x56, 0x48, 0x83, 0xec, 0x20, 0x0f, 0xb6, 0x81, 0x48, 0x03, 0x00, 0x00};
+        const uint8_t TEAM_DEAD_BYTES[] = {0x48, 0x83, 0xec, 0x28, 0x83, 0xb9, 0xd8, 0x00, 0x00, 0x00, 0x00, 0x75, 0x07, 0xb0, 0x01};
 
         uint64_t resolver_trampoline = 0;
         uint64_t docommand_trampoline = 0;
+        uint64_t scroll_trampoline = 0;
         std::unique_ptr<PLH::x64Detour> resolver_detour;
         std::unique_ptr<PLH::x64Detour> docommand_detour;
+        std::unique_ptr<PLH::x64Detour> scroll_detour;
         bool installed = false;
+        bool scroll_installed = false;
+        uint8_t* game_base = nullptr;
 
         UObject* element_manager = nullptr;      // the call-ins' manager
         UObject* command_manager = nullptr;      // set while a wheel order is routed
         int group = 0;                           // 0 main, 1 call-ins, 2 both
         bool in_command = false;
         std::unordered_set<const void*> members; // call-in actors and their controllers (compared, never used)
-        uint64_t redirects = 0, commands = 0;
+        uint64_t redirects = 0, commands = 0, scrolls = 0;
 
         using ResolverFn = UObject* (*)(UObject*);
         using DoCommandFn = uint64_t (*)(void*, void*, uint64_t, uint64_t, void*);
+        using ScrollFn = void (*)(void*, uint64_t, uint64_t);
+        using SetTeamFn = void (*)(void*, uint64_t);
+        using TeamDeadFn = bool (*)(UObject*, uint64_t);
 
         UObject* main_manager = nullptr;         // the world's own manager when routing was set
 
@@ -1011,6 +1025,73 @@ namespace
             return result;
         }
 
+        // The wheel's team scroll with the called-in teams' manager on: one list
+        //   RED, BLUE, RED+BLUE, GREEN, YELLOW, GREEN+YELLOW, FULL ELEMENT
+        // as (group, wheel team): the wheel keeps showing red / blue / gold and
+        // RoNTAK's on-screen label names the real choice. Teams that are down
+        // are skipped, like the game does.
+        struct WheelEntry
+        {
+            int group;
+            uint8_t team;
+        };
+        constexpr WheelEntry WHEEL[] = {{0, 1}, {0, 2}, {0, 5}, {1, 2}, {1, 1}, {1, 5}, {2, 5}};
+        constexpr int WHEEL_SIZE = sizeof(WHEEL) / sizeof(WHEEL[0]);
+        bool in_scroll = false;
+
+        auto team_dead(UObject* manager, uint8_t team) -> bool
+        {
+            return reinterpret_cast<TeamDeadFn>(game_base + TEAM_DEAD_RVA)(manager, team);
+        }
+
+        auto entry_usable(const WheelEntry& e) -> bool
+        {
+            if (e.group == 0) return !team_dead(main_manager, e.team);
+            if (e.group == 1) return !team_dead(element_manager, e.team);
+            return !team_dead(main_manager, 5) && !team_dead(element_manager, 5);
+        }
+
+        void scroll_hook(void* widget, uint64_t forward, uint64_t flag)
+        {
+            auto original = reinterpret_cast<ScrollFn>(scroll_trampoline);
+            UObject* main = widget ? reinterpret_cast<ResolverFn>(resolver_trampoline)(static_cast<UObject*>(widget)) : nullptr;
+            // The game's own scroll unless the call-ins have a manager in this
+            // world with someone up in it.
+            if (in_scroll || !element_manager || !main || main != main_manager || team_dead(element_manager, 5))
+            {
+                if (element_manager && main == main_manager && !in_scroll) group = 0;
+                original(widget, forward, flag);
+                return;
+            }
+            in_scroll = true;
+            ++scrolls;
+            uint8_t shown = *(static_cast<uint8_t*>(widget) + WIDGET_TEAM);
+            int at = -1;
+            for (int i = 0; i < WHEEL_SIZE; ++i)
+            {
+                if (WHEEL[i].group == group && WHEEL[i].team == shown) at = i;
+            }
+            if (at < 0) at = 0;
+            int step = (forward & 0xff) ? 1 : -1;
+            int next = at;
+            for (int k = 1; k <= WHEEL_SIZE; ++k)
+            {
+                int i = ((at + step * k) % WHEEL_SIZE + WHEEL_SIZE) % WHEEL_SIZE;
+                if (entry_usable(WHEEL[i]))
+                {
+                    next = i;
+                    break;
+                }
+            }
+            group = WHEEL[next].group;
+            // Set the wheel's team with the chosen squad's manager answering
+            // (the game's set-team checks that team in it).
+            command_manager = group == 1 ? element_manager : nullptr;
+            reinterpret_cast<SetTeamFn>(game_base + SET_TEAM_RVA)(widget, WHEEL[next].team);
+            command_manager = nullptr;
+            in_scroll = false;
+        }
+
         auto code_matches(uint8_t* base, uint32_t rva, const uint8_t* bytes, size_t n) -> bool
         {
             return std::memcmp(base + rva, bytes, n) == 0;
@@ -1044,7 +1125,18 @@ namespace
             return fail(lua, "could not hook the command wheel's DoCommand");
         }
         route::installed = true;
-        lua.set_string("installed");
+        route::game_base = base;
+        // The wheel's team scroll (RED .. FULL ELEMENT): optional, the rest works without it.
+        if (route::code_matches(base, route::SCROLL_RVA, route::SCROLL_BYTES, sizeof(route::SCROLL_BYTES)) &&
+            route::code_matches(base, route::SET_TEAM_RVA, route::SET_TEAM_BYTES, sizeof(route::SET_TEAM_BYTES)) &&
+            route::code_matches(base, route::TEAM_DEAD_RVA, route::TEAM_DEAD_BYTES, sizeof(route::TEAM_DEAD_BYTES)))
+        {
+            route::scroll_detour = std::make_unique<PLH::x64Detour>(reinterpret_cast<uint64_t>(base + route::SCROLL_RVA),
+                                                                    reinterpret_cast<uint64_t>(&route::scroll_hook),
+                                                                    &route::scroll_trampoline);
+            route::scroll_installed = route::scroll_detour->hook();
+        }
+        lua.set_string(route::scroll_installed ? "installed" : "installed (no wheel scroll)");
         return 1;
     }
 
@@ -1112,8 +1204,17 @@ namespace
         std::ostringstream o;
         o << "installed=" << route::installed << " manager=" << (route::element_manager != nullptr)
           << " members=" << route::members.size() << " group=" << route::group
-          << " redirects=" << route::redirects << " commands=" << route::commands;
+          << " redirects=" << route::redirects << " commands=" << route::commands
+          << " wheel_scroll=" << route::scroll_installed << " scrolls=" << route::scrolls;
         lua.set_string(o.str());
+        return 1;
+    }
+
+    // RoNTAK_SquadGroup() -> the group the wheel commands now (0 RED / BLUE,
+    // 1 GREEN / YELLOW, 2 FULL ELEMENT): the wheel's scroll changes it too.
+    auto squad_group(const LuaMadeSimple::Lua& lua) -> int
+    {
+        lua.set_integer(route::group);
         return 1;
     }
 
@@ -1130,6 +1231,7 @@ namespace
         lua.register_function("RoNTAK_SquadCreate", &squad_create);
         lua.register_function("RoNTAK_SquadSet", &squad_set);
         lua.register_function("RoNTAK_SquadStatus", &squad_status);
+        lua.register_function("RoNTAK_SquadGroup", &squad_group);
     }
 } // namespace
 
@@ -1139,10 +1241,10 @@ class RoNTAKNative : public CppUserModBase
     RoNTAKNative() : CppUserModBase()
     {
         ModName = STR("RoNTAKNative");
-        ModVersion = STR("0.5.0");
+        ModVersion = STR("0.6.0");
         ModDescription = STR("Native helpers for the RoNTAK mod");
         ModAuthors = STR("RoNTAK");
-        Output::send<LogLevel::Verbose>(STR("[RoNTAKNative] loaded, version 0.5.0\n"));
+        Output::send<LogLevel::Verbose>(STR("[RoNTAKNative] loaded, version 0.6.0\n"));
     }
 
     ~RoNTAKNative() override = default;

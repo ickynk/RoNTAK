@@ -135,6 +135,8 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(self.call("POST", "/api/command", {"team": "stock", "action": "select_team"})[0], 200)
         self.assertEqual(self.call("POST", "/api/command", {"team": "called_in", "action": "select_team"})[0], 200)
         self.assertEqual(self.call("POST", "/api/command", {"team": "full", "action": "select_team"})[0], 200)
+        self.assertEqual(self.call("POST", "/api/command", {"team": "red_blue", "action": "fall_in"})[0], 200)
+        self.assertEqual(self.call("POST", "/api/command", {"team": "green_yellow", "action": "fall_in"})[0], 200)
         self.assertEqual(self.call("POST", "/api/command", {"team": "orange", "action": "request_team"})[0], 400)
         self.assertEqual(self.call("POST", "/api/command", {"team": "red", "action": "select_team"})[0], 400)
 

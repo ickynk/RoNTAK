@@ -1,6 +1,7 @@
 # 4. Orders reference
 
-Pick a team (**RED**, **BLUE** or **GOLD** for both), tap something on the map, pick an order, and press the
+Pick a team (**RED**, **BLUE** or **FULL ELEMENT** for everyone; with called-in teams also **GREEN**,
+**YELLOW**, **RED+BLUE** and **GREEN+YELLOW**), tap something on the map, pick an order, and press the
 big button. The panel only lists orders that fit what you tapped. An order that fits but can't be given right
 now is greyed out with the reason, for example "no multitool on BLUE" or "door is locked".
 
@@ -70,8 +71,8 @@ Tick **Hold for GO** under the order button to set up orders without starting th
 3. The **Held for GO** box lists both. Press **GO**, or press **F5** in game, to start them at the same time.
    **Clear** drops them.
 
-Each team holds one order; a new one replaces it. A GOLD order replaces held RED and BLUE orders, and the other
-way round.
+Each team holds one order; a new one replaces it. A FULL ELEMENT order replaces every other held order, a
+RED+BLUE order replaces held RED and BLUE orders (GREEN+YELLOW likewise), and the other way round.
 
 ## Reinforcements: calling in more teams
 
@@ -82,38 +83,45 @@ Two extra teams can be called in during a mission:
 | **GREEN** | Echo, Foxtrot | Alpha, Beta | **Call in GREEN** on the ATAK screen, or **Page Up** in game |
 | **YELLOW** | Golf, Hotel | Charlie, Delta | **Call in YELLOW**, or **Page Down** in game |
 
-**The game's squad holds at most 8 officers** (its squad slots run Alpha to India; a 9th officer crashed the
-game): the original four plus GREEN and YELLOW. A call-in that wouldn't fit is refused and says so
-(`max_squad` in `config.reinforcements`).
+**With RoNTAKNative 0.5 or newer** the called-in teams get **their own squad** (a second copy of the game's
+squad manager), so the game's squad keeps its four officers and its 8-officer limit isn't reached. Without
+it (or with `native_routing = false` in `config.squads`) they join the game's squad, which holds at most 8
+officers (a 9th crashed the game; `max_squad` in `config.reinforcements`).
 
 Calling in needs the native part of RoNTAK, **RoNTAKNative** (version 0.2 or newer: see `native/README.md`);
 without it the button says so and nothing is spawned.
 
-They arrive one per second at the mission's **entry point**, where your squad stood when the mission began
-(or next to you if that's full, or with `spawn_at = "player"` in `config.reinforcements`), and show up on the map
-and roster in their colour. Calling a team again only replaces operators who are dead or missing. If a call-in
-fails, hover over its button to see why (the UE4SS console also says `reinforcements: …`).
+They arrive one every 1.5 seconds (`spawn_gap_s`) at the mission's **entry point**, where your squad stood when
+the mission began (or next to you if that's full, or with `spawn_at = "player"` in `config.reinforcements`),
+and show up on the map and roster in their colour. Calling a team again only replaces operators who are dead
+or missing. If a call-in fails, hover over its button to see why (the UE4SS console also says
+`reinforcements: …`).
 
-They join the squad's officer list and take orders **as their own teams**:
+They take orders **as their own teams**:
 
-- **On the ATAK screen:** the **GREEN** and **YELLOW** team buttons appear next to RED / BLUE / GOLD while the
-  team is on scene. Orders sent with them go to that team only.
-- **With the in-game command wheel:** press **Insert** to switch what the wheel's RED and BLUE command:
+- **On the ATAK screen:** while a called-in team is on scene, the team buttons are **RED**, **BLUE**,
+  **RED+BLUE**, **GREEN**, **YELLOW**, **GREEN+YELLOW** and **FULL ELEMENT**. RED+BLUE and GREEN+YELLOW need
+  RoNTAKNative 0.5+ (each squad as a whole); FULL ELEMENT is everyone.
+- **With the in-game command wheel** (RoNTAKNative 0.6+): the wheel's **team scroll** steps through
 
-  | Selected | Wheel RED | Wheel BLUE | Wheel GOLD |
+  RED → BLUE → RED+BLUE → GREEN → YELLOW → GREEN+YELLOW → FULL ELEMENT
+
+  (teams that are down are skipped). The wheel itself still shows red, blue or gold; the label near the top
+  left of the screen, **COMMANDING: …**, names the real choice in its colour (`config.overlay`).
+- **Insert** switches the group directly, and the **Command wheel** buttons on the ATAK screen show and switch
+  it too:
+
+  | Group | Wheel RED | Wheel BLUE | Wheel GOLD |
   | --- | --- | --- | --- |
-  | **RED / BLUE** (as in the plain game) | the original RED pair | the original BLUE pair | the full element |
-  | **GREEN / YELLOW** | YELLOW (Golf, Hotel) | GREEN (Echo, Foxtrot) | the full element |
+  | **RED / BLUE** (as in the plain game) | RED | BLUE | RED+BLUE |
+  | **GREEN / YELLOW** | YELLOW (Golf, Hotel) | GREEN (Echo, Foxtrot) | GREEN+YELLOW |
+  | **FULL ELEMENT** | RED+YELLOW | BLUE+GREEN | everyone |
 
-  Near the top left of the screen, **COMMANDING: RED** (BLUE, YELLOW, GREEN, or **GOLD (FULL ELEMENT)**) shows
-  who the wheel commands, in that team's colour (needs RoNTAKNative 0.3; `config.overlay`). The **Command
-  wheel** buttons on the ATAK screen show and switch the group too.
-
-How it works: the game itself only knows RED, BLUE and GOLD, and picks who gets a wheel order from each
-officer's team. RoNTAK keeps those teams arranged for the selected group: the group not selected rests on GOLD
-(the squad-wide team), so the wheel's RED and BLUE reach only the selected group (`squads.lua`,
-`config.squads`). Teams, names, gear and keys are set in `config.lua` (`config.reinforcements`,
-`config.squads`, `request_green`, `request_yellow`, `select_team`).
+How it works: the game only knows RED, BLUE and GOLD. RoNTAKNative hooks the game so that a wheel order, and
+the called-in officers' own AI, use the squad it belongs to (`native/RE_NOTES.md`, `squads.lua`). Without
+RoNTAKNative 0.5 RoNTAK falls back to moving officers between teams (the group not selected rests on GOLD).
+Teams, names, gear and keys are set in `config.lua` (`config.reinforcements`, `config.squads`,
+`request_green`, `request_yellow`, `select_team`).
 
 Single player only.
 

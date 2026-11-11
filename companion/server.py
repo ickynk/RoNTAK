@@ -48,7 +48,9 @@ MAX_UPLOAD_BYTES = 30 * 1024 * 1024
 # Teams called in during a mission (the mod's config.reinforcements): they
 # are requested with request_team, then take orders like the stock teams.
 CALL_IN_TEAMS = {"green", "yellow"}
-TEAMS = {"red", "blue", "gold"} | CALL_IN_TEAMS
+# red_blue / green_yellow: one squad as a whole (the mod needs native squad routing);
+# gold: the full element.
+TEAMS = {"red", "blue", "gold", "red_blue", "green_yellow"} | CALL_IN_TEAMS
 ACTIONS = {
     "stack_up", "open_clear", "breach_clear", "move_clear", "scan_door", "wedge_door",
     "move_to", "fall_in", "hold", "search_secure",
@@ -127,7 +129,7 @@ def validate_order(body: dict) -> dict:
             raise ValueError("team must be stock, called_in or full")
         return {"team": team, "action": action, "target": {}, "options": {}}
     if team not in TEAMS:
-        raise ValueError("team must be red, blue, gold, green or yellow")
+        raise ValueError("team must be red, blue, red_blue, green, yellow, green_yellow or gold")
     order = {"team": team, "action": action}
 
     target = body.get("target") or {}

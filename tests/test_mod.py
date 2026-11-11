@@ -937,6 +937,24 @@ class ModTest(unittest.TestCase):
                              "target": {"location": {"x": 1, "y": 2, "z": 0}}, "options": {}}])
             self.tick()
         self.assertEqual(self.lua.eval("table.concat(moves, ' ')"), "2:2 2:1 1:1 1:5 2:5")
+        # RED+BLUE: the game's squad as GOLD; GREEN+YELLOW: the called-in squad as GOLD.
+        self.lua.execute("moves = {}")
+        for i, team in enumerate(["red_blue", "green_yellow"]):
+            self.send("A", [{"id": 30 + i, "team": team, "action": "move_to",
+                             "target": {"location": {"x": 1, "y": 2, "z": 0}}, "options": {}}])
+            self.tick()
+        self.assertEqual(self.lua.eval("table.concat(moves, ' ')"), "1:5 2:5")
+        # The wheel's own scroll (RoNTAKNative 0.6) changes the group: RoNTAK follows it.
+        self.lua.execute("native_group = 2 function RoNTAK_SquadGroup() return native_group end")
+        state = self.tick()
+        self.assertEqual(state["selected_team"], "full")
+        self.assertEqual(self.lua.eval("draw_frame()"), "COMMANDING: FULL ELEMENT")
+        sets = self.lua.eval("#routing.sets")
+        self.lua.execute("native_group = 1")
+        self.assertEqual(self.tick()["selected_team"], "called_in")
+        self.assertEqual(self.lua.eval("#routing.sets"), sets)  # followed, not pushed back
+        self.assertEqual(self.lua.eval("draw_frame()"), "COMMANDING: GREEN + YELLOW")
+        self.lua.execute("RoNTAK_SquadGroup = nil")
         # A new mission (another squad manager): routing is cleared.
         self.lua.execute("objects.SWATManager[1].GetAddress = function() return 2000 end")
         self.tick()
@@ -1074,6 +1092,22 @@ class ModTest(unittest.TestCase):
                          "target": {"location": {"x": 1, "y": 2, "z": 0}}, "options": {}}])
         self.tick()
         self.assertEqual(self.lua.eval("move_call.teams"), "1,5,2,2,0,0")
+
+    def test_combined_teams_without_native_routing(self):
+        """Without separate squads, RED+BLUE is everyone while nobody is called in; GREEN+YELLOW can't be sent."""
+        self.add_reinforcement_world()
+        self.lua.execute(r"""
+            moves = {}
+            objects.SWATManager[1].GiveMoveCommand = function(self, team) moves[#moves + 1] = team end
+        """)
+        state = self.run_orders({"id": 1, "team": "red_blue", "action": "move_to",
+                                 "target": {"location": {"x": 1, "y": 2, "z": 0}}, "options": {}},
+                                {"id": 2, "team": "green_yellow", "action": "move_to",
+                                 "target": {"location": {"x": 1, "y": 2, "z": 0}}, "options": {}})
+        self.assertEqual(self.lua.eval("table.concat(moves, ' ')"), "5")
+        result = next(r for r in state["results"] if r["id"] == 2)
+        self.assertEqual(result["status"], "error")
+        self.assertIn("native squad routing", result["message"])
 
     def test_call_in_needs_the_native_mod(self):
         """Without RoNTAKNative 0.2 nothing is spawned (the Lua-only way corrupted game memory)."""

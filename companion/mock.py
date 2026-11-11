@@ -154,8 +154,10 @@ class MockGame:
         self.last_id = 0
         self.seq = 0
 
+    GROUPS = {"red_blue": ("red", "blue"), "green_yellow": ("green", "yellow")}
+
     def team(self, team):
-        return [o for o in self.officers if team == "gold" or o.team == team]
+        return [o for o in self.officers if team == "gold" or o.team == team or o.team in self.GROUPS.get(team, ())]
 
     def update_player(self, dt):
         self.player_t += dt * 0.15
@@ -270,10 +272,16 @@ class MockGame:
             self.held = {}
             return dict(result, status="ok")
         if cmd.get("hold"):
-            if cmd["team"] == "gold":
+            team = cmd["team"]
+            if team == "gold":
                 self.held = {}
             else:
                 self.held.pop("gold", None)
+                for part in self.GROUPS.get(team, ()):
+                    self.held.pop(part, None)
+                for whole, parts in self.GROUPS.items():
+                    if team in parts:
+                        self.held.pop(whole, None)
             result["status"] = "held"
             self.held[cmd["team"]] = {"cmd": cmd, "result": result}
             return result

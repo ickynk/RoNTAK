@@ -13,7 +13,7 @@ config.tick_ms = 250
 
 -- Folder used to exchange files with the ATAK companion app.
 -- Which RoNTAK this is (shown in the UE4SS log when the mod loads).
-config.build = "2026-11-11 squad routing 2 (spawn trace, spawn gap)"
+config.build = "2026-11-11 squad routing 3 (wheel scroll)"
 
 -- nil = the "bridge" folder inside this mod (recommended).
 config.bridge_dir = nil
@@ -108,7 +108,8 @@ config.rooms = {
 -- ReadyOrNot_enums.hpp) and the sniffer.
 
 -- ETeamType: TT_SERT_RED = 1, TT_SERT_BLUE = 2, TT_SQUAD = 5 (gold).
-config.team_args = { red = 1, blue = 2, gold = 5 }
+-- red_blue / green_yellow: one squad as GOLD (needs native squad routing).
+config.team_args = { red = 1, blue = 2, gold = 5, red_blue = 5, green_yellow = 5 }
 
 -- EDoorBreachType, passed as "$breach".
 -- "move" is Move & Clear, used for doors that are already open.
