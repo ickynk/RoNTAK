@@ -219,20 +219,30 @@ local COLLISION_ALWAYS, COLLISION_ADJUST = 1, 2
 
 -- Starts spawning an actor of class at a spot (deferred: not built yet).
 -- Returns the actor, or nil and why.
+-- config.reinforcements.trace_spawns: log every spawn before and after it
+-- (finding the officer-spawn crash; the log line before a crash names it).
+local function trace(line)
+    if c().trace_spawns then note("trace: " .. line) end
+end
+
 local function begin_spawn(fns, context, class, at, yaw, collision, owner)
+    trace("spawning " .. tostring(path_of(class)))
     local ok, path, err = pcall(fns.RoNTAK_BeginSpawn, path_of(context) or "", path_of(class) or "",
         at.X, at.Y, at.Z, yaw or 0, collision, owner and path_of(owner) or "")
     if not ok then return nil, tostring(path) end
     if not path then return nil, tostring(err) end
     local actor = find(path)
     if not actor then return nil, "spawned " .. tostring(path) .. " but could not find it" end
+    trace("spawned " .. tostring(path))
     return actor
 end
 
 local function finish_spawn(fns, actor, at, yaw)
+    trace("finishing " .. tostring(path_of(actor)))
     local ok, done, err = pcall(fns.RoNTAK_FinishSpawn, path_of(actor) or "", at.X, at.Y, at.Z, yaw or 0)
     if not ok then return false, tostring(done) end
     if not done then return false, tostring(err) end
+    trace("finished")
     return true
 end
 
@@ -297,6 +307,10 @@ function STEPS.spawn(job)
     local stock = stock_by_slot()
     local donor = stock[job.kit] or stock[0] or stock[1] or stock[2] or stock[3]
     check(donor, "no ready stock officer to copy")
+    if c().trace_spawns then
+        trace(string.format("%s from %s (slot %s, team %s); %s", job.name, game.object_name(donor),
+            tostring(slot_of(donor)), tostring(donor.DefaultTeam), squads.describe()))
+    end
     local half = 90
     pcall(function() half = donor.CapsuleComponent:GetScaledCapsuleHalfHeight() end)
     local spot, rejected = spawn_spot(pawn, donor, half)

@@ -13,7 +13,7 @@ config.tick_ms = 250
 
 -- Folder used to exchange files with the ATAK companion app.
 -- Which RoNTAK this is (shown in the UE4SS log when the mod loads).
-config.build = "2026-11-11 squad routing 1 + crash dump"
+config.build = "2026-11-11 squad routing 1 + spawn trace"
 
 -- nil = the "bridge" folder inside this mod (recommended).
 config.bridge_dir = nil
@@ -160,6 +160,8 @@ config.reinforcements = {
     -- officer crashed it. Call-ins that wouldn't fit are refused, so with the
     -- original four there is room for these two teams.
     max_squad = 8,
+    -- Log every spawn before and after it (finding the YELLOW spawn crash, Nov 2026).
+    trace_spawns = true,
     -- The order teams are listed in.
     order = { "green", "yellow" },
     manager = "SWATManager",

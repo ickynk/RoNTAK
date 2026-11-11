@@ -212,6 +212,21 @@ function squads.callin_list_count()
     return #list_of(game.resolve_target(manager_class()))
 end
 
+-- For the log: each squad list's officers as name=DefaultTeam/SquadPosition.
+function squads.describe()
+    local function one(manager)
+        local out = {}
+        for _, a in ipairs(list_of(manager)) do
+            local ok, t = pcall(function() return a.DefaultTeam end)
+            local ok2, p = pcall(function() return a.SquadPosition end)
+            out[#out + 1] = string.format("%s=%s/%s", object_name(a), ok and tostring(t) or "?", ok2 and tostring(p) or "?")
+        end
+        return table.concat(out, " ")
+    end
+    return "game list: " .. one(game.resolve_target(manager_class()))
+        .. (valid(native.element) and ("; call-in list: " .. one(native.element)) or "")
+end
+
 -- Every officer: the game's squad list, then the called-in teams' manager.
 local function squad_list()
     local out = list_of(game.resolve_target(manager_class()))
