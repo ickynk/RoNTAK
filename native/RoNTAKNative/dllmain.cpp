@@ -2,7 +2,7 @@
 //
 // Gives RoNTAK's Lua mod the few things Lua can't do safely on UE4SS 3.0.1:
 //
-//   RoNTAK_NativeVersion() -> "0.7.0"
+//   RoNTAK_NativeVersion() -> "0.7.1"
 //
 //   RoNTAK_BeginSpawn(context, class, x, y, z, yaw, collision, owner)
 //       -> actor path | nil, error
@@ -70,6 +70,7 @@
 #include <Unreal/UObject.hpp>
 #include <Unreal/UObjectGlobals.hpp>
 #include <Unreal/UScriptStruct.hpp>
+#include <Unreal/Hooks.hpp>
 #pragma warning(default : 4005)
 
 #include <algorithm>
@@ -91,7 +92,7 @@ using namespace RC::Unreal;
 
 namespace
 {
-    constexpr const char* NATIVE_VERSION = "0.7.0";
+    constexpr const char* NATIVE_VERSION = "0.7.1";
     constexpr const RC::CharType* LUA_MOD_NAME = STR("RoNTAK");
 
     // ---- Lua arguments ------------------------------------------------------
@@ -1564,6 +1565,42 @@ namespace
         return 1;
     }
 
+    // ---- event trace (finding the officer-spawn crash) ---------------------
+    // While on, every ProcessEvent (the game calling a script event) is
+    // written to UE4SS.log: object and function. RoNTAK turns it on around its
+    // spawns, so the last lines before a crash name the script that crashed.
+    namespace trace
+    {
+        bool registered = false;
+        bool on = false;
+        int left = 0;
+
+        void process_event(UObject* context, UFunction* function, void*)
+        {
+            if (!on || left <= 0 || !function) return;
+            --left;
+            std::wstring line = L"[RoNTAKNative] event " + std::wstring(function->GetFullName()) + L" on " +
+                                (context ? std::wstring(context->GetFullName()) : std::wstring(L"null")) + L"\n";
+            Output::send<LogLevel::Verbose>(STR("{}"), line);
+        }
+    } // namespace trace
+
+    // RoNTAK_TraceEvents(on) -> true
+    auto trace_events(const LuaMadeSimple::Lua& lua) -> int
+    {
+        bool on = lua.get_stack_size() > 0 && lua.is_bool() ? lua.get_bool() : false;
+        while (lua.get_stack_size() > 0) lua.discard_value();
+        if (on && !trace::registered)
+        {
+            Unreal::Hook::RegisterProcessEventPreCallback(&trace::process_event);
+            trace::registered = true;
+        }
+        trace::on = on;
+        trace::left = 400;
+        lua.set_bool(true);
+        return 1;
+    }
+
     auto register_functions(const LuaMadeSimple::Lua& lua) -> void
     {
         lua.register_function("RoNTAK_NativeVersion", &native_version);
@@ -1578,6 +1615,7 @@ namespace
         lua.register_function("RoNTAK_SquadSet", &squad_set);
         lua.register_function("RoNTAK_SquadStatus", &squad_status);
         lua.register_function("RoNTAK_SquadGroup", &squad_group);
+        lua.register_function("RoNTAK_TraceEvents", &trace_events);
     }
 } // namespace
 
@@ -1587,10 +1625,10 @@ class RoNTAKNative : public CppUserModBase
     RoNTAKNative() : CppUserModBase()
     {
         ModName = STR("RoNTAKNative");
-        ModVersion = STR("0.7.0");
+        ModVersion = STR("0.7.1");
         ModDescription = STR("Native helpers for the RoNTAK mod");
         ModAuthors = STR("RoNTAK");
-        Output::send<LogLevel::Verbose>(STR("[RoNTAKNative] loaded, version 0.7.0\n"));
+        Output::send<LogLevel::Verbose>(STR("[RoNTAKNative] loaded, version 0.7.1\n"));
     }
 
     ~RoNTAKNative() override = default;
