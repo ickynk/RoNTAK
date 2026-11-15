@@ -2,7 +2,7 @@
 //
 // Gives RoNTAK's Lua mod the few things Lua can't do safely on UE4SS 3.0.1:
 //
-//   RoNTAK_NativeVersion() -> "0.7.1"
+//   RoNTAK_NativeVersion() -> "0.7.2"
 //
 //   RoNTAK_BeginSpawn(context, class, x, y, z, yaw, collision, owner)
 //       -> actor path | nil, error
@@ -92,7 +92,7 @@ using namespace RC::Unreal;
 
 namespace
 {
-    constexpr const char* NATIVE_VERSION = "0.7.1";
+    constexpr const char* NATIVE_VERSION = "0.7.2";
     constexpr const RC::CharType* LUA_MOD_NAME = STR("RoNTAK");
 
     // ---- Lua arguments ------------------------------------------------------
@@ -1013,12 +1013,16 @@ namespace
             uint64_t result = 0;
             if (group == 2)
             {
-                // DoCommand adjusts the command's location in place: give the
-                // second run the same command as the first.
-                alignas(16) uint8_t saved[0x200];
-                if (a5) std::memcpy(saved, a5, sizeof(saved));
+                // DoCommand moves the command's target location in place (the
+                // FVector at +0x10 of its 5th argument: the only bytes it
+                // writes there). Give the second run the same location. Only
+                // those 24 bytes: the rest of that struct owns heap memory, and
+                // writing it back corrupted the game's heap (Nov 2026 crash).
+                constexpr size_t LOCATION = 0x10, LOCATION_SIZE = 3 * sizeof(double);
+                uint8_t saved[LOCATION_SIZE];
+                if (a5) std::memcpy(saved, static_cast<uint8_t*>(a5) + LOCATION, LOCATION_SIZE);
                 result = original(widget, command, a3, a4, a5);
-                if (a5) std::memcpy(a5, saved, sizeof(saved));
+                if (a5) std::memcpy(static_cast<uint8_t*>(a5) + LOCATION, saved, LOCATION_SIZE);
             }
             command_manager = element_manager;
             result = original(widget, command, a3, a4, a5);
@@ -1625,10 +1629,10 @@ class RoNTAKNative : public CppUserModBase
     RoNTAKNative() : CppUserModBase()
     {
         ModName = STR("RoNTAKNative");
-        ModVersion = STR("0.7.1");
+        ModVersion = STR("0.7.2");
         ModDescription = STR("Native helpers for the RoNTAK mod");
         ModAuthors = STR("RoNTAK");
-        Output::send<LogLevel::Verbose>(STR("[RoNTAKNative] loaded, version 0.7.1\n"));
+        Output::send<LogLevel::Verbose>(STR("[RoNTAKNative] loaded, version 0.7.2\n"));
     }
 
     ~RoNTAKNative() override = default;

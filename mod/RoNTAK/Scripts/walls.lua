@@ -253,7 +253,14 @@ function walls.start(opts)
         end
     end
     LoopAsync(SLICE_MS, function()
-        ExecuteInGameThread(slice)
+        ExecuteInGameThread(function()
+            -- Protected: a script error here used to crash the game (Nov 2026).
+            local ok, err = pcall(slice)
+            if not ok then
+                log.error("walls: capture stopped: " .. tostring(err))
+                job = nil
+            end
+        end)
         return job == nil -- stop looping once done
     end)
     return true
