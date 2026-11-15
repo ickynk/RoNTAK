@@ -13,7 +13,7 @@ config.tick_ms = 250
 
 -- Folder used to exchange files with the ATAK companion app.
 -- Which RoNTAK this is (shown in the UE4SS log when the mod loads).
-config.build = "2026-11-15 crash fixes (full element orders, wall capture)"
+config.build = "2026-11-16 native wall tracing"
 
 -- nil = the "bridge" folder inside this mod (recommended).
 config.bridge_dir = nil

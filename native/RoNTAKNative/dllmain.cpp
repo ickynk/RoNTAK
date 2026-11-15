@@ -2,7 +2,7 @@
 //
 // Gives RoNTAK's Lua mod the few things Lua can't do safely on UE4SS 3.0.1:
 //
-//   RoNTAK_NativeVersion() -> "0.7.2"
+//   RoNTAK_NativeVersion() -> "0.7.3"
 //
 //   RoNTAK_BeginSpawn(context, class, x, y, z, yaw, collision, owner)
 //       -> actor path | nil, error
@@ -92,7 +92,7 @@ using namespace RC::Unreal;
 
 namespace
 {
-    constexpr const char* NATIVE_VERSION = "0.7.2";
+    constexpr const char* NATIVE_VERSION = "0.7.3";
     constexpr const RC::CharType* LUA_MOD_NAME = STR("RoNTAK");
 
     // ---- Lua arguments ------------------------------------------------------
@@ -272,6 +272,18 @@ namespace
         return false;
     }
 
+    // Reads a float or double member of a struct (nullopt if missing).
+    auto get_number(void* base, UScriptStruct* script_struct, const wchar_t* name) -> std::optional<double>
+    {
+        FProperty* property = struct_member(script_struct, name);
+        if (!property) return std::nullopt;
+        auto type = class_name_of(property);
+        uint8_t* value = value_ptr(base, property);
+        if (type == STR("DoubleProperty")) return *reinterpret_cast<double*>(value);
+        if (type == STR("FloatProperty")) return static_cast<double>(*reinterpret_cast<float*>(value));
+        return std::nullopt;
+    }
+
     auto sub_struct(void* base, UScriptStruct* script_struct, const wchar_t* name, uint8_t*& value, UScriptStruct*& inner) -> bool
     {
         FProperty* property = struct_member(script_struct, name);
@@ -387,6 +399,21 @@ namespace
             target->ProcessEvent(function, params);
         }
 
+        // A vector parameter (FVector: doubles in UE5, floats in UE4).
+        auto set_vector(const wchar_t* name, double x, double y, double z) -> void
+        {
+            if (!error.empty()) return;
+            FProperty* property = param(name);
+            auto* as_struct = property ? CastField<FStructProperty>(property) : nullptr;
+            uint8_t* base = as_struct ? params + property->GetOffset_Internal() : nullptr;
+            UScriptStruct* vector = as_struct ? as_struct->GetStruct() : nullptr;
+            if (!vector || !set_number(base, vector, STR("X"), x) || !set_number(base, vector, STR("Y"), y) ||
+                !set_number(base, vector, STR("Z"), z))
+            {
+                error = "vector parameter " + to_string(std::wstring(name)) + " not found";
+            }
+        }
+
         auto result_object() -> UObject*
         {
             FProperty* property = param(STR("ReturnValue"));
@@ -396,6 +423,59 @@ namespace
     };
 
     // ---- Lua functions ------------------------------------------------------
+
+    // RoNTAK_LineTrace(context, x1, y1, z1, x2, y2, z2) -> hit, x, y, z, distance | nil, error
+    // KismetSystemLibrary::LineTraceSingle on the visibility channel, simple
+    // collision, ignoring context (the player pawn), called natively: the hit
+    // result never goes through UE4SS's Lua conversion (which failed on some
+    // hits after a breach and crashed the game, Nov 2026).
+    auto line_trace(const LuaMadeSimple::Lua& lua) -> int
+    {
+        Args args{lua};
+        auto context_path = args.string("context");
+        double v[6]{};
+        static const char* names[] = {"x1", "y1", "z1", "x2", "y2", "z2"};
+        for (int i = 0; i < 6; ++i) v[i] = args.number(names[i]);
+        if (!args.error.empty()) return fail(lua, args.error);
+        UObject* context = find_object(context_path);
+        if (!context) return fail(lua, "context not found: " + context_path);
+        Call call{STR("/Script/Engine.KismetSystemLibrary:LineTraceSingle"), STR("/Script/Engine.Default__KismetSystemLibrary")};
+        call.set_object(STR("WorldContextObject"), context, true);
+        call.set_vector(STR("Start"), v[0], v[1], v[2]);
+        call.set_vector(STR("End"), v[3], v[4], v[5]);
+        call.set_byte(STR("TraceChannel"), 0);   // TraceTypeQuery1: visibility
+        call.set_byte(STR("bTraceComplex"), 0);
+        call.set_byte(STR("DrawDebugType"), 0);
+        call.set_byte(STR("bIgnoreSelf"), 1);
+        if (!call.error.empty()) return fail(lua, call.error);
+        call.run();
+        FProperty* ret = call.param(STR("ReturnValue"));
+        bool hit = ret && call.params[ret->GetOffset_Internal()] != 0;
+        if (!hit)
+        {
+            lua.set_bool(false);
+            return 1;
+        }
+        FProperty* out = call.param(STR("OutHit"));
+        auto* out_struct = out ? CastField<FStructProperty>(out) : nullptr;
+        if (!out_struct) return fail(lua, "OutHit not found");
+        uint8_t* hit_base = call.params + out->GetOffset_Internal();
+        UScriptStruct* hit_struct = out_struct->GetStruct();
+        uint8_t* location{};
+        UScriptStruct* location_struct{};
+        if (!sub_struct(hit_base, hit_struct, STR("Location"), location, location_struct)) return fail(lua, "hit location not found");
+        // FVector_NetQuantize is an FVector: its X, Y, Z may be listed on the parent struct.
+        auto component = [&](const wchar_t* name, int index) -> double {
+            if (auto n = get_number(location, location_struct, name)) return *n;
+            return reinterpret_cast<double*>(location)[index];
+        };
+        lua.set_bool(true);
+        lua.set_number(component(STR("X"), 0));
+        lua.set_number(component(STR("Y"), 1));
+        lua.set_number(component(STR("Z"), 2));
+        lua.set_number(get_number(hit_base, hit_struct, STR("Distance")).value_or(0.0));
+        return 5;
+    }
 
     auto native_version(const LuaMadeSimple::Lua& lua) -> int
     {
@@ -1620,6 +1700,7 @@ namespace
         lua.register_function("RoNTAK_SquadStatus", &squad_status);
         lua.register_function("RoNTAK_SquadGroup", &squad_group);
         lua.register_function("RoNTAK_TraceEvents", &trace_events);
+        lua.register_function("RoNTAK_LineTrace", &line_trace);
     }
 } // namespace
 
@@ -1629,10 +1710,10 @@ class RoNTAKNative : public CppUserModBase
     RoNTAKNative() : CppUserModBase()
     {
         ModName = STR("RoNTAKNative");
-        ModVersion = STR("0.7.2");
+        ModVersion = STR("0.7.3");
         ModDescription = STR("Native helpers for the RoNTAK mod");
         ModAuthors = STR("RoNTAK");
-        Output::send<LogLevel::Verbose>(STR("[RoNTAKNative] loaded, version 0.7.2\n"));
+        Output::send<LogLevel::Verbose>(STR("[RoNTAKNative] loaded, version 0.7.3\n"));
     }
 
     ~RoNTAKNative() override = default;
