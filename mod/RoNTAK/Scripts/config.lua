@@ -13,7 +13,7 @@ config.tick_ms = 250
 
 -- Folder used to exchange files with the ATAK companion app.
 -- Which RoNTAK this is (shown in the UE4SS log when the mod loads).
-config.build = "2026-11-16 native wall tracing"
+config.build = "2026-11-16 multiplayer: other players on the map"
 
 -- nil = the "bridge" folder inside this mod (recommended).
 config.bridge_dir = nil
@@ -44,6 +44,12 @@ config.keys = {
 ---------------------------------------------------------------------------
 
 -- AI SWAT officers. The first class name that returns objects is used.
+-- Other players in multiplayer, shown on the map (the local player is left out).
+config.players = {
+    enabled = true,
+    classes = { "PlayerCharacter" },
+}
+
 config.officers = {
     -- CyberneticsSwat_V2_C = your AI officers (4 live in the discovery dump).
     -- SWATCharacter also matches 4 TrailerSWATCharacter actors, so it is only a fallback.

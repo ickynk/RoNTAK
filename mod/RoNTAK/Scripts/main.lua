@@ -91,6 +91,7 @@ local function tick()
         level = level,
         player = game.player(),
         officers = level and game.officers() or {},
+        players = level and game.other_players() or {},
         doors = doors,
         targets = people,
         cameras = sensors,

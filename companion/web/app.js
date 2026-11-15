@@ -369,6 +369,7 @@
       const s = app.state || {};
       if (s.player && s.player.pos) pts.push(s.player.pos);
       (s.officers || []).forEach((o) => pts.push(o.pos));
+      (s.players || []).forEach((o) => pts.push(o.pos));
       (s.doors || []).forEach((d) => pts.push(d.pos));
       app.gameRooms.forEach((r) => (r.polygon || []).forEach(([x, y]) => pts.push({ x, y })));
       // A map shown without the game (another level, or offline): its walls and rooms.
@@ -436,6 +437,7 @@
     drawDoors();
     drawPeople();
     drawOfficers();
+    drawOtherPlayers();
     drawPlayer();
     drawTargetLocation();
     if (app.mode === "calibrate") drawAnchors();
@@ -919,6 +921,47 @@
       ctx.strokeText(o.name, sx + 12, sy - 8);
       ctx.fillStyle = "#e6e9ec";
       ctx.fillText(o.name, sx + 12, sy - 8);
+      ctx.globalAlpha = 1;
+    }
+  }
+
+  // Other players (multiplayer): a green-white arrowhead like yours, with their name.
+  function drawOtherPlayers() {
+    const f = floor();
+    for (const p of (app.state && app.state.players) || []) {
+      if (!p.pos) continue;
+      const [sx, sy] = worldToScreen(p.pos.x, p.pos.y);
+      const [hx, hy] = headingTip(p.pos, p.yaw, 70);
+      const ang = Math.atan2(hy - sy, hx - sx);
+      ctx.globalAlpha = onFloor(p.pos.z, f) ? 1 : 0.3;
+      ctx.fillStyle = "#7cff6b";
+      ctx.strokeStyle = "#0b2a08";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(sx + Math.cos(ang) * 15, sy + Math.sin(ang) * 15);
+      ctx.lineTo(sx + Math.cos(ang + 2.4) * 11, sy + Math.sin(ang + 2.4) * 11);
+      ctx.lineTo(sx + Math.cos(ang + Math.PI) * 5, sy + Math.sin(ang + Math.PI) * 5);
+      ctx.lineTo(sx + Math.cos(ang - 2.4) * 11, sy + Math.sin(ang - 2.4) * 11);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+      const health = HEALTH[p.status];
+      if (health && health.mark === "cross") {
+        ctx.strokeStyle = health.color;
+        ctx.lineWidth = 2.5;
+        ctx.beginPath();
+        ctx.moveTo(sx - 7, sy - 7); ctx.lineTo(sx + 7, sy + 7);
+        ctx.moveTo(sx + 7, sy - 7); ctx.lineTo(sx - 7, sy + 7);
+        ctx.stroke();
+      }
+      const label = p.name || "Player";
+      ctx.font = "700 11px system-ui, sans-serif";
+      ctx.textAlign = "left";
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = "rgba(16, 19, 22, 0.85)";
+      ctx.strokeText(label, sx + 12, sy - 8);
+      ctx.fillStyle = "#c8ffc0";
+      ctx.fillText(label, sx + 12, sy - 8);
       ctx.globalAlpha = 1;
     }
   }

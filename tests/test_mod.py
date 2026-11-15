@@ -219,6 +219,22 @@ class ModTest(unittest.TestCase):
         names = {o["id"]: o["name"] for o in state["officers"]}
         self.assertEqual(names, {"Swat_C_1": "Dennis Judge", "Swat_C_2": "Alpha"})
 
+    def test_other_players_on_the_map(self):
+        """Multiplayer: the other players' characters (not yours) are reported with their names."""
+        self.lua.execute(r"""
+            local me = objects.PlayerController[1].Pawn
+            local other = actor("PlayerCharacter_C_7", 300, 400, 0, 90, {
+                PlayerState = { IsValid = function() return true end,
+                                GetPlayerName = function() return { ToString = function() return "Jonesy" end } end },
+                GetHealthStatus = function() return 1 end,
+            })
+            objects.PlayerCharacter = { me, other }
+        """)
+        state = self.tick()
+        players = state["players"]
+        self.assertEqual([(p["id"], p["name"], p["status"]) for p in players], [("PlayerCharacter_C_7", "Jonesy", "injured")])
+        self.assertEqual((players[0]["pos"]["x"], players[0]["pos"]["y"]), (300, 400))
+
     def test_stale_orders_skipped_and_not_rerun(self):
         hold = self.order(1, "blue", "hold")
         self.send("A", [hold])

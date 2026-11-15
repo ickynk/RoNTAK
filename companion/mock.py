@@ -406,6 +406,11 @@ class MockGame:
             "version": 1, "seq": self.seq, "time": int(time.time()), "level": LEVEL,
             "player": self.player,
             "officers": [o.state() for o in self.officers],
+            # Another player (multiplayer), walking next to you.
+            "players": [{"id": "PlayerCharacter_C_2", "name": "Jonesy",
+                         "pos": {"x": self.player["pos"]["x"] + 150, "y": self.player["pos"]["y"] - 120,
+                                 "z": self.player["pos"]["z"]},
+                         "yaw": self.player["yaw"], "status": "healthy"}] if self.player.get("pos") else [],
             "doors": [{k: v for k, v in d.items() if not k.startswith("_")} for d in self.doors.values()],
             "rooms_version": f"{LEVEL}#{len(ROOMS_PX)}",
             "results": self.results,
