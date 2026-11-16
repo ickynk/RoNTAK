@@ -91,6 +91,7 @@ local function tick()
         level = level,
         player = game.player(),
         officers = level and game.officers() or {},
+        players = level and game.other_players() or {},
         doors = doors,
         targets = people,
         cameras = sensors,
@@ -150,7 +151,14 @@ local function bind(key_name, fn)
         log.error("unknown key " .. key_name .. " in config.keys")
         return
     end
-    RegisterKeyBind(key, function() ExecuteInGameThread(fn) end)
+    -- Protected: an error in game-thread code UE4SS runs for us crashes the
+    -- game instead of just being reported.
+    RegisterKeyBind(key, function()
+        ExecuteInGameThread(function()
+            local ok, err = pcall(fn)
+            if not ok then log.error("key " .. key_name .. ": " .. tostring(err)) end
+        end)
+    end)
 end
 
 local function activity_dump()

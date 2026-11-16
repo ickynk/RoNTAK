@@ -219,6 +219,22 @@ class ModTest(unittest.TestCase):
         names = {o["id"]: o["name"] for o in state["officers"]}
         self.assertEqual(names, {"Swat_C_1": "Dennis Judge", "Swat_C_2": "Alpha"})
 
+    def test_other_players_on_the_map(self):
+        """Multiplayer: the other players' characters (not yours) are reported with their names."""
+        self.lua.execute(r"""
+            local me = objects.PlayerController[1].Pawn
+            local other = actor("PlayerCharacter_C_7", 300, 400, 0, 90, {
+                PlayerState = { IsValid = function() return true end,
+                                GetPlayerName = function() return { ToString = function() return "Jonesy" end } end },
+                GetHealthStatus = function() return 1 end,
+            })
+            objects.PlayerCharacter = { me, other }
+        """)
+        state = self.tick()
+        players = state["players"]
+        self.assertEqual([(p["id"], p["name"], p["status"]) for p in players], [("PlayerCharacter_C_7", "Jonesy", "injured")])
+        self.assertEqual((players[0]["pos"]["x"], players[0]["pos"]["y"]), (300, 400))
+
     def test_stale_orders_skipped_and_not_rerun(self):
         hold = self.order(1, "blue", "hold")
         self.send("A", [hold])
@@ -494,6 +510,14 @@ class ModTest(unittest.TestCase):
         self.assertEqual(floors, [0, 300])
 
     def test_wall_trace_after_floor_capture(self):
+        self.wall_trace(native=False)
+
+    def test_wall_trace_native(self):
+        """RoNTAKNative 0.7.3: the traces go through RoNTAK_LineTrace (no hit result through UE4SS)."""
+        self.wall_trace(native=True)
+        self.assertGreater(self.lua.eval("native_traces"), 500)
+
+    def wall_trace(self, native):
         self.test_floor_capture()  # the picture first
         self.lua.execute(r"""
             -- Boxes { x0, x1, y0, y1, z0, z1 }: a wall at x 500-520 with a doorway at y 300-400
@@ -547,6 +571,22 @@ class ModTest(unittest.TestCase):
             end
         """)
         self.lua.execute("objects.PlayerController[1].Pawn.K2_GetActorLocation = function() return { X = 100, Y = 50, Z = 90 } end")
+        if native:
+            self.lua.execute(r"""
+                native_traces = 0
+                local pawn = objects.PlayerController[1].Pawn
+                pawn.GetFullName = function() return "Pawn /Game/Map.Map:Player" end
+                function RoNTAK_LineTrace(context, x1, y1, z1, x2, y2, z2)
+                    assert(context == "/Game/Map.Map:Player", context)
+                    native_traces = native_traces + 1
+                    local system = StaticFindObject("/Script/Engine.Default__KismetSystemLibrary")
+                    local hit = {}
+                    local got = system:LineTraceSingle(pawn, { X = x1, Y = y1, Z = z1 }, { X = x2, Y = y2, Z = z2 },
+                        0, false, {}, 0, hit, true)
+                    if not got then return false end
+                    return true, hit.Location.X, hit.Location.Y, hit.Location.Z, hit.Distance
+                end
+            """)
         g = self.lua.globals()
         g.keybinds["HOME"]()  # the ground floor again: picture, then the wall trace
         state = self.tick()

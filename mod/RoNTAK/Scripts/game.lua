@@ -456,6 +456,62 @@ function game.officers()
     return result
 end
 
+-- Other players (multiplayer) -------------------------------------------
+
+-- The other players' characters (not yours), rebuilt like the officer list.
+local player_cache = { at = -math.huge, list = {} }
+
+local function player_name(actor)
+    local ok, name = pcall(function()
+        local ps = actor.PlayerState
+        if not valid(ps) then return nil end
+        local n = ps:GetPlayerName()
+        if type(n) ~= "string" then n = n:ToString() end
+        return n
+    end)
+    if ok and type(name) == "string" and name ~= "" then return name end
+    return nil
+end
+
+local function other_player_actors()
+    local age = os.time() - player_cache.at
+    local stale = age >= OFFICER_RESCAN_SECONDS
+    if not stale and age >= SEARCH_RETRY_SECONDS then
+        for _, p in ipairs(player_cache.list) do
+            if not valid(p.actor) then stale = true break end
+        end
+    end
+    if not stale or not game.scan_slot(player_cache.at == -math.huge) then return player_cache.list end
+    local mine = game.player_pawn()
+    local my_name = valid(mine) and object_name(mine) or nil
+    local list = {}
+    for _, actor in ipairs(find_all((config.players or {}).classes or { "PlayerCharacter" })) do
+        if valid(actor) then
+            local name = object_name(actor)
+            if name ~= my_name then list[#list + 1] = { actor = actor, id = name } end
+        end
+    end
+    player_cache = { at = os.time(), list = list }
+    return list
+end
+
+-- The other players in the mission: { id, name, pos, yaw, status }.
+function game.other_players()
+    if (config.players or {}).enabled == false then return {} end
+    local out = {}
+    for _, p in ipairs(other_player_actors()) do
+        if valid(p.actor) then
+            local pos = location(p.actor)
+            if pos then
+                p.name = p.name or player_name(p.actor)
+                out[#out + 1] = { id = p.id, name = p.name or "Player", pos = pos, yaw = yaw(p.actor),
+                                  status = health_status(p.actor) }
+            end
+        end
+    end
+    return out
+end
+
 -- A point just outside the door on the team's side, and the direction from
 -- the door to that side: what the game gets when you aim at a door yourself.
 function game.door_approach(door, team)

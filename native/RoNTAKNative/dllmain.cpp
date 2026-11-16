@@ -2,7 +2,7 @@
 //
 // Gives RoNTAK's Lua mod the few things Lua can't do safely on UE4SS 3.0.1:
 //
-//   RoNTAK_NativeVersion() -> "0.6.0"
+//   RoNTAK_NativeVersion() -> "0.7.3"
 //
 //   RoNTAK_BeginSpawn(context, class, x, y, z, yaw, collision, owner)
 //       -> actor path | nil, error
@@ -70,6 +70,7 @@
 #include <Unreal/UObject.hpp>
 #include <Unreal/UObjectGlobals.hpp>
 #include <Unreal/UScriptStruct.hpp>
+#include <Unreal/Hooks.hpp>
 #pragma warning(default : 4005)
 
 #include <algorithm>
@@ -91,7 +92,7 @@ using namespace RC::Unreal;
 
 namespace
 {
-    constexpr const char* NATIVE_VERSION = "0.6.0";
+    constexpr const char* NATIVE_VERSION = "0.7.3";
     constexpr const RC::CharType* LUA_MOD_NAME = STR("RoNTAK");
 
     // ---- Lua arguments ------------------------------------------------------
@@ -271,6 +272,18 @@ namespace
         return false;
     }
 
+    // Reads a float or double member of a struct (nullopt if missing).
+    auto get_number(void* base, UScriptStruct* script_struct, const wchar_t* name) -> std::optional<double>
+    {
+        FProperty* property = struct_member(script_struct, name);
+        if (!property) return std::nullopt;
+        auto type = class_name_of(property);
+        uint8_t* value = value_ptr(base, property);
+        if (type == STR("DoubleProperty")) return *reinterpret_cast<double*>(value);
+        if (type == STR("FloatProperty")) return static_cast<double>(*reinterpret_cast<float*>(value));
+        return std::nullopt;
+    }
+
     auto sub_struct(void* base, UScriptStruct* script_struct, const wchar_t* name, uint8_t*& value, UScriptStruct*& inner) -> bool
     {
         FProperty* property = struct_member(script_struct, name);
@@ -386,6 +399,21 @@ namespace
             target->ProcessEvent(function, params);
         }
 
+        // A vector parameter (FVector: doubles in UE5, floats in UE4).
+        auto set_vector(const wchar_t* name, double x, double y, double z) -> void
+        {
+            if (!error.empty()) return;
+            FProperty* property = param(name);
+            auto* as_struct = property ? CastField<FStructProperty>(property) : nullptr;
+            uint8_t* base = as_struct ? params + property->GetOffset_Internal() : nullptr;
+            UScriptStruct* vector = as_struct ? as_struct->GetStruct() : nullptr;
+            if (!vector || !set_number(base, vector, STR("X"), x) || !set_number(base, vector, STR("Y"), y) ||
+                !set_number(base, vector, STR("Z"), z))
+            {
+                error = "vector parameter " + to_string(std::wstring(name)) + " not found";
+            }
+        }
+
         auto result_object() -> UObject*
         {
             FProperty* property = param(STR("ReturnValue"));
@@ -395,6 +423,59 @@ namespace
     };
 
     // ---- Lua functions ------------------------------------------------------
+
+    // RoNTAK_LineTrace(context, x1, y1, z1, x2, y2, z2) -> hit, x, y, z, distance | nil, error
+    // KismetSystemLibrary::LineTraceSingle on the visibility channel, simple
+    // collision, ignoring context (the player pawn), called natively: the hit
+    // result never goes through UE4SS's Lua conversion (which failed on some
+    // hits after a breach and crashed the game, Nov 2026).
+    auto line_trace(const LuaMadeSimple::Lua& lua) -> int
+    {
+        Args args{lua};
+        auto context_path = args.string("context");
+        double v[6]{};
+        static const char* names[] = {"x1", "y1", "z1", "x2", "y2", "z2"};
+        for (int i = 0; i < 6; ++i) v[i] = args.number(names[i]);
+        if (!args.error.empty()) return fail(lua, args.error);
+        UObject* context = find_object(context_path);
+        if (!context) return fail(lua, "context not found: " + context_path);
+        Call call{STR("/Script/Engine.KismetSystemLibrary:LineTraceSingle"), STR("/Script/Engine.Default__KismetSystemLibrary")};
+        call.set_object(STR("WorldContextObject"), context, true);
+        call.set_vector(STR("Start"), v[0], v[1], v[2]);
+        call.set_vector(STR("End"), v[3], v[4], v[5]);
+        call.set_byte(STR("TraceChannel"), 0);   // TraceTypeQuery1: visibility
+        call.set_byte(STR("bTraceComplex"), 0);
+        call.set_byte(STR("DrawDebugType"), 0);
+        call.set_byte(STR("bIgnoreSelf"), 1);
+        if (!call.error.empty()) return fail(lua, call.error);
+        call.run();
+        FProperty* ret = call.param(STR("ReturnValue"));
+        bool hit = ret && call.params[ret->GetOffset_Internal()] != 0;
+        if (!hit)
+        {
+            lua.set_bool(false);
+            return 1;
+        }
+        FProperty* out = call.param(STR("OutHit"));
+        auto* out_struct = out ? CastField<FStructProperty>(out) : nullptr;
+        if (!out_struct) return fail(lua, "OutHit not found");
+        uint8_t* hit_base = call.params + out->GetOffset_Internal();
+        UScriptStruct* hit_struct = out_struct->GetStruct();
+        uint8_t* location{};
+        UScriptStruct* location_struct{};
+        if (!sub_struct(hit_base, hit_struct, STR("Location"), location, location_struct)) return fail(lua, "hit location not found");
+        // FVector_NetQuantize is an FVector: its X, Y, Z may be listed on the parent struct.
+        auto component = [&](const wchar_t* name, int index) -> double {
+            if (auto n = get_number(location, location_struct, name)) return *n;
+            return reinterpret_cast<double*>(location)[index];
+        };
+        lua.set_bool(true);
+        lua.set_number(component(STR("X"), 0));
+        lua.set_number(component(STR("Y"), 1));
+        lua.set_number(component(STR("Z"), 2));
+        lua.set_number(get_number(hit_base, hit_struct, STR("Distance")).value_or(0.0));
+        return 5;
+    }
 
     auto native_version(const LuaMadeSimple::Lua& lua) -> int
     {
@@ -932,18 +1013,19 @@ namespace
 
     namespace route
     {
-        constexpr uint32_t RESOLVER_RVA = 0x4dd1090;
-        constexpr uint32_t DOCOMMAND_RVA = 0x4ca7e10;
-        constexpr uint32_t SCROLL_RVA = 0x4ca7710;     // the wheel's team scroll (widget, forward, bool)
-        constexpr uint32_t SET_TEAM_RVA = 0x4cc32d0;   // the wheel's set team (widget, team)
-        constexpr uint32_t TEAM_DEAD_RVA = 0x4de8b50;  // USWATManager::IsSWATTeamDead (manager, team)
-        constexpr uint32_t WIDGET_TEAM = 0x348;        // SwatCommandWidget::ActiveTeamType
-        constexpr uint32_t MANAGER_INITIALIZE_SLOT = 88;
-        const uint8_t RESOLVER_BYTES[] = {0x48, 0x89, 0x5c, 0x24, 0x08, 0x57, 0x48, 0x83, 0xec, 0x20, 0x48, 0x8b, 0x01, 0xff, 0x90, 0x88, 0x01, 0x00, 0x00};
-        const uint8_t DOCOMMAND_BYTES[] = {0x48, 0x8b, 0xc4, 0x48, 0x89, 0x58, 0x18, 0x44, 0x88, 0x48, 0x20, 0x48, 0x89, 0x50, 0x10, 0x48, 0x89, 0x48, 0x08};
-        const uint8_t SCROLL_BYTES[] = {0x44, 0x88, 0x44, 0x24, 0x18, 0x55, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x57, 0x48, 0x8b, 0xec, 0x48, 0x83, 0xec, 0x60};
-        const uint8_t SET_TEAM_BYTES[] = {0x48, 0x89, 0x5c, 0x24, 0x18, 0x56, 0x48, 0x83, 0xec, 0x20, 0x0f, 0xb6, 0x81, 0x48, 0x03, 0x00, 0x00};
-        const uint8_t TEAM_DEAD_BYTES[] = {0x48, 0x83, 0xec, 0x28, 0x83, 0xb9, 0xd8, 0x00, 0x00, 0x00, 0x00, 0x75, 0x07, 0xb0, 0x01};
+        // Where the analysed build (Nov 2026) had them, for the log only: the
+        // functions are found by what they do (see find_game_code), so a game
+        // update that moves them doesn't switch routing off.
+        constexpr uint32_t KNOWN_RESOLVER = 0x4dd1090;
+        constexpr uint32_t KNOWN_DOCOMMAND = 0x4ca7e10;
+        constexpr uint32_t KNOWN_SCROLL = 0x4ca7710;
+        constexpr uint32_t KNOWN_SET_TEAM = 0x4cc32d0;
+        constexpr uint32_t KNOWN_TEAM_DEAD = 0x4de8b50;
+        constexpr int KNOWN_INITIALIZE_SLOT = 88;
+
+        // Found at install time.
+        uint32_t resolver_rva = 0, docommand_rva = 0, scroll_rva = 0, set_team_rva = 0, team_dead_rva = 0;
+        uint32_t widget_team = 0;                       // SwatCommandWidget::ActiveTeamType offset (reflection)
 
         uint64_t resolver_trampoline = 0;
         uint64_t docommand_trampoline = 0;
@@ -1011,12 +1093,16 @@ namespace
             uint64_t result = 0;
             if (group == 2)
             {
-                // DoCommand adjusts the command's location in place: give the
-                // second run the same command as the first.
-                alignas(16) uint8_t saved[0x200];
-                if (a5) std::memcpy(saved, a5, sizeof(saved));
+                // DoCommand moves the command's target location in place (the
+                // FVector at +0x10 of its 5th argument: the only bytes it
+                // writes there). Give the second run the same location. Only
+                // those 24 bytes: the rest of that struct owns heap memory, and
+                // writing it back corrupted the game's heap (Nov 2026 crash).
+                constexpr size_t LOCATION = 0x10, LOCATION_SIZE = 3 * sizeof(double);
+                uint8_t saved[LOCATION_SIZE];
+                if (a5) std::memcpy(saved, static_cast<uint8_t*>(a5) + LOCATION, LOCATION_SIZE);
                 result = original(widget, command, a3, a4, a5);
-                if (a5) std::memcpy(a5, saved, sizeof(saved));
+                if (a5) std::memcpy(static_cast<uint8_t*>(a5) + LOCATION, saved, LOCATION_SIZE);
             }
             command_manager = element_manager;
             result = original(widget, command, a3, a4, a5);
@@ -1041,7 +1127,7 @@ namespace
 
         auto team_dead(UObject* manager, uint8_t team) -> bool
         {
-            return reinterpret_cast<TeamDeadFn>(game_base + TEAM_DEAD_RVA)(manager, team);
+            return reinterpret_cast<TeamDeadFn>(game_base + team_dead_rva)(manager, team);
         }
 
         auto entry_usable(const WheelEntry& e) -> bool
@@ -1065,7 +1151,7 @@ namespace
             }
             in_scroll = true;
             ++scrolls;
-            uint8_t shown = *(static_cast<uint8_t*>(widget) + WIDGET_TEAM);
+            uint8_t shown = *(static_cast<uint8_t*>(widget) + widget_team);
             int at = -1;
             for (int i = 0; i < WHEEL_SIZE; ++i)
             {
@@ -1087,14 +1173,358 @@ namespace
             // Set the wheel's team with the chosen squad's manager answering
             // (the game's set-team checks that team in it).
             command_manager = group == 1 ? element_manager : nullptr;
-            reinterpret_cast<SetTeamFn>(game_base + SET_TEAM_RVA)(widget, WHEEL[next].team);
+            reinterpret_cast<SetTeamFn>(game_base + set_team_rva)(widget, WHEEL[next].team);
             command_manager = nullptr;
             in_scroll = false;
         }
 
-        auto code_matches(uint8_t* base, uint32_t rva, const uint8_t* bytes, size_t n) -> bool
+        // ---- finding the game code -------------------------------------
+        //
+        // Each function is recognised by what it does, anchored on things a
+        // game update keeps: UFunction exec thunks (found by name through
+        // reflection) and property offsets (reflection too).
+        //
+        //   IsSWATTeamDead  the call in the exec thunk of
+        //                   SWATManager:IsSWATTeamDead
+        //   DoCommand       the call in the exec thunk of
+        //                   SwatCommandWidget:DoCommand whose code first asks a
+        //                   GetSubsystem-shaped function (the resolver) and
+        //                   uses the widget's ExecutionTeamType
+        //   resolver        that GetSubsystem-shaped function
+        //   team scroll     the one function whose first call is the resolver,
+        //                   that asks IsSWATTeamDead(5), clears ActiveTeamType
+        //                   and calls set-team
+        //   set-team        reads ActiveTeamType, writes the byte after it
+        //                   (PreviousActiveTeamType), asks the resolver and
+        //                   IsSWATTeamDead
+        //
+        // Anything not found exactly once stays unhooked (and says why).
+
+        struct Call
         {
-            return std::memcmp(base + rva, bytes, n) == 0;
+            uint32_t target;
+            int dl;  // the value set in dl just before the call, or -1
+        };
+        struct MemUse
+        {
+            uint32_t at;      // offset from the function start
+            int64_t disp;
+            ZydisRegister base;
+            bool write;
+            bool zero;        // writes the constant 0
+        };
+        struct Body
+        {
+            uint32_t begin = 0, end = 0;
+            std::vector<Call> calls;
+            std::vector<MemUse> mems;
+            uint32_t last_jump = 0;   // target of the last direct jmp
+            bool early_virtual_call = false;
+        };
+
+        struct Finder
+        {
+            Image img;
+            std::vector<uint32_t> primaries;  // .pdata entries that start a function (not chained pieces)
+            ZydisDecoder decoder{};
+
+            Finder() : img(read_image())
+            {
+                ZydisDecoderInit(&decoder, ZYDIS_MACHINE_MODE_LONG_64, ZYDIS_STACK_WIDTH_64);
+                for (auto& f : img.functions)
+                {
+                    if (f.unwind >= img.size) continue;
+                    uint8_t flags = img.base[f.unwind] >> 3;  // UNWIND_INFO: version 3 bits, flags 5 bits
+                    if (!(flags & 0x4)) primaries.push_back(f.begin);  // not UNW_FLAG_CHAININFO
+                }
+                std::sort(primaries.begin(), primaries.end());
+            }
+
+            auto in_text(uint64_t rva) const -> bool { return rva >= img.text_begin && rva < img.text_end; }
+
+            auto rva_of(const void* p) const -> uint32_t
+            {
+                auto a = static_cast<const uint8_t*>(p);
+                return (a >= img.base && a < img.base + img.size) ? static_cast<uint32_t>(a - img.base) : 0;
+            }
+
+            // The function start at or before rva.
+            auto start_of(uint32_t rva) const -> uint32_t
+            {
+                auto it = std::upper_bound(primaries.begin(), primaries.end(), rva);
+                return it == primaries.begin() ? 0 : *(it - 1);
+            }
+
+            // A function's code: from its start to the next function's start.
+            auto body(uint32_t rva, uint32_t max = 0x6000) const -> Body
+            {
+                Body b{};
+                if (!in_text(rva)) return b;
+                auto it = std::upper_bound(primaries.begin(), primaries.end(), rva);
+                uint32_t end = it == primaries.end() ? img.text_end : *it;
+                end = std::min<uint32_t>({end, rva + max, img.text_end});
+                b.begin = rva;
+                b.end = end;
+                ZydisDecodedInstruction ins{};
+                ZydisDecodedOperand ops[ZYDIS_MAX_OPERAND_COUNT]{};
+                int dl = -1;
+                uint32_t off = rva;
+                while (off < end)
+                {
+                    const uint8_t* at = img.base + off;
+                    if (!ZYAN_SUCCESS(ZydisDecoderDecodeFull(&decoder, at, end - off, &ins, ops)))
+                    {
+                        off += 1;
+                        continue;
+                    }
+                    uint64_t runtime = reinterpret_cast<uint64_t>(at);
+                    bool is_call = ins.meta.category == ZYDIS_CATEGORY_CALL;
+                    bool is_jmp = ins.mnemonic == ZYDIS_MNEMONIC_JMP;
+                    if ((is_call || is_jmp) && ins.operand_count_visible > 0)
+                    {
+                        auto& op = ops[0];
+                        if (op.type == ZYDIS_OPERAND_TYPE_IMMEDIATE && op.imm.is_relative)
+                        {
+                            ZyanU64 target{};
+                            if (ZYAN_SUCCESS(ZydisCalcAbsoluteAddress(&ins, &op, runtime, &target)))
+                            {
+                                uint32_t t = rva_of(reinterpret_cast<const void*>(target));
+                                if (is_call && t) b.calls.push_back({t, dl});
+                                if (is_jmp && t && (t < rva || t >= end)) b.last_jump = t;
+                            }
+                        }
+                        else if (is_call && op.type == ZYDIS_OPERAND_TYPE_MEMORY && op.mem.base != ZYDIS_REGISTER_RIP &&
+                                 off - rva < 0x20)
+                        {
+                            b.early_virtual_call = true;
+                        }
+                    }
+                    // Track a constant put in dl for the next call (the team argument).
+                    if (is_call)
+                    {
+                        dl = -1;
+                    }
+                    else if (ins.operand_count_visible >= 2 && ops[0].type == ZYDIS_OPERAND_TYPE_REGISTER)
+                    {
+                        auto r = ops[0].reg.value;
+                        bool rdx = r == ZYDIS_REGISTER_DL || r == ZYDIS_REGISTER_DX || r == ZYDIS_REGISTER_EDX || r == ZYDIS_REGISTER_RDX;
+                        if (rdx)
+                        {
+                            if (ins.mnemonic == ZYDIS_MNEMONIC_MOV && ops[1].type == ZYDIS_OPERAND_TYPE_IMMEDIATE)
+                                dl = static_cast<int>(ops[1].imm.value.u & 0xff);
+                            else if (ins.mnemonic == ZYDIS_MNEMONIC_XOR && ops[1].type == ZYDIS_OPERAND_TYPE_REGISTER &&
+                                     ops[1].reg.value == r)
+                                dl = 0;
+                            else
+                                dl = -1;
+                        }
+                    }
+                    for (int i = 0; i < ins.operand_count_visible; ++i)
+                    {
+                        auto& op = ops[i];
+                        if (op.type != ZYDIS_OPERAND_TYPE_MEMORY || op.mem.base == ZYDIS_REGISTER_RIP ||
+                            op.mem.base == ZYDIS_REGISTER_RSP || !op.mem.disp.has_displacement)
+                            continue;
+                        bool write = (op.actions & ZYDIS_OPERAND_ACTION_MASK_WRITE) != 0;
+                        bool zero = write && i == 0 && ins.operand_count_visible >= 2 && ops[1].type == ZYDIS_OPERAND_TYPE_IMMEDIATE &&
+                                    ops[1].imm.value.u == 0;
+                        b.mems.push_back({off - rva, op.mem.disp.value, op.mem.base, write, zero});
+                    }
+                    off += ins.length;
+                }
+                return b;
+            }
+
+            static auto uses(const Body& b, int64_t disp, bool want_write = false, bool want_zero = false,
+                             uint32_t within = 0xffffffff) -> bool
+            {
+                for (auto& m : b.mems)
+                {
+                    if (m.disp != disp || m.at >= within) continue;
+                    if (want_write && !m.write) continue;
+                    if (want_zero && !m.zero) continue;
+                    return true;
+                }
+                return false;
+            }
+
+            static auto calls_to(const Body& b, uint32_t target) -> bool
+            {
+                for (auto& c : b.calls)
+                    if (c.target == target) return true;
+                return false;
+            }
+
+            // The shape of an inlined GetWorld()->GetSubsystem<T>(): a virtual
+            // call first, the class asked twice, a tail jump; small.
+            auto looks_like_resolver(uint32_t rva) const -> bool
+            {
+                Body b = body(rva, 0x100);
+                if (!b.early_virtual_call || !b.last_jump || b.calls.empty() || b.calls.size() > 3) return false;
+                for (auto& c : b.calls)
+                    if (c.target != b.calls[0].target) return false;
+                return true;
+            }
+        };
+
+        auto ufunction_rva(const Finder& f, const wchar_t* path) -> uint32_t
+        {
+            UObject* object = UObjectGlobals::StaticFindObject<UObject*>(nullptr, nullptr, std::wstring(path));
+            if (!object || !object->IsA<UFunction>()) return 0;
+            return f.rva_of(reinterpret_cast<const void*>(static_cast<UFunction*>(object)->GetFunc()));
+        }
+
+        auto property_offset(const wchar_t* object_path, const wchar_t* property) -> int64_t
+        {
+            UObject* object = UObjectGlobals::StaticFindObject<UObject*>(nullptr, nullptr, std::wstring(object_path));
+            if (!object) return -1;
+            FProperty* p = object->GetPropertyByNameInChain(property);
+            return p ? p->GetOffset_Internal() : -1;
+        }
+
+        auto hex32(uint32_t v) -> std::string
+        {
+            std::ostringstream o;
+            o << std::hex << v;
+            return o.str();
+        }
+
+        // Finds every function the hooks need. Returns "" when the routing
+        // functions (resolver, DoCommand) are found, else why not; scroll_why
+        // says why the wheel's scroll can't be hooked ("" when it can).
+        auto find_game_code(std::string& report, std::string& scroll_why) -> std::string
+        {
+            Finder f;
+            if (f.primaries.empty() || !f.img.text_end) return "could not read the game's code";
+            std::ostringstream log;
+            auto note = [&](const char* name, uint32_t found, uint32_t known) {
+                log << name << " " << hex32(found) << (found == known ? "" : " (moved since Nov 2026)") << "; ";
+            };
+
+            int64_t exec_team = property_offset(STR("/Script/ReadyOrNot.Default__SwatCommandWidget"), STR("ExecutionTeamType"));
+            int64_t active_team = property_offset(STR("/Script/ReadyOrNot.Default__SwatCommandWidget"), STR("ActiveTeamType"));
+            if (exec_team < 0 || active_team < 0) return "SwatCommandWidget's team properties not found";
+            widget_team = static_cast<uint32_t>(active_team);
+
+            // IsSWATTeamDead: the last call in its exec thunk.
+            uint32_t dead_thunk = ufunction_rva(f, STR("/Script/ReadyOrNot.SWATManager:IsSWATTeamDead"));
+            if (dead_thunk)
+            {
+                Body b = f.body(dead_thunk, 0x200);
+                if (!b.calls.empty()) team_dead_rva = b.calls.back().target;
+            }
+
+            // DoCommand and the resolver.
+            uint32_t do_thunk = ufunction_rva(f, STR("/Script/ReadyOrNot.SwatCommandWidget:DoCommand"));
+            if (!do_thunk) return "SwatCommandWidget:DoCommand not found";
+            std::vector<std::pair<uint32_t, uint32_t>> found;
+            std::set<uint32_t> tried;
+            for (auto& c : f.body(do_thunk, 0x800).calls)
+            {
+                if (!tried.insert(c.target).second) continue;
+                Body t = f.body(c.target);
+                if (t.calls.empty() || !f.looks_like_resolver(t.calls[0].target)) continue;
+                if (!Finder::uses(t, exec_team)) continue;
+                found.emplace_back(c.target, t.calls[0].target);
+            }
+            if (found.size() != 1) return "DoCommand not recognised (" + std::to_string(found.size()) + " candidates)";
+            docommand_rva = found[0].first;
+            resolver_rva = found[0].second;
+            note("resolver", resolver_rva, KNOWN_RESOLVER);
+            note("DoCommand", docommand_rva, KNOWN_DOCOMMAND);
+
+            // The team scroll and set-team: among the resolver's callers.
+            if (!team_dead_rva)
+            {
+                scroll_why = "IsSWATTeamDead not found";
+            }
+            else
+            {
+                note("IsSWATTeamDead", team_dead_rva, KNOWN_TEAM_DEAD);
+                std::set<uint32_t> callers;
+                const uint8_t* base = f.img.base;
+                for (uint32_t off = f.img.text_begin; off + 5 <= f.img.text_end; ++off)
+                {
+                    if (base[off] != 0xE8) continue;
+                    int32_t rel;
+                    std::memcpy(&rel, base + off + 1, 4);
+                    if (static_cast<int64_t>(off) + 5 + rel != resolver_rva) continue;
+                    uint32_t start = f.start_of(off);
+                    if (start) callers.insert(start);
+                }
+                auto is_set_team = [&](uint32_t rva) {
+                    Body b = f.body(rva, 0x400);
+                    return Finder::uses(b, active_team, false, false, 0x40) && Finder::uses(b, active_team + 1, true, false, 0x40) &&
+                           Finder::calls_to(b, resolver_rva) && Finder::calls_to(b, team_dead_rva);
+                };
+                std::vector<std::pair<uint32_t, uint32_t>> scrolls;
+                for (uint32_t c : callers)
+                {
+                    Body b = f.body(c);
+                    if (b.calls.empty() || b.calls[0].target != resolver_rva) continue;
+                    bool asks_all = false;
+                    for (auto& call : b.calls)
+                    {
+                        if (call.target == team_dead_rva)
+                        {
+                            asks_all = call.dl == 5;
+                            break;
+                        }
+                    }
+                    if (!asks_all || !Finder::uses(b, active_team, true, true)) continue;
+                    uint32_t set_team = 0;
+                    std::set<uint32_t> seen;
+                    for (auto& call : b.calls)
+                    {
+                        if (call.target == resolver_rva || call.target == team_dead_rva || !seen.insert(call.target).second) continue;
+                        if (is_set_team(call.target))
+                        {
+                            set_team = call.target;
+                            break;
+                        }
+                    }
+                    if (set_team) scrolls.emplace_back(c, set_team);
+                }
+                if (scrolls.size() != 1)
+                {
+                    scroll_why = "the wheel's team scroll not recognised (" + std::to_string(scrolls.size()) + " candidates)";
+                }
+                else
+                {
+                    scroll_rva = scrolls[0].first;
+                    set_team_rva = scrolls[0].second;
+                    note("team scroll", scroll_rva, KNOWN_SCROLL);
+                    note("set team", set_team_rva, KNOWN_SET_TEAM);
+                }
+            }
+            report = log.str();
+            return "";
+        }
+
+        // USWATManager::Initialize's vtable slot: the override whose first
+        // call is the parent class's function in the same slot (Super::Initialize).
+        auto initialize_slot(UObject* manager) -> int
+        {
+            UClass* cls = manager->GetClassPrivate();
+            UClass* parent = cls ? cls->GetSuperClass() : nullptr;
+            UObject* parent_cdo = parent ? parent->GetClassDefaultObject() : nullptr;
+            if (!parent_cdo) return -1;
+            Finder f;
+            auto vt = *reinterpret_cast<void***>(manager);
+            auto pvt = *reinterpret_cast<void***>(parent_cdo);
+            auto matches = [&](int i) {
+                uint32_t mine = f.rva_of(vt[i]), theirs = f.rva_of(pvt[i]);
+                if (!mine || !theirs || mine == theirs) return false;
+                Body b = f.body(mine, 0x200);
+                return !b.calls.empty() && b.calls[0].target == theirs;
+            };
+            if (matches(KNOWN_INITIALIZE_SLOT)) return KNOWN_INITIALIZE_SLOT;
+            for (int d = 1; d <= 16; ++d)
+            {
+                if (matches(KNOWN_INITIALIZE_SLOT - d)) return KNOWN_INITIALIZE_SLOT - d;
+                if (matches(KNOWN_INITIALIZE_SLOT + d)) return KNOWN_INITIALIZE_SLOT + d;
+            }
+            return -1;
         }
     } // namespace route
 
@@ -1103,20 +1533,18 @@ namespace
     {
         if (route::installed)
         {
-            lua.set_string("installed");
+            lua.set_string("already installed");
             return 1;
         }
+        std::string report, scroll_why;
+        std::string why = route::find_game_code(report, scroll_why);
+        if (!why.empty()) return fail(lua, why + " (game updated?); squad routing stays off");
         auto* base = reinterpret_cast<uint8_t*>(GetModuleHandleW(nullptr));
-        if (!route::code_matches(base, route::RESOLVER_RVA, route::RESOLVER_BYTES, sizeof(route::RESOLVER_BYTES)) ||
-            !route::code_matches(base, route::DOCOMMAND_RVA, route::DOCOMMAND_BYTES, sizeof(route::DOCOMMAND_BYTES)))
-        {
-            return fail(lua, "the game's code differs from the analysed build (game updated?); squad routing stays off");
-        }
-        route::resolver_detour = std::make_unique<PLH::x64Detour>(reinterpret_cast<uint64_t>(base + route::RESOLVER_RVA),
+        route::resolver_detour = std::make_unique<PLH::x64Detour>(reinterpret_cast<uint64_t>(base + route::resolver_rva),
                                                                   reinterpret_cast<uint64_t>(&route::resolver_hook),
                                                                   &route::resolver_trampoline);
         if (!route::resolver_detour->hook()) return fail(lua, "could not hook the squad manager resolver");
-        route::docommand_detour = std::make_unique<PLH::x64Detour>(reinterpret_cast<uint64_t>(base + route::DOCOMMAND_RVA),
+        route::docommand_detour = std::make_unique<PLH::x64Detour>(reinterpret_cast<uint64_t>(base + route::docommand_rva),
                                                                    reinterpret_cast<uint64_t>(&route::docommand_hook),
                                                                    &route::docommand_trampoline);
         if (!route::docommand_detour->hook())
@@ -1127,16 +1555,15 @@ namespace
         route::installed = true;
         route::game_base = base;
         // The wheel's team scroll (RED .. FULL ELEMENT): optional, the rest works without it.
-        if (route::code_matches(base, route::SCROLL_RVA, route::SCROLL_BYTES, sizeof(route::SCROLL_BYTES)) &&
-            route::code_matches(base, route::SET_TEAM_RVA, route::SET_TEAM_BYTES, sizeof(route::SET_TEAM_BYTES)) &&
-            route::code_matches(base, route::TEAM_DEAD_RVA, route::TEAM_DEAD_BYTES, sizeof(route::TEAM_DEAD_BYTES)))
+        if (scroll_why.empty())
         {
-            route::scroll_detour = std::make_unique<PLH::x64Detour>(reinterpret_cast<uint64_t>(base + route::SCROLL_RVA),
+            route::scroll_detour = std::make_unique<PLH::x64Detour>(reinterpret_cast<uint64_t>(base + route::scroll_rva),
                                                                     reinterpret_cast<uint64_t>(&route::scroll_hook),
                                                                     &route::scroll_trampoline);
             route::scroll_installed = route::scroll_detour->hook();
+            if (!route::scroll_installed) scroll_why = "could not hook the wheel's team scroll";
         }
-        lua.set_string(route::scroll_installed ? "installed" : "installed (no wheel scroll)");
+        lua.set_string(report + (route::scroll_installed ? "wheel scroll on" : "wheel scroll off: " + scroll_why));
         return 1;
     }
 
@@ -1154,12 +1581,16 @@ namespace
         FStaticConstructObjectParameters params{main->GetClassPrivate(), main->GetOuterPrivate()};
         UObject* manager = UObjectGlobals::StaticConstructObject(params);
         if (!manager) return fail(lua, "could not create a squad manager");
+        // (An uninitialised manager is left to the garbage collector: Lua
+        // doesn't keep it.)
         // Initialize(FSubsystemCollectionBase&): the engine part only sets the
         // initialised flag and the tick type; the collection isn't used.
         alignas(16) static uint8_t collection[0x200]{};
+        int slot = route::initialize_slot(manager);
+        if (slot < 0) return fail(lua, "the squad manager's Initialize not found (game updated?)");
         auto vtable = *reinterpret_cast<void***>(manager);
         using InitializeFn = void (*)(UObject*, void*);
-        reinterpret_cast<InitializeFn>(vtable[route::MANAGER_INITIALIZE_SLOT])(manager, collection);
+        reinterpret_cast<InitializeFn>(vtable[slot])(manager, collection);
         lua.set_string(path_of(manager));
         return 1;
     }
@@ -1218,6 +1649,42 @@ namespace
         return 1;
     }
 
+    // ---- event trace (finding the officer-spawn crash) ---------------------
+    // While on, every ProcessEvent (the game calling a script event) is
+    // written to UE4SS.log: object and function. RoNTAK turns it on around its
+    // spawns, so the last lines before a crash name the script that crashed.
+    namespace trace
+    {
+        bool registered = false;
+        bool on = false;
+        int left = 0;
+
+        void process_event(UObject* context, UFunction* function, void*)
+        {
+            if (!on || left <= 0 || !function) return;
+            --left;
+            std::wstring line = L"[RoNTAKNative] event " + std::wstring(function->GetFullName()) + L" on " +
+                                (context ? std::wstring(context->GetFullName()) : std::wstring(L"null")) + L"\n";
+            Output::send<LogLevel::Verbose>(STR("{}"), line);
+        }
+    } // namespace trace
+
+    // RoNTAK_TraceEvents(on) -> true
+    auto trace_events(const LuaMadeSimple::Lua& lua) -> int
+    {
+        bool on = lua.get_stack_size() > 0 && lua.is_bool() ? lua.get_bool() : false;
+        while (lua.get_stack_size() > 0) lua.discard_value();
+        if (on && !trace::registered)
+        {
+            Unreal::Hook::RegisterProcessEventPreCallback(&trace::process_event);
+            trace::registered = true;
+        }
+        trace::on = on;
+        trace::left = 400;
+        lua.set_bool(true);
+        return 1;
+    }
+
     auto register_functions(const LuaMadeSimple::Lua& lua) -> void
     {
         lua.register_function("RoNTAK_NativeVersion", &native_version);
@@ -1232,6 +1699,8 @@ namespace
         lua.register_function("RoNTAK_SquadSet", &squad_set);
         lua.register_function("RoNTAK_SquadStatus", &squad_status);
         lua.register_function("RoNTAK_SquadGroup", &squad_group);
+        lua.register_function("RoNTAK_TraceEvents", &trace_events);
+        lua.register_function("RoNTAK_LineTrace", &line_trace);
     }
 } // namespace
 
@@ -1241,10 +1710,10 @@ class RoNTAKNative : public CppUserModBase
     RoNTAKNative() : CppUserModBase()
     {
         ModName = STR("RoNTAKNative");
-        ModVersion = STR("0.6.0");
+        ModVersion = STR("0.7.3");
         ModDescription = STR("Native helpers for the RoNTAK mod");
         ModAuthors = STR("RoNTAK");
-        Output::send<LogLevel::Verbose>(STR("[RoNTAKNative] loaded, version 0.6.0\n"));
+        Output::send<LogLevel::Verbose>(STR("[RoNTAKNative] loaded, version 0.7.3\n"));
     }
 
     ~RoNTAKNative() override = default;

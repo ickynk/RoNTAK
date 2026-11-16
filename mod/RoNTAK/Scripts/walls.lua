@@ -46,6 +46,20 @@ local function vec(x, y, z) return { X = x, Y = y, Z = z } end
 -- Returns hit point {x, y, z} and distance, or nil.
 local function trace(ctx, from, to)
     ctx.traces = ctx.traces + 1
+    -- RoNTAKNative 0.7.3+: traced natively. Through UE4SS the hit result is
+    -- converted to Lua, which failed on some hits after a breach and crashed
+    -- the game (Nov 2026).
+    local native = rawget(_G, "RoNTAK_LineTrace")
+    if type(native) == "function" and ctx.pawn_path then
+        local ok, got, x, y, z, dist = pcall(native, ctx.pawn_path, from.X, from.Y, from.Z, to.X, to.Y, to.Z)
+        if not ok or got == nil then
+            ctx.errors = ctx.errors + 1
+            if ctx.errors == 1 then note("native line trace failed: " .. tostring(ok and x or got)) end
+            return nil
+        end
+        if not got then return nil end
+        return { x = x, y = y, z = z }, dist or 0
+    end
     local hit = {}
     local ok, blocked = pcall(function()
         return ctx.system:LineTraceSingle(ctx.pawn, from, to, 0, false, {}, 0, hit, true,
@@ -219,12 +233,16 @@ function walls.start(opts)
         return false
     end
     local ctx = {
-        system = system, pawn = pawn, traces = 0, errors = 0, rows_done = 0, percent = 0, started = os.time(),
+        system = system, pawn = pawn, pawn_path = nil, traces = 0, errors = 0, rows_done = 0, percent = 0, started = os.time(),
         file = opts.file, level = opts.level, centre = opts.centre, side = opts.side, floor_z = opts.floor_z,
         out_file = opts.file:gsub("%.png$", "") .. ".walls.json",
         -- Where the sweep is: axis 1 = "x", 2 = "y"; row number; position along the row (nil: not started).
         axis = 1, row = 0, at = nil, rows = {}, segments = {}, row_count = math.floor(opts.side / STEP_CM),
     }
+    do  -- the pawn's object path, for RoNTAK_LineTrace
+        local ok, full = pcall(function() return pawn:GetFullName() end)
+        if ok and type(full) == "string" then ctx.pawn_path = full:match("^%S+%s+(.+)$") or full end
+    end
     ctx.trace_z = walls.trace_height(ctx, opts.player_pos, opts.floor_z)
     ctx.check_z = opts.floor_z + CHECK_ABOVE_FLOOR
     note(string.format("tracing walls %.0f cm above the floor (check at %d cm)...", ctx.trace_z - opts.floor_z,
@@ -253,7 +271,14 @@ function walls.start(opts)
         end
     end
     LoopAsync(SLICE_MS, function()
-        ExecuteInGameThread(slice)
+        ExecuteInGameThread(function()
+            -- Protected: a script error here used to crash the game (Nov 2026).
+            local ok, err = pcall(slice)
+            if not ok then
+                log.error("walls: capture stopped: " .. tostring(err))
+                job = nil
+            end
+        end)
         return job == nil -- stop looping once done
     end)
     return true

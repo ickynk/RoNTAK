@@ -49,7 +49,10 @@ function orders.install_class_hooks()
     for _, fn_path in ipairs(config.class_arg_hooks or {}) do
         local ok, err = pcall(RegisterHook, fn_path, function(self, ...)
             if not class_args then return end
-            local params = { ... }
+            local args = { ... }
+            -- Protected: an error inside a hook can crash the game.
+            local hook_ok, hook_err = pcall(function()
+            local params = args
             local report = {}
             for i, value in pairs(class_args) do
                 local param = params[i]
@@ -62,6 +65,8 @@ function orders.install_class_hooks()
             end
             table.sort(report)
             class_report = table.concat(report, ", ")
+            end)
+            if not hook_ok then log.error("item class hook: " .. tostring(hook_err)) end
         end)
         if not ok then log.error("cannot hook " .. fn_path .. ": " .. tostring(err)) end
     end

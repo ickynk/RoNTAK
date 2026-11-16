@@ -225,10 +225,18 @@ local function trace(line)
     if c().trace_spawns then note("trace: " .. line) end
 end
 
+-- RoNTAKNative 0.7.1+: log the game's script events while it spawns.
+local function trace_events(on)
+    local fn = c().trace_spawns and rawget(_G, "RoNTAK_TraceEvents")
+    if type(fn) == "function" then pcall(fn, on) end
+end
+
 local function begin_spawn(fns, context, class, at, yaw, collision, owner)
     trace("spawning " .. tostring(path_of(class)))
+    trace_events(true)
     local ok, path, err = pcall(fns.RoNTAK_BeginSpawn, path_of(context) or "", path_of(class) or "",
         at.X, at.Y, at.Z, yaw or 0, collision, owner and path_of(owner) or "")
+    trace_events(false)
     if not ok then return nil, tostring(path) end
     if not path then return nil, tostring(err) end
     local actor = find(path)
@@ -239,7 +247,9 @@ end
 
 local function finish_spawn(fns, actor, at, yaw)
     trace("finishing " .. tostring(path_of(actor)))
+    trace_events(true)
     local ok, done, err = pcall(fns.RoNTAK_FinishSpawn, path_of(actor) or "", at.X, at.Y, at.Z, yaw or 0)
+    trace_events(false)
     if not ok then return false, tostring(done) end
     if not done then return false, tostring(err) end
     trace("finished")

@@ -13,7 +13,7 @@ config.tick_ms = 250
 
 -- Folder used to exchange files with the ATAK companion app.
 -- Which RoNTAK this is (shown in the UE4SS log when the mod loads).
-config.build = "2026-11-11 squad routing 3 (wheel scroll, quiet log)"
+config.build = "2026-11-16 multiplayer: other players on the map"
 
 -- nil = the "bridge" folder inside this mod (recommended).
 config.bridge_dir = nil
@@ -44,6 +44,12 @@ config.keys = {
 ---------------------------------------------------------------------------
 
 -- AI SWAT officers. The first class name that returns objects is used.
+-- Other players in multiplayer, shown on the map (the local player is left out).
+config.players = {
+    enabled = true,
+    classes = { "PlayerCharacter" },
+}
+
 config.officers = {
     -- CyberneticsSwat_V2_C = your AI officers (4 live in the discovery dump).
     -- SWATCharacter also matches 4 TrailerSWATCharacter actors, so it is only a fallback.
@@ -161,8 +167,9 @@ config.reinforcements = {
     -- officer crashed it. Call-ins that wouldn't fit are refused, so with the
     -- original four there is room for these two teams.
     max_squad = 8,
-    -- Log every spawn before and after it (finding the YELLOW spawn crash, Nov 2026).
-    trace_spawns = false,
+    -- Log every spawn before and after it, and (RoNTAKNative 0.7.1+) the game
+    -- script events it runs: finding the occasional spawn crash (Nov 2026).
+    trace_spawns = true,
     -- Seconds between two operators' spawns (a crash while spawning one right
     -- after another was seen now and then, Nov 2026).
     spawn_gap_s = 1.5,
